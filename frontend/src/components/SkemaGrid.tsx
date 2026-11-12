@@ -253,7 +253,9 @@ export function SkemaGrid({
   // restores the stored value while the input is still focused). When the focused cell's value
   // changes and it is not what the typing itself propagated (blank/0 = absent, a number = that
   // number), the overlay is reset to the page's value. The person's own typing never trips this:
-  // it changes the value to exactly what the overlay parses to.
+  // it changes the value to exactly what the overlay parses to. And only the overlay of the
+  // PROPAGATED edit is reset: text typed since (a "," or "-" the grid never propagates) survives.
+  const propagatedRawRef = useRef<{ key: string; raw: string } | null>(null)
   const lastSeenRef = useRef<{ key: string; value: number | undefined } | null>(null)
   useEffect(() => {
     if (!editing) {
@@ -267,6 +269,8 @@ export function SkemaGrid({
     const n = editing.raw === '' ? NaN : parseDanishNumber(editing.raw)
     const typed = Number.isNaN(n) || n === 0 ? undefined : n
     if (typed === value) return
+    const propagated = propagatedRawRef.current
+    if (!propagated || propagated.key !== editing.key || propagated.raw !== editing.raw) return
     const fmt = value != null && value !== 0 ? formatCell(value) : ''
     setEditing({ key: editing.key, raw: fmt, initial: fmt })
   }, [cellValues, editing])
@@ -515,6 +519,7 @@ export function SkemaGrid({
       if (unparsable) return // no propagation (shipped semantics)
       if (negative) return // S145 — refused at entry
       if (isFullDayEntry && !canSnap) return // BLOCK — never let a partial full-day autosave (→ 422)
+      propagatedRawRef.current = { key: cellKey, raw }
       if (canSnap) {
         onCellChange(row.key, dateKey, basis as number)
         return

@@ -12,11 +12,17 @@ import { renderWithCalendar } from '../../test/renderWithCalendar'
 import { SkemaPage } from '../SkemaPage'
 import styles from '../SkemaPage.module.css'
 
-// vitest does not apply CSS, and its CSS plugin hands back an empty module even for `?raw`, so the
-// stylesheet's source is read from disk (vitest runs from `frontend/`; the project has no node types).
+// vitest does not apply CSS, and its CSS plugin hands back an empty module even for `?raw` and
+// `import.meta.glob`, so the stylesheet's source is read from disk, by a path resolved from this
+// file (not the working directory). `@types/node` is installed but `tsconfig` excludes it from
+// `src`, hence the cast; the reasoned exception to the "NEVER node:fs" rule is noted in
+// `lib/__tests__/clockGuard.test.ts`.
 type NodeFs = { readFileSync(path: string, encoding: 'utf8'): string }
+type NodeUrl = { fileURLToPath(url: string): string }
 const { readFileSync } = (await import(/* @vite-ignore */ 'node:fs' as string)) as unknown as NodeFs
-const srOnlyCss = readFileSync('src/pages/SkemaPage.module.css', 'utf8')
+const { fileURLToPath } = (await import(/* @vite-ignore */ 'node:url' as string)) as unknown as NodeUrl
+const thisFile = fileURLToPath(import.meta.url)
+const srOnlyCss = readFileSync(thisFile.replace(/[^/\\]*$/, '') + '../SkemaPage.module.css', 'utf8')
 import type { SkemaMonthData } from '../../types'
 
 vi.mock('../../contexts/AuthContext', () => ({

@@ -199,6 +199,9 @@ export function SkemaDayPanel({
   // The overlay must not outlive a value the PAGE changed under it (a refused removal restores the
   // stored allocation while the input is still focused): when the focused allocation changes to
   // something other than what the typing itself propagated, reset the overlay to the page's value.
+  // Only the overlay of the PROPAGATED edit is reset: text typed since (a "," or "-" that is never
+  // propagated) survives.
+  const propagatedAllocRef = useRef<{ key: string; raw: string } | null>(null)
   const lastAllocSeenRef = useRef<{ key: string; value: number | undefined } | null>(null)
   useEffect(() => {
     if (!editingAlloc) {
@@ -212,6 +215,8 @@ export function SkemaDayPanel({
     const n = editingAlloc.raw === '' ? NaN : parseDanishNumber(editingAlloc.raw)
     const typed = Number.isNaN(n) || n === 0 ? undefined : n
     if (typed === value) return
+    const propagated = propagatedAllocRef.current
+    if (!propagated || propagated.key !== editingAlloc.key || propagated.raw !== editingAlloc.raw) return
     setEditingAlloc({ key: editingAlloc.key, raw: value != null && value !== 0 ? formatDanishNumber(value, 1) : '' })
   }, [allocations, editingAlloc])
 
@@ -234,6 +239,7 @@ export function SkemaDayPanel({
     }
     setNegativeAlloc((cur) => (cur === key ? null : cur))
     if (num !== null && isNaN(num)) return
+    propagatedAllocRef.current = { key, raw }
     onAllocationChange(date, key, num === 0 ? null : num)
   }
 

@@ -207,6 +207,60 @@ describe('SkemaPage — a refused clear restores the value (AC-CL-29 (1), F)', (
     expect(document.activeElement).toBe(input)
   })
 
+  // Kind F: only the overlay of the PROPAGATED edit is reset. Text typed since that the grid never
+  // propagates (a ",") must survive the 422; the page value is restored underneath it.
+  const heldRefusal = (absenceType: string, date: string) => {
+    const held: Array<() => void> = []
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/skema/emp001/save') && (init?.method ?? 'GET') === 'POST') {
+        saveBodies.push(JSON.parse(String(init?.body)))
+        await new Promise<void>((r) => held.push(r))
+        return json({ error: 'absence_type_not_eligible', absenceType, date, message: 'Kan ikke fjernes.' }, 422)
+      }
+      return base(url, init)
+    })
+    return held
+  }
+
+  it('a grid cell keeps unpropagated text typed after the removal left, and shows the restored value once blurred', async () => {
+    const held = heldRefusal('VACATION', '2026-03-06')
+    await renderLoaded()
+    const input = screen.getByLabelText('Ferie dag 6') as HTMLInputElement
+    act(() => input.focus())
+    vi.useFakeTimers()
+    fireEvent.change(input, { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(1))
+    fireEvent.change(input, { target: { value: ',' } })
+    held[0]()
+    await screen.findByText(/Kan ikke fjernes/)
+    expect(input.value).toBe(',')
+    fireEvent.blur(input)
+    await waitFor(() => expect(input.value).toBe('7,4'))
+  })
+
+  it('a day-panel allocation input keeps unpropagated text typed after the removal left, and shows the restored value once blurred', async () => {
+    const held = heldRefusal('DRIFT', '2026-03-02')
+    monthData = makeMonth({ entries: [{ date: '2026-03-02', projectCode: 'DRIFT', hours: 3 }] })
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    const alloc = within(drawer).getByLabelText('Drift & support') as HTMLInputElement
+    act(() => alloc.focus())
+    vi.useFakeTimers()
+    fireEvent.change(alloc, { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(1))
+    fireEvent.change(alloc, { target: { value: ',' } })
+    held[0]()
+    await screen.findByText(/Kan ikke fjernes/)
+    expect(alloc.value).toBe(',')
+    fireEvent.blur(alloc)
+    await waitFor(() => expect(alloc.value).toBe('3'))
+  })
+
   it('a refused removal shows the restored value in a day-panel allocation input that is still focused', async () => {
     saveAnswer = () => ({
       status: 422,

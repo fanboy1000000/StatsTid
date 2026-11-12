@@ -463,6 +463,12 @@ export function SkemaPage() {
   const workTimeRemovedRef = useRef<Set<string>>(new Set())
   // Re-seeds the open day panel's rows for reverted days (set once the panel state exists below).
   const reseedPanelRef = useRef<(dates: string[]) => void>(() => {})
+  // Per day, what the NEWEST unanswered work-time save sent (seq + intervals; a removal sends []).
+  // The grid must end up equal to the server once saves settle, so a restore goes to this value
+  // first and to server truth only when nothing is in flight.
+  const workTimeInFlightRef = useRef<Map<string, { seq: number; intervals: WorkTimeDay['intervals'] }>>(new Map())
+  // Days whose open panel holds only half-typed rows: such a day sends nothing, even on a retry.
+  const halfTypedDaysRef = useRef<Set<string>>(new Set())
 
   // The removal announcement: one polite live region (always mounted), spoken once per save that
   // removed something really saved. The count changes the text's trailing character each time,
@@ -507,6 +513,8 @@ export function SkemaPage() {
     pendingChangesRef.current = []
     workTimeDirtyRef.current = new Set()
     workTimeRemovedRef.current = new Set()
+    workTimeInFlightRef.current = new Map()
+    halfTypedDaysRef.current = new Set()
     setRemovalAnnouncements(0) // a removal is not news in the next month
     cellAdvancedSeqRef.current = new Map()
     workTimeAdvancedSeqRef.current = new Map()
@@ -609,6 +617,21 @@ export function SkemaPage() {
     }
   }, [reportUnanswered])
 
+  /** Put days back in the grid: to what the newest unanswered save (other than `exceptSeq`) sent,
+      else to server truth. */
+  const restoreWorkTimeDays = useCallback((dates: string[], exceptSeq?: number) => {
+    setLocalWorkIntervals((prev) => {
+      const next = new Map(prev)
+      for (const d of dates) {
+        const flying = workTimeInFlightRef.current.get(d)
+        const target = flying && flying.seq !== exceptSeq ? flying.intervals : serverWorkIntervalsRef.current.get(d)
+        if (target && target.length > 0) next.set(d, target.map((iv) => ({ ...iv })))
+        else next.delete(d)
+      }
+      return next
+    })
+  }, [])
+
   /** Send work-time rows under their own month (the month on screen when they were queued). On
       FAILURE: while that month is still the data on screen the dates go back to the dirty set
       (the local refs still hold the edits, so a retry rebuilds from live state); once it has
@@ -626,6 +649,7 @@ export function SkemaPage() {
       ...payload.map((r): [string, { intervals: WorkTimeDay['intervals'] }] => [r.date, { intervals: r.intervals }]),
       ...clearedDates.map((d): [string, { intervals: WorkTimeDay['intervals'] }] => [d, { intervals: [] }]),
     ])
+    for (const d of dates) workTimeInFlightRef.current.set(d, { seq, intervals: sentByDate.get(d)!.intervals })
     const save = saveSerial({
       year: env.year,
       month: env.month,
@@ -687,19 +711,42 @@ export function SkemaPage() {
           else serverWorkIntervalsRef.current.delete(d)
         }
         if (removedSomething) announceRemoval()
+        // The grid matches the server: a day with no newer change (unsent or in flight) shows
+        // what this save sent, which is now server truth.
+        const settled = dates.filter(
+          (d) => workTimeInFlightRef.current.get(d)?.seq === seq && !workTimeDirtyRef.current.has(d),
+        )
+        if (settled.length > 0) {
+          setLocalWorkIntervals((prev) => {
+            const next = new Map(prev)
+            for (const d of settled) {
+              const sent = sentByDate.get(d)!.intervals
+              if (sent.length > 0) next.set(d, sent.map((iv) => ({ ...iv })))
+              else next.delete(d)
+            }
+            return next
+          })
+        }
         return true
       }
-      // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty
-      // dates (B2 retry; the local refs still hold the edits).
-      for (const d of dates) workTimeDirtyRef.current.add(d)
+      // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty dates (B2 retry;
+      // the local refs still hold the edits), EXCEPT a day whose panel is half-typed: that day
+      // sends nothing, and the grid goes back to what is in flight or stored.
+      const halfTyped = dates.filter((d) => halfTypedDaysRef.current.has(d))
+      for (const d of dates) if (!halfTyped.includes(d)) workTimeDirtyRef.current.add(d)
+      if (halfTyped.length > 0) {
+        for (const d of halfTyped) workTimeRemovedRef.current.delete(d)
+        restoreWorkTimeDays(halfTyped, seq)
+      }
       return false
     })
     workTimeSavesInFlightRef.current.set(save, env)
     void save.finally(() => {
       workTimeSavesInFlightRef.current.delete(save)
+      for (const d of dates) if (workTimeInFlightRef.current.get(d)?.seq === seq) workTimeInFlightRef.current.delete(d)
     })
     return save
-  }, [saveSerial, announceRemoval])
+  }, [saveSerial, announceRemoval, restoreWorkTimeDays])
 
   /** Fire a workTime save for the given dirty dates (the month on screen; the payload is built
       from the live refs NOW). A day with intervals is posted; a day whose period rows were all
@@ -1087,10 +1134,13 @@ export function SkemaPage() {
   // A work-time save the server refused reverts the day to server truth; the open panel's rows
   // are separate state, so they are re-seeded from the restored intervals too. The open day is read
   // from a ref (never a stale closure), and rows keep their ids by position so keyboard focus
-  // stays in the drawer. A half-typed extra row is replaced too (accepted: two characters next to
-  // the refusal message).
+  // stays in the drawer. Accepted losses on a refusal: a half-typed extra row and half-typed text
+  // in the same row are replaced by the restored times (a few characters next to the message).
   const openDayRef = useRef<string | null>(null)
-  openDayRef.current = openDayDate
+  useLayoutEffect(() => {
+    openDayRef.current = openDayDate
+    halfTypedDaysRef.current = new Set() // a closed or switched panel holds no half-typed day
+  }, [openDayDate])
   useEffect(() => {
     reseedPanelRef.current = (dates) => {
       const open = openDayRef.current
@@ -1143,21 +1193,17 @@ export function SkemaPage() {
       // truth and is no longer dirty, so the timer posts nothing. A change already sent is left
       // alone — its answer decides, and the grid must not show what the server just removed.
       if (intervals.length === 0 && periods.some((p) => p.from !== '' || p.to !== '')) {
+        halfTypedDaysRef.current.add(date)
         if (workTimeDirtyRef.current.delete(date)) {
           workTimeRemovedRef.current.delete(date)
-          const truth = serverWorkIntervalsRef.current.get(date)
-          setLocalWorkIntervals((prev) => {
-            const next = new Map(prev)
-            if (truth && truth.length > 0) next.set(date, truth.map((iv) => ({ ...iv })))
-            else next.delete(date)
-            return next
-          })
+          restoreWorkTimeDays([date])
         }
         return
       }
+      halfTypedDaysRef.current.delete(date)
       handleWorkIntervalsChange(date, intervals)
     },
-    [handleWorkIntervalsChange, editLocked],
+    [handleWorkIntervalsChange, restoreWorkTimeDays, editLocked],
   )
 
   const handlePanelAllocationChange = useCallback(

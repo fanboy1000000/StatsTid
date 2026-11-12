@@ -140,6 +140,112 @@ async function settle() {
   await act(async () => { await new Promise((r) => setTimeout(r, 60)) })
 }
 
+/** Hold every save POST until the test answers it: `held[i](status)` answers the i-th. */
+function holdSaves() {
+  const held: Array<(status: number) => void> = []
+  const base = mockFetch.getMockImplementation()!
+  mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/api/skema/emp001/save') && (init?.method ?? 'GET') === 'POST') {
+      saveBodies.push(JSON.parse(String(init?.body)))
+      const status = await new Promise<number>((r) => held.push(r))
+      return json(status === 200 ? {} : { error: 'boom' }, status)
+    }
+    return base(url, init)
+  })
+  return held
+}
+
+/** Close the open panel and reopen the day: the rows are seeded from the grid's own day. */
+async function reopen(date: string) {
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Luk' }))
+  return openDay(date)
+}
+
+const times = (d: HTMLElement) => [
+  (within(d).getByLabelText('Fra') as HTMLInputElement).value,
+  (within(d).getByLabelText('Til') as HTMLInputElement).value,
+]
+
+/** Send one valid edit (Fra -> 09:00) and leave its POST held; returns the open drawer. */
+async function sendNineToSixteenHeld(held: unknown[]) {
+  const drawer = await openDay('2026-03-02')
+  vi.useFakeTimers()
+  fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09:00' } })
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+  vi.useRealTimers()
+  await waitFor(() => expect(held).toHaveLength(1))
+  return drawer
+}
+
+// The grid must match the server once in-flight saves settle (kind F; red on the code that
+// restored a half-typed day to server truth only and never reconciled on the answer).
+describe('SkemaPage — the grid follows the newest unanswered work-time save (AC-CL-28, F)', () => {
+  it('edit sent and held, second edit, then half-typed: the 200 leaves the grid at the sent times and nothing more is posted', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await sendNineToSixteenHeld(held)
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '17:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    held[0](200)
+    await settle()
+    const reopened = await reopen('2026-03-02')
+    expect(times(reopened)).toEqual(['09:00', '16:00'])
+    await act(async () => { await new Promise((r) => setTimeout(r, 1200)) })
+    expect(saveBodies).toHaveLength(1)
+  })
+
+  it('edit sent and held, both fields blanked, Fra half-typed before the debounce: the grid ends at the sent times', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await sendNineToSixteenHeld(held)
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '10' } })
+    held[0](200)
+    await settle()
+    const reopened = await reopen('2026-03-02')
+    expect(times(reopened)).toEqual(['09:00', '16:00'])
+    await act(async () => { await new Promise((r) => setTimeout(r, 1200)) })
+    expect(saveBodies).toHaveLength(1)
+  })
+
+  it('removal sent and held, a full period typed, then half-typed: the 200 leaves the grid empty', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(1))
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '16:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    held[0](200)
+    await settle()
+    const reopened = await reopen('2026-03-02')
+    expect(times(reopened)).toEqual(['', ''])
+    await act(async () => { await new Promise((r) => setTimeout(r, 1200)) })
+    expect(saveBodies).toHaveLength(1)
+  })
+
+  it('a 5xx on a day whose panel is half-typed is not re-queued: navigation posts nothing and the grid shows the stored day', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await sendNineToSixteenHeld(held)
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    held[0](500)
+    await screen.findByRole('alert')
+    const reopened = await reopen('2026-03-02')
+    expect(times(reopened)).toEqual(['08:00', '16:00'])
+    fireEvent.change(within(reopened).getByLabelText('Til'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await settle()
+    expect(saveBodies).toHaveLength(1)
+  })
+})
+
 describe('SkemaPage — work-time removal vs half-typed day (AC-CL-28, F)', () => {
   it('blanking the only period row posts cleared.workTime and no empty day', async () => {
     await renderLoaded()
