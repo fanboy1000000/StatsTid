@@ -4,8 +4,7 @@
 // ChildSickAllowanceTileTests. Kinds per case: F for the first three (each fails on the old page, which
 // showed "saldo"); R for the last (not opted in: the old page already omitted the tile).
 // Red conditions (on the page before the change, which read the yearly remainder the server no longer sends):
-//  - the OK26 and OK24 cases fail at "3 dage" / "2 dage" (the tile showed an em dash) and at
-//    the absence of "saldo" on the child tile (it carried that sub-line).
+//  - the three F cases fail their whole-text match, because the old tile read "Barns sygedag–saldo".
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
