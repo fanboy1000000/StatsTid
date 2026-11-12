@@ -898,6 +898,7 @@
 | actor_role | TEXT | Yes |  |  |
 | correlation_id | UUID | Yes |  |  |
 | outbox_id | BIGINT | No |  |  |
+| cleared_by_outbox_id | BIGINT | Yes |  |  |
 
 **Table constraints:**
 - PRIMARY KEY (employee_id, date)

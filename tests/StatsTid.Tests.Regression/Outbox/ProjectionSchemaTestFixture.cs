@@ -120,6 +120,7 @@ internal static class ProjectionSchemaTestFixture
             actor_role      TEXT,
             correlation_id  UUID,
             outbox_id       BIGINT          NOT NULL,
+            cleared_by_outbox_id BIGINT     NULL, -- S148 TASK-14840: a cleared day is kept and marked (init.sql)
             PRIMARY KEY (employee_id, date)
         );
 

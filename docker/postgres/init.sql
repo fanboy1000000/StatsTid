@@ -1915,10 +1915,11 @@ CREATE TABLE IF NOT EXISTS time_entries_projection (
     --     row, so creating it can never fail. The cost: a future Skema writer that forgets to
     --     stamp 'SKEMA' would silently be additive; the Resave_Entry_* tests pin that.
     source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
-    -- Set to the outbox_id of the re-save that REPLACED this row; NULL while the row is the
-    -- current value of its cell. A replaced row is KEPT, not deleted, so the audit trail and
-    -- a replay by event id can still read exactly what a calculation was fed (ADR-028 D6,
-    -- to be recorded at the S145 close). Every read that totals hours counts current rows only.
+    -- Set to the outbox_id of the re-save that REPLACED this row, or of the clear
+    -- (TimeEntryCleared) that EMPTIED its cell; NULL while the row is the current value of its
+    -- cell. A replaced or cleared row is KEPT, not deleted, so the audit trail and a replay by
+    -- event id can still read exactly what a calculation was fed (ADR-028 D6). Every read that
+    -- totals hours counts current rows only.
     superseded_by_outbox_id     BIGINT          NULL,
     CONSTRAINT time_entries_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 );
@@ -1960,9 +1961,10 @@ CREATE TABLE IF NOT EXISTS absences_projection (
     -- tables. Allowed values: 'SKEMA' and 'TIME_POST' (CHECK at the end of this table);
     -- DEFAULT 'TIME_POST' for the reasons given on the sibling table (R28/N4).
     source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
-    -- outbox_id of the re-save that REPLACED this row; NULL while it is the current value.
-    -- Replaced rows are kept for replay and audit (ADR-028 D6, to be recorded at the S145 close). The vacation
-    -- settlement and every quota total count current rows only.
+    -- outbox_id of the re-save that REPLACED this row, or of the clear (AbsenceCleared) that
+    -- EMPTIED its cell; NULL while it is the current value. Replaced and cleared rows are kept
+    -- for replay and audit (ADR-028 D6). The vacation settlement and every quota total count
+    -- current rows only.
     superseded_by_outbox_id     BIGINT          NULL,
     CONSTRAINT absences_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 );
@@ -1983,13 +1985,22 @@ CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
 -- ordering so a stale event never overwrites a newer one (apply only when incoming
 -- outbox_id >= stored).
 --
+-- A day EMPTIED by a Skema save (WorkTimeCleared, owner Q2) is KEPT and marked, not deleted:
+-- cleared_by_outbox_id and outbox_id both become the clear's outbox_id. The row is current only
+-- while cleared_by_outbox_id is NULL, and every reader counts current rows only. Keeping it is
+-- what stops the startup rebuild (ProjectionBackfillService, which replays from `events` while a
+-- just-committed clear may not be published yet) from replaying an older registration over the
+-- day: the advanced outbox_id refuses it. Registering the day again overwrites the row and sets
+-- the marker back to NULL.
+--
 -- S145 / A0 correction of the former "time_entries_projection is append-per-event" remark:
 -- a Skema cell (employee + date + task) in time_entries_projection is ALSO latest-wins now,
 -- but by a different mechanism: a re-save inserts a new row and marks the old one superseded
--- (superseded_by_outbox_id), so the replaced rows are RETAINED for replay and audit rather
--- than overwritten. Rows written by POST /api/time-entries stay ADDITIVE (one row per
--- event, never superseded). The same holds for absences_projection. See ADR-028 D6
--- (to be recorded at the S145 close) and the S145 segment further down.
+-- (superseded_by_outbox_id), and a clear marks the current row without inserting one, so the
+-- replaced and cleared rows are RETAINED for replay and audit rather than overwritten. Rows
+-- written by POST /api/time-entries (TIME_POST) stay ADDITIVE (one row per event, never
+-- superseded). The same holds for absences_projection. See ADR-028 D6 and the S145 segment
+-- further down.
 CREATE TABLE IF NOT EXISTS work_time_projection (
     employee_id     TEXT            NOT NULL,
     date            DATE            NOT NULL,
@@ -1999,6 +2010,7 @@ CREATE TABLE IF NOT EXISTS work_time_projection (
     actor_role      TEXT,
     correlation_id  UUID,
     outbox_id       BIGINT          NOT NULL,                      -- event ordering / latest-wins guard
+    cleared_by_outbox_id BIGINT     NULL,                          -- the clearing WorkTimeCleared's outbox_id; NULL while current
     PRIMARY KEY (employee_id, date)
 );
 -- PK (employee_id, date) already serves month-range reads (employee_id + date BETWEEN).

@@ -12717,6 +12717,9 @@
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkTimeDay"
             },
             "nullable": true
+          },
+          "cleared": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared"
           }
         },
         "additionalProperties": false
@@ -12739,6 +12742,80 @@
           "hours": {
             "type": "number",
             "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry"
+            },
+            "nullable": true
+          },
+          "absences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence"
+            },
+            "nullable": true
+          },
+          "workTime": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence": {
+        "required": [
+          "absenceType",
+          "date"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "absenceType": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry": {
+        "required": [
+          "date",
+          "projectCode"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "projectCode": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay": {
+        "required": [
+          "date"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
           }
         },
         "additionalProperties": false

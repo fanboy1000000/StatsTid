@@ -163,4 +163,31 @@ public sealed class ChildSickIllnessChainTests : IAsyncLifetime
             new[] { (monday, Day1, 7.4m), (tuesday, Day2, 7.4m) },
             await _host.ReadAbsencesAsync(emp));
     }
+
+    /// <summary>
+    /// AC-CL-19 (S148 TASK-14840-T; AC-S0-2j moved from 14811-T, NR-A1: no save could remove a row before cells could be cleared).
+    /// HK (OK26): <c>CHILD_SICK_DAY</c> Monday 8 June and <c>CHILD_SICK_DAY_2</c> Tuesday 9 June 2026 (one save, 7,40 h each). A save
+    /// that CLEARS Monday's 1st sick day while Tuesday's 2nd stands is refused: 422, <c>kind = child-sick-chain</c>, naming
+    /// <c>CHILD_SICK_DAY_2</c> and TUESDAY 2026-06-09 (the dependent date, not the cleared one), and nothing changes: both rows are
+    /// still current.
+    ///
+    /// <para><b>Kind F.</b> Red conditions: on base the <c>cleared</c> member is ignored, so the save answers 200 and the 422
+    /// assertion trips.</para>
+    /// </summary>
+    [Fact]
+    public async Task RemovingDay1WhileDay2Exists_422_NamesTheDependentDate()
+    {
+        var june = new DateOnly(2026, 6, 1);
+        var monday = new DateOnly(2026, 6, 8);
+        var tuesday = new DateOnly(2026, 6, 9);
+        var emp = await _host.SeedEmployeeAsync("HK");
+        await ChildSickHost.AssertOkAsync(await _host.SaveAsync(emp, "HK", june, (Day1, 7.4m, monday), (Day2, 7.4m, tuesday)));
+
+        var rsp = await _host.SaveClearedAsync(emp, "HK", june, clearedAbsences: new[] { (Day1, monday) });
+
+        await ChildSickHost.AssertRefusalAsync(rsp, ChainKind, Day2, tuesday);
+        Assert.Equal(
+            new[] { (monday, Day1, 7.4m), (tuesday, Day2, 7.4m) },
+            await _host.ReadAbsencesAsync(emp));
+    }
 }

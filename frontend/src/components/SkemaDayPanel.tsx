@@ -22,8 +22,8 @@
 //         (ADR-028, ADR-043 D10): the day total is the clock periods alone.
 //   S58 — the relocated validation mirrors (7202 deleted the old dialog): overlap
 //         flagging + the 24h day cap, ADVISORY only — the backend 422 stays
-//         authoritative (R5/R17: the save contract is frozen).
-import { useMemo, useState } from 'react'
+//         authoritative (R5: the save contract is frozen).
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Drawer } from './ui/Drawer'
 import { Alert } from './ui/Alert'
 import { Button } from './ui/Button'
@@ -75,8 +75,8 @@ interface SkemaDayPanelProps {
   /** The served 0..2 boundary days (prev-month last / next-month first) — R6. */
   boundaryWorkTime?: readonly WorkTimeDay[]
   onPeriodsChange: (date: string, periods: DayPanelPeriod[]) => void
-  /** hours: parsed exact value; null = cleared (the save path drops null/0 —
-      recorded inherited limitation, R17). */
+  /** hours: parsed exact value; null = cleared (the page posts it as a removal under
+      `cleared`, ADR-043 cell clearing). */
   onAllocationChange: (date: string, projectKey: string, hours: number | null) => void
   onClose: () => void
   /** The step-2 header's "Administrer projekter" link (wired by 7205). */
@@ -196,6 +196,30 @@ export function SkemaDayPanel({
   // committed values live in the page's state via onAllocationChange) ──
   const [editingAlloc, setEditingAlloc] = useState<{ key: string; raw: string } | null>(null)
 
+  // The overlay must not outlive a value the PAGE changed under it (a refused removal restores the
+  // stored allocation while the input is still focused): when the focused allocation changes to
+  // something other than what the typing itself propagated, reset the overlay to the page's value.
+  // Only the overlay of the PROPAGATED edit is reset: text typed since (a "," or "-" that is never
+  // propagated) survives.
+  const propagatedAllocRef = useRef<{ key: string; raw: string } | null>(null)
+  const lastAllocSeenRef = useRef<{ key: string; value: number | undefined } | null>(null)
+  useEffect(() => {
+    if (!editingAlloc) {
+      lastAllocSeenRef.current = null
+      return
+    }
+    const value = allocations.get(editingAlloc.key)
+    const seen = lastAllocSeenRef.current
+    lastAllocSeenRef.current = { key: editingAlloc.key, value }
+    if (!seen || seen.key !== editingAlloc.key || seen.value === value) return
+    const n = editingAlloc.raw === '' ? NaN : parseDanishNumber(editingAlloc.raw)
+    const typed = Number.isNaN(n) || n === 0 ? undefined : n
+    if (typed === value) return
+    const propagated = propagatedAllocRef.current
+    if (!propagated || propagated.key !== editingAlloc.key || propagated.raw !== editingAlloc.raw) return
+    setEditingAlloc({ key: editingAlloc.key, raw: value != null && value !== 0 ? formatDanishNumber(value, 1) : '' })
+  }, [allocations, editingAlloc])
+
   const allocDisplay = (key: string): string => {
     if (editingAlloc && editingAlloc.key === key) return editingAlloc.raw
     const v = allocations.get(key)
@@ -215,6 +239,7 @@ export function SkemaDayPanel({
     }
     setNegativeAlloc((cur) => (cur === key ? null : cur))
     if (num !== null && isNaN(num)) return
+    propagatedAllocRef.current = { key, raw }
     onAllocationChange(date, key, num === 0 ? null : num)
   }
 
@@ -362,7 +387,11 @@ export function SkemaDayPanel({
                   placeholder="0"
                   inputMode="decimal"
                   disabled={stepTwoDisabled}
-                  onFocus={() => setEditingAlloc({ key: p.key, raw: allocDisplay(p.key) })}
+                  onFocus={() => {
+                    // The seeded text counts as this input's remembered value (see the reset above).
+                    propagatedAllocRef.current = { key: p.key, raw: allocDisplay(p.key) }
+                    setEditingAlloc({ key: p.key, raw: allocDisplay(p.key) })
+                  }}
                   onChange={(e) => handleAllocInput(p.key, e.target.value)}
                   onBlur={() => {
                     setEditingAlloc(null)

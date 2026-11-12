@@ -43,6 +43,7 @@
 // primitive reads the SAME files without needing Node's `fs` types: the triple-slash reference at
 // the top of this file pulls in `vite/client`'s ambient typing for `import.meta.glob` alone, which
 // is enough for `tsc` to accept the calls below without touching `tsconfig.json`.
+// Reasoned exception: `pages/__tests__/SkemaPage.cellClearAnnounced.test.tsx` reads a CSS module with a cast `node:fs` import, because vitest's CSS plugin returns an empty module for `?raw` and `import.meta.glob` on `.module.css`.
 //
 // RETIRED S143/TASK-14312 — THE TEMPORARY ALLOWLIST THAT LANDED THIS GUARD. Seven sites in the
 // tree originally read the browser's local clock this way, spread across four sibling tasks that

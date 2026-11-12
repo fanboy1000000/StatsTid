@@ -857,7 +857,8 @@ public static class BalanceEndpoints
                     .Sum(a => a.DayEquivalents);
 
             // ── Months: workedHours + normHours + diff ──
-            // workedHours = Σ work_time_projection interval hours in the calendar month
+            // workedHours = Σ interval hours of the month's current work_time_projection days (a cleared
+            // day counts nothing; the repository read filters it)
             // (ADR-028; intervals alone, ADR-043 D10, D-2.4). normHours = Σ DailyNormCalculator per-day norms; null if ANY norm-bearing
             // day resolves null. diff = worked − norm for months ≤ today's month; null for future.
             var months = new List<YearOverviewMonth>(12); // S120 / TASK-12000 — typed rows

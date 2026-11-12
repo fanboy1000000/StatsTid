@@ -11,7 +11,7 @@
 //    precedent);
 //  • request key sets byte-unchanged (the skema save body keeps the exact
 //    year/month/entries/absences/workTime key set with the empty→null
-//    collapsing; the choice PUT sends exactly { periodYear, compensationModel });
+//    collapsing, plus `cleared` only when a cell or day is cleared (S148); the choice PUT sends exactly { periodYear, compensationModel });
 //  • the flex BOTH-branch handling (ruling #1 delta-pinned FE-side): the
 //    normalized no-history shape (nulls, NO `message`) and the with-history
 //    shape both flow through to state unchanged;
@@ -336,7 +336,9 @@ describe('useSkema — THE GRADUATION: typed month GET + save POST', () => {
     expect(result.current.data?.absenceTypes[0].type).toBe('VACATION')
   })
 
-  it('save → POST /api/skema/{employeeId}/save, UNCONDITIONED; the body key set is byte-unchanged (year/month/entries/absences/workTime, empty→null) and the row split/order is preserved', async () => {
+  // S148 TASK-14841: null/0 cells go out under `cleared` (the body's last key, present only when
+  // something is cleared); empty lists collapse to null, and posted rows keep their split/order.
+  it('save → POST /api/skema/{employeeId}/save, UNCONDITIONED; the body key set is year/month/entries/absences/workTime/cleared (empty→null), null/0 cells ride under cleared, and the row split/order is preserved', async () => {
     const calls = skemaCalls()
     const { result } = renderHook(() => useSkema('emp001', 2026, 3))
     await waitFor(() => expect(result.current.data).not.toBeNull())
@@ -345,8 +347,8 @@ describe('useSkema — THE GRADUATION: typed month GET + save POST', () => {
       outcome = await result.current.saveMonth([
         { rowKey: 'DRIFT', date: '2026-03-02', hours: 5 },
         { rowKey: 'VACATION', date: '2026-03-03', hours: 7.4 },
-        { rowKey: 'DRIFT', date: '2026-03-04', hours: 0 }, // zero → dropped
-        { rowKey: 'VACATION', date: '2026-03-05', hours: null }, // null → dropped
+        { rowKey: 'DRIFT', date: '2026-03-04', hours: 0 }, // zero → cleared.entries
+        { rowKey: 'VACATION', date: '2026-03-05', hours: null }, // null → cleared.absences
       ])
     })
     const post = calls.find((c) => c.method === 'POST')!
@@ -358,10 +360,15 @@ describe('useSkema — THE GRADUATION: typed month GET + save POST', () => {
       entries: [{ date: '2026-03-02', projectCode: 'DRIFT', hours: 5 }],
       absences: [{ date: '2026-03-03', absenceType: 'VACATION', hours: 7.4 }],
       workTime: null,
+      cleared: {
+        entries: [{ date: '2026-03-04', projectCode: 'DRIFT' }],
+        absences: [{ date: '2026-03-05', absenceType: 'VACATION' }],
+        workTime: null,
+      },
     })
-    // The wire key ORDER is the legacy order (byte-unchanged request).
+    // The wire key ORDER: the legacy keys, then `cleared`.
     expect(Object.keys(post.body as Record<string, unknown>)).toEqual([
-      'year', 'month', 'entries', 'absences', 'workTime',
+      'year', 'month', 'entries', 'absences', 'workTime', 'cleared',
     ])
     expect(outcome).toEqual({ status: 'ok' })
   })

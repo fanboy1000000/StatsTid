@@ -234,7 +234,30 @@ internal sealed class ChildSickHost : IAsyncDisposable
         return await _client.SendAsync(request);
     }
 
-    /// <summary>The employee's stored work-time days as (date, "start-end;..." of the intervals), ordered by date.</summary>
+    /// <summary>
+    /// S148 TASK-14840-T: one Skema save of one month that only EMPTIES cells, through the request's <c>cleared</c> member:
+    /// the absence cells as (code, date) and the work-time days as dates. All dates must lie in the month of <paramref name="month"/>.
+    /// </summary>
+    internal async Task<HttpResponseMessage> SaveClearedAsync(
+        string emp, string agreement, DateOnly month,
+        (string Type, DateOnly Date)[]? clearedAbsences = null, DateOnly[]? clearedWorkTime = null)
+    {
+        var body = new Dictionary<string, object>
+        {
+            ["year"] = month.Year,
+            ["month"] = month.Month,
+            ["cleared"] = new
+            {
+                absences = clearedAbsences?.Select(c => new { date = c.Date.ToString("yyyy-MM-dd"), absenceType = c.Type }).ToArray(),
+                workTime = clearedWorkTime?.Select(d => new { date = d.ToString("yyyy-MM-dd") }).ToArray(),
+            },
+        };
+        var request = new HttpRequestMessage(HttpMethod.Post, $"/api/skema/{emp}/save") { Content = JsonContent.Create(body) };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token(emp, agreement));
+        return await _client.SendAsync(request);
+    }
+
+    /// <summary>The employee's CURRENT work-time days (a cleared day is kept but not current) as (date, "start-end;..." of the intervals), ordered by date.</summary>
     internal async Task<(DateOnly Date, string Intervals)[]> ReadWorkTimeAsync(string emp)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
@@ -243,7 +266,7 @@ internal sealed class ChildSickHost : IAsyncDisposable
             """
             SELECT date, COALESCE((SELECT string_agg((i->>'start') || '-' || (i->>'end'), ';' ORDER BY ord)
                                    FROM jsonb_array_elements(intervals) WITH ORDINALITY AS t(i, ord)), '')
-            FROM work_time_projection WHERE employee_id = @e ORDER BY date
+            FROM work_time_projection WHERE employee_id = @e AND cleared_by_outbox_id IS NULL ORDER BY date
             """, conn);
         cmd.Parameters.AddWithValue("e", emp);
         var rows = new List<(DateOnly, string)>();

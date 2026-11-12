@@ -57,7 +57,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <b>What is deliberately NOT in a line.</b>
 /// <list type="bullet">
 /// <item>Any column that changes after a row is written. <c>superseded_by_outbox_id</c> is stamped on an
-/// older Skema row when the employee re-saves the cell; if it were digested, a re-save would make an
+/// older Skema row when the employee re-saves or clears the cell; if it were digested, a re-save would make an
 /// untouched bound row fail its replay (TASK-14513 Do 1; adjudicator pointer at TASK-14508's Step 5a).</item>
 /// <item>The absence row's <c>Feriedage</c> (the ADR-032 vacation-day revaluation). No payroll rule reads it,
 /// and a from-scratch backfill stamps it where the live save leaves it NULL (QUAL-197), so digesting it

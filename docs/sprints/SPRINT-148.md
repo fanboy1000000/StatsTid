@@ -1052,3 +1052,205 @@ TASK-14842-T dispatched.
   - Tests: Unit 1720, DemoSeed 170, Regression non-Docker 140.
   - No frontend change in this stack.
   - The AC-BS Docker facts are CI-W2's.
+
+**Wave 2 — TASK-14840** (`backend-infrastructure`; branch `worktree-agent-a9b87ad039bca59b7`, tip `b1839b86` on `728f4702`; report `.claude/reviews/S148-TASK-14840-report.md`). Cell clearing, owner Q2, closing QUAL-248.
+
+**What an employee can now do.** Empty a project cell, an absence cell or a work-time day. A day a typing mistake had locked can now be fixed. For example, a mistaken full sick day used to block the real work that day; now it can be emptied first, or in the same save as the work.
+- An emptied holiday, care or senior day gives exactly its stored days back to the balance.
+- A sent or approved month still refuses changes.
+
+**What HR sees.** Each removal writes one audit row, in the same transaction: who removed what, on which date, and which registration it replaced. The removed row is never deleted. It is kept and marked as retired, so the record shows both the registration and its removal, and earlier pay calculations still replay exactly.
+
+**One deliberate tightening (W-a).** A posted work-time day with no real work period is now refused. The explicit removal is the only way to empty a day. That is why 14840 and 14841 merge together: until the screen changes, it could still post such a day.
+
+**The build, for the record:**
+- the `cleared` request arrays;
+- three typed events with their audit mappers;
+- `cleared_by_outbox_id` on the work-time table, with readers filtered and the rebuild replaying clears;
+- the give-back, with 14842's seed inputs;
+- the child's-sick judge extended, so a removal is judged on the day as it will stand. Clearing day 1 while day 2 stands is refused, and so is clearing the work on a call-home day (owner Q5's Rule B).
+
+**Gate.** Green: Unit 1720, DemoSeed 170, non-Docker 140. `AuditProjectionParityTests` and the event-serializer completeness fact are green.
+
+**Orchestrator rulings.** Accepted:
+- the four declared deviations: the clear's idempotent guard; retire methods that fail closed unless exactly one row changes; the split read; nullable seed inputs for a clear-only type;
+- the brief correction: `SkemaProjectionAtomicTests` also needs the fixture column.
+
+**Owed by 14840-T beyond its brief:**
+- re-point 14811-T's empty-intervals Rule B fact to a `cleared.workTime` request, because W-a now answers first;
+- filter the new marker in a child's-sick test helper.
+
+**Owed at merge:**
+- close QUAL-248;
+- the three audit-catalog rows;
+- regenerate `db-schema.md`.
+
+**Owed at close:**
+- the ADR-026 D2 note;
+- a stale comment in `ProjectionBackfillService.cs:133`;
+- the backfill tool not printing the new counters.
+
+**Next.** TASK-14840-T dispatched.
+- **TASK-14840-T** (`test-qa`; tip `c4e76ada` on `b1839b86`; report `.claude/reviews/S148-TASK-14840-T-report.md`).
+  - **New facts:** 28 Docker facts across seven new files, plus one Unit mapper fact. They cover:
+    - the clear itself;
+    - authority;
+    - the quota give-back, including AC-CL-36 (a clear-only request against a missing row) and AC-CL-37 (the net change per type);
+    - the bound;
+    - the races, forced with a lock-holding connection and no sleeps;
+    - the rebuild's replay of clears;
+    - payroll.
+  - **M-17 proved locally.** Dropping one field from the absence-clear audit mapper fails the byte-stable golden.
+  - **M-18 … M-21:** each run locally (nothing reddens outside Docker); their Docker reds are argued.
+  - **Re-points:**
+    - 14811-T's empty-intervals Rule B fact is now `ClearingWorkOnStoredCallHomeDay_Refused`, a `cleared.workTime` request;
+    - the child's-sick helper filters the new marker;
+    - the schema copy has the new column;
+    - the S8 docstring.
+  - **Kind corrections:**
+    - AC-CL-20 (2) is F in its form.
+    - AC-CL-38 errors on the base (no such column), so its red evidence is M-21.
+  - **Local gate:** Unit 1721.
+- **REGEN** (`41c66b19`): `openapi.json` adds `cleared` and four schemas, 77 lines, additions only, as predicted.
+- **Dispatched in parallel:**
+  - TASK-14841 (`ux`);
+  - 5a Fable and 5a Codex on `728f4702..41c66b19` (high-risk: legal rule logic, auditability, concurrency).
+- **5a on `728f4702..41c66b19` (14840 + 14840-T + REGEN), cycle 1:**
+  - **Codex: APPROVED-WITH-WARNINGS**, 0 B / 1 W / 1 N (`S148-TASK-14840-5a-codex.md`).
+  - **Fable 5.2: APPROVED-WITH-WARNINGS**, 0 B / 1 W / 8 N (`S148-TASK-14840-5a-reviewer.md`).
+  - **Both found no production defect**, and both accept all four declared deviations.
+  - **Codex confirmed:**
+    - one transaction per clear;
+    - no double give-back under concurrent saves;
+    - replay never resurrects a cleared day or wipes a re-registered one;
+    - every reader of the work-time table filters the marker.
+  - **Fable's W: the "all or nothing" promise is untested.** Every fact that claims it is refused before the transaction opens. Fable's fix is a race fact in which the in-lock quota guard refuses *after* the clears were written, and nothing may survive.
+  - **Codex's W: two R claims are overstated.** AC-CL-33 (2) reads the new column, so it errors on the base. AC-CL-38 fails earlier than stated.
+  - Both W's, Fable's docstring note, and (if cheap) a fact for the untested "seed quota unresolved" branch go to 14840-T fix-up 1.
+  - **Owed in the merge commit:**
+    - `db-schema.md` regenerated;
+    - three audit-catalog rows;
+    - QUAL-248 closed;
+    - the rebuild's stale class summary;
+    - the backfill tool printing the new counters.
+  - **Recorded neutrally for close:**
+    - a clear of a work day needs its outbox row to stay, beside O-31; nothing prunes the outbox today;
+    - whether a give-back can reach an already-settled holiday year (pre-existing; check reachability).
+- **TASK-14840-T fix-ups 1 and 2** (tips `bfc324c6`, `1fa8b152`; `S148-TASK-14840-T-c2-report.md`):
+  - **The new rollback fact `ClearThenInLockQuotaRefusal_RollsBackTheClear`** forces the in-lock quota guard to refuse after the clears were written. Nothing may survive: no event, no audit row, the row still current.
+    - Both 5a cycle-2 lenses found it would time out on the base as first seeded. Fix-up 2 seeds 23 instead of 24, so it is genuinely green on the base.
+    - It also ties the 422 to the quota guard by its body.
+  - **AC-CL-33 (2)** reads base-compatible columns only.
+  - **Docstrings corrected:** AC-CL-38, -3 and -4.
+  - **The "seed quota unresolved" branch fact is not built.** It would need its own container, since it changes global config. It is registered as a test gap at merge.
+  - **Fix-up 2's full gate was reaped** for low memory, with two heavy runs at once. Only the Regression project was built (0 errors). The edits touch only Docker facts and docstrings; the full gate runs on master after the merge.
+- **5a cycle 2 on `41c66b19..bfc324c6`:** Codex and Fable both APPROVED-WITH-WARNINGS (`…-5a-codex-c2.md`, `…-5a-reviewer-c2.md`).
+  - Both closed their cycle-1 W's.
+  - Both found the same new W: the rollback fact was not green on the base. Fixed in fix-up 2.
+  - Cycle 3 is dispatched on `bfc324c6..1fa8b152`, static reading only, to spare memory.
+- **TASK-14841** (`ux`; tip `c777b757` on `41c66b19`; `S148-TASK-14841-report.md`):
+  - **What changed for the employee:**
+    - Emptying a cell, or typing 0, now posts an explicit removal.
+    - Blanking every period in the day panel removes the day.
+    - Half-typed periods send nothing, so the screen never posts an empty day (W-a).
+    - A removal of something actually saved is announced once ("Registreringen er fjernet") in its own polite live region, without `role="status"`.
+    - A 422 restores the value. A 409, 5xx or network failure keeps the cell empty and re-queues the removal.
+  - **Gate:**
+    - tsc, lint, the e2e typecheck and the build are green.
+    - The agent's full vitest was reaped. The Orchestrator ran it in the foreground: 93 files, 1117 tests, **1 failed**.
+    - The failure is `employeeTypedWire.test.ts`, the save-body key-set pin, which still pinned the old "0 and null are dropped" behaviour. It is a missed re-point, not a product defect.
+  - **Fix-up 1 dispatched:**
+    - re-point that test to the new `cleared` contract;
+    - fix the agent's own found defect (a 0-edit removal refused with 422 did not revert);
+    - the full vitest run;
+    - RED runs on the base.
+- **5a cycle 3 on 14840-T (`bfc324c6..1fa8b152`): Codex APPROVED and Fable 5.2 APPROVED** (`S148-TASK-14840-5a-codex-c3.md`, `…-reviewer-c3.md`). The rollback fact is green on the base and pins the rollback with the feature; its body is tied to the quota guard. Both lenses have now approved the 14840 backend and its tests.
+- **5α over Branch A `728f4702..1fa8b152` and Branch B `41c66b19..c9b03f4d`: PASS** (`S148-TASK-14840-14841-5alpha.md`).
+  - Every commit is in scope; the payroll and SharedKernel model edits are comment-only.
+  - The three events are registered with the serializer, the rebuild and the audit mappers.
+  - Every reader of the work-time table filters the marker.
+  - The `shortcut(QUAL-248)` line is deleted.
+- **TASK-14841 fix-up 1** (tip `c9b03f4d`; `S148-TASK-14841-c2-report.md`):
+  - The save-body key-set pin is re-pointed to the new `cleared` contract.
+  - The agent's found defect is fixed at the root: a 0 edit is treated as empty, so a refused removal restores the stored value. It is pinned by a new F test.
+  - **Gate:** vitest 94 files / 1118 tests green, with RED shown on the base for every new file.
+- **5a Fable on TASK-14841 (`41c66b19..c9b03f4d`): APPROVED-WITH-WARNINGS**, 0 B / 4 W / 9 N (`S148-TASK-14841-5a-reviewer.md`):
+  - **W-1:** the screen-reader announcement was visible text that never cleared and overlapped "Indlæser…".
+  - **W-2:** blanking a day and then retyping still sent a removal mid-edit.
+  - **W-3:** the "announced once" test could not fail.
+  - **W-4:** a refused work-time removal restored the grid but not the open day panel.
+  
+  Fable accepted the dropped `role="status"` (aria-live polite + atomic is equivalent) and the three edits outside the range. All four W's, the fixture-shape note, a re-queue test and three PAT-032 comments go to 14841 fix-up 2. A **5a Codex pass on 14841** follows, because the stack's checklist row carries the high-risk Codex lens.
+- **TASK-14841 fix-up 2** (tip `0b163e16`; `S148-TASK-14841-c3-report.md`): Fable's four cycle-1 warnings were answered, and vitest was 94 files / 1121 tests, green.
+- **5a cycle 2 (Fable) and cycle 1 (Codex) on 14841: both CHANGES-REQUIRED** (`S148-TASK-14841-5a-reviewer-c2.md`, `S148-TASK-14841-5a-codex.md`).
+  - **Fable's BLOCKER:** the "screen-reader only" fix used `visually-hidden`, a class defined in a stylesheet the app never loads. The announcement therefore still printed in the month header, and the test passed only because it checked the class name. Fable notes this was partly its own cycle-1 error.
+  - **Fable's W-A:** half-typing after a removal was already sent put the old times back in the grid, after the server had removed them.
+  - **Codex's two W's:**
+    - a half-typed day could still post a pending valid edit;
+    - a refused cell removal stayed visibly blank while the input kept focus.
+  - **Codex also noted an inherited limit:** the save queue orders saves only within 15 seconds, so a stalled older save could still resurrect a value. This is to be registered at close; it needs server-side ordering.
+  - **Disposition: 14841 fix-up 3.**
+    - A module-scoped screen-reader-only class, pinned by its styling and not its name.
+    - One half-typed rule from both lenses: withdraw an unsent change for that day and restore the grid from server truth; leave an in-flight change to its result.
+    - Reset the input overlay after a refusal. The Orchestrator authorizes code changes in `SkemaGrid.tsx` and `SkemaDayPanel.tsx` for this.
+    - Keep keyboard focus on re-seed, by reusing row ids.
+    - Read the open day from a ref.
+    - Record the accepted half-typed-second-row loss in a comment.
+- **TASK-14841 fix-up 3** (tip `42216942`; `S148-TASK-14841-c4-report.md`).
+  - **Screen-reader class:** the screen-reader-only class now lives in the page's own CSS module, and its test pins the styling rule.
+  - **One half-typed rule:** an unsent change for the day is withdrawn; an in-flight change is left to its result.
+  - **Focused input:** the typing overlay of a focused input resets after a refusal.
+  - **Re-seed:** keeps keyboard focus, and reads the open day from a ref.
+  - **Gate:** the agent's full vitest run was reaped for memory; the Orchestrator ran it in the foreground, green at 94 files / 1126 tests.
+- **5a, 14841 fix-up 3:**
+  - **Fable 5.2 cycle 3:** APPROVED-WITH-WARNINGS (`…-5a-reviewer-c3.md`). It closes all seven prior findings, including Codex's W1 and W2.
+  - **Codex cycle 2:** CHANGES-REQUIRED (`…-5a-codex-c2.md`). Its cycle-1 cases are closed.
+  - **The same two narrower timing defects, found by both lenses:**
+    - with a second edit on top of a save still in flight, followed by half-typing, the grid ends showing times the server does not hold;
+    - a refused removal can erase text the user has started but the page has not taken in yet (a leading "," or "-").
+  - **Disposition: 14841 fix-up 4.** Each defect is answered as one general rule rather than another special case:
+    - on withdraw, restore to the newest in-flight value; on a 200, set the grid to what was confirmed unless a newer change is pending; never re-queue a half-typed day after a 5xx;
+    - restore an input after a refusal only if the user has not typed since.
+  - The CSS pin, the ref and the comment notes are folded in.
+  - **Review budget:** 14841 is at Fable cycle 3 and Codex cycle 2, against a cap of 5 per lens.
+- **TASK-14841 fix-up 4** (tip `a2483a53`; `S148-TASK-14841-c5-report.md`): both timing defects answered as general rules (the newest in-flight value on withdraw and on a 200; an overlay reset only when untouched since propagation). Vitest 94 files / 1132 tests, green.
+- **5a on fix-up 4:**
+  - **Codex cycle 3: CHANGES-REQUIRED** (`…-5a-codex-c3.md`). Its earlier cases are closed. New: overlapping saves past the 15-second queue bound can settle newest-first, leaving the grid stale. The fix is to track every outstanding save.
+  - **Fable 5.2 cycle 4: APPROVED-WITH-WARNINGS**, "correct enough to merge" (`…-5a-reviewer-c4.md`). Three new warnings:
+    - **W-1:** a failed removal is not retried after the user half-typed and closed the panel.
+    - **W-2:** a refused removal stays blank in a cell the user returned to after typing elsewhere.
+    - **W-3:** test (iv) does not pin its rule.
+    
+    Fable would register Codex's out-of-order case rather than fix it.
+- **Disposition: 14841 fix-up 5, the final round** under the review cap (Codex cycle 4, Fable cycle 5 next). It takes the frontend half of Codex's case (per-save tracking, which closes Codex's only open warning) and all three of Fable's warnings.
+- **Registered at merge:**
+  - the server-side half: a stalled older save can still commit after a newer one, and the client cannot prevent that write. This needs server ordering or version checks, and is the inherited limit Codex named in cycle 1;
+  - Fable's accepted contract: a failed *edit* on a day left half-typed is dropped when the panel is closed, and the failure alert is the only signal.
+- **TASK-14841 fix-up 5** (tip `7caaab7c`; `S148-TASK-14841-c6-report.md`).
+  - **What it fixed:**
+    - per-save in-flight tracking: the newest outstanding save, else server truth, everywhere;
+    - a failed removal re-marked and retried;
+    - a refused cell restored after the user returns to it;
+    - the 5xx test now pins its rule.
+  - **Vitest:** 94 files / 1137 tests, green.
+- **Final 5a on 14841:**
+  - **Fable 5.2 cycle 5 (the cap): APPROVED, merge-ready** (`…-5a-reviewer-c5.md`). All findings are closed. Fable would register the cases beyond the 15-second bound.
+  - **Codex cycle 4: CHANGES-REQUIRED** (`…-5a-codex-c4.md`).
+    - The case: three saves of one day (09:00, 10:00, 11:00), all stuck past 15 s. The server confirms 11:00, then 09:00, and the screen falls back to the still-outstanding 10:00.
+    - If 10:00 then fails and is retried, it overwrites the confirmed 11:00. It needs only delayed answers, not out-of-order server commits.
+- **Owner Q6 (2026-11-12): "Fix it, allow 1 extra round (Recommended)".**
+  - **The question.** The lenses had reached the five-cycle cap and disagreed: Fable said merge, Codex said fix. A fix needed a sixth Fable cycle, past the cap. The alternative was to register the case beside the server-ordering limit and merge.
+  - **The ruling.** Fix it, as a one-time exception to the cap recorded here: one more small round, then Codex cycle 5 and Fable cycle 6.
+  - **The fix (14841 fix-up 6).** Track per day the newest confirmed save. Ignore, and never retry, a save older than it. Fable's two notes are folded in: the re-mark reads the computed target, not a lagging mirror, and the "server truth" comments are made true.
+- **TASK-14841 fix-up 6** (tip `239e2b0d`; `S148-TASK-14841-c7-report.md`). Per day, the newest confirmed save wins: an older outstanding save is ignored and never retried. The grid mirror is patched in step with the restore, and the comments are made true. Vitest 94 files / 1138 tests, green; the new F test is red on the base (10:00 where 11:00 is expected).
+- **Final 5a on 14841 fix-up 6:** **Codex cycle 5 APPROVED** and **Fable 5.2 cycle 6 APPROVED** (owner Q6's one extra round; `…-5a-codex-c5.md`, `…-5a-reviewer-c6.md`). Both called it merge-ready; neither raised a blocker or a warning.
+- **Merged** (octopus, `--no-ff`): the TASK-14840 stack (`1fa8b152`: 14840, 14840-T fix-ups 1–2, REGEN) together with TASK-14841 (`239e2b0d`). The server refuses an empty work-time day from this merge on, and the screen never sends one.
+  - **In the merge commit:**
+    - `db-schema.md` regenerated (the new `cleared_by_outbox_id` column);
+    - three audit-catalog rows (`TimeEntryCleared`, `AbsenceCleared`, `WorkTimeCleared`);
+    - the rebuild's class summary made true, plus the backfill tool's missing cleared counters;
+    - QUAL-248 **closed FIXED**.
+  - **Registered:**
+    - **QUAL-252 (M):** a stalled Skema save can still be written after a newer one. The client orders saves only within 15 s, and the server not at all. Its residuals: the untested mirror patch, and the accepted half-typed-then-closed contract.
+    - **Three below-floor notes:** the untested "seed quota unresolved" branch; a clear's dependence on its outbox row (beside O-31); the settled-year give-back reachability (pre-existing).
+  - `check_docs`: 12 shortcuts, all registered. No `shortcut(pending)`, and the `shortcut(QUAL-248)` line is gone.

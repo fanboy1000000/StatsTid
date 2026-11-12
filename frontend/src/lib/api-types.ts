@@ -7380,6 +7380,7 @@ export interface components {
             entries?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaEntry"][] | null;
             absences?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaAbsence"][] | null;
             workTime?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkTimeDay"][] | null;
+            cleared?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared"];
         };
         "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaAbsence": {
             /** Format: date */
@@ -7387,6 +7388,25 @@ export interface components {
             absenceType: string;
             /** Format: double */
             hours: number;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared": {
+            entries?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry"][] | null;
+            absences?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence"][] | null;
+            workTime?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay"][] | null;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence": {
+            /** Format: date */
+            date: string;
+            absenceType: string;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry": {
+            /** Format: date */
+            date: string;
+            projectCode: string;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay": {
+            /** Format: date */
+            date: string;
         };
         "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaEntry": {
             /** Format: date */

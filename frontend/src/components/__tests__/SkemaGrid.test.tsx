@@ -567,7 +567,7 @@ describe('SkemaGrid — editable cells', () => {
     expect(input.value).toBe('7,5') // 1-decimal Danish format
   })
 
-  it('keeps the shipped propagation semantics: "" → null, "0" → null (R17 recorded limitation — clearing never persists server-side), unparsable → no call', () => {
+  it('keeps the shipped propagation semantics: "" → null, "0" → null (the page posts null as a removal), unparsable → no call', () => {
     const onCellChange = vi.fn()
     renderGrid({ onCellChange })
     const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
