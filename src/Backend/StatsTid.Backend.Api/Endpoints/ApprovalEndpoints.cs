@@ -1266,7 +1266,6 @@ public static class ApprovalEndpoints
                     SELECT DISTINCT employee_id
                     FROM absences_projection
                     WHERE employee_id = ANY(@ids) AND date = @today
-                      AND superseded_by_outbox_id IS NULL
                     """, conn);
                 cmd.Parameters.AddWithValue("ids", employeeIds);
                 cmd.Parameters.AddWithValue("today", today);

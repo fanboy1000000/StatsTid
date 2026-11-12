@@ -1486,6 +1486,7 @@ public static class SkemaEndpoints
                 return byType;
             }
 
+            IReadOnlyList<AbsenceProjectionRow> preTxAbsenceCells = Array.Empty<AbsenceProjectionRow>();
             // The cleared absence cells that draw on an entitlement balance, by type: a type the save
             // only clears still gets a quota plan (requested 0), so the in-lock balance pass can give
             // its days back (addendum A1 D-6).
@@ -1837,8 +1838,8 @@ public static class SkemaEndpoints
                     await using (var readOnlyCmd = new NpgsqlCommand("SET TRANSACTION READ ONLY", preCheckConn, preCheckTx))
                         await readOnlyCmd.ExecuteNonQueryAsync(ct);
 
-                    provisionalReplacedByEntitlementType = ReplacedFeriedageByType(
-                        await ReadCurrentAbsenceCellsAsync(preCheckConn, preCheckTx));
+                    preTxAbsenceCells = await ReadCurrentAbsenceCellsAsync(preCheckConn, preCheckTx);
+                    provisionalReplacedByEntitlementType = ReplacedFeriedageByType(preTxAbsenceCells);
                     foreach (var plan in preCheckPlans)
                     {
                         if (plan.HasNoLiveConfig)
@@ -2572,7 +2573,7 @@ public static class SkemaEndpoints
                     // advisory reads before the transaction. A cleared cell with no current row is a
                     // no-op: no event, no audit row, no balance change.
                     var currentAbsenceCells = await ReadCurrentAbsenceCellsAsync(conn, tx);
-                    var replacedByEntitlementType = ReplacedFeriedageByType(currentAbsenceCells);
+                    var replacedByEntitlementType = ReplacedFeriedageByType(preTxAbsenceCells);
                     var absenceRowsToClear = currentAbsenceCells
                         .Where(r => clearedAbsenceCells.Contains((r.Date, r.AbsenceType)))
                         .ToDictionary(r => (r.Date, r.AbsenceType));
@@ -2869,16 +2870,17 @@ public static class SkemaEndpoints
                         if (!absenceRowsToClear.TryGetValue((cleared.Date, cleared.AbsenceType), out var row))
                             continue;
                         AbsenceToEntitlementType.TryGetValue(row.AbsenceType, out var clearedType);
+                        var preTxRow = preTxAbsenceCells.FirstOrDefault(r => r.Date == row.Date && r.AbsenceType == row.AbsenceType) ?? row;
                         var clearEvent = new AbsenceCleared
                         {
                             EmployeeId = employeeId,
                             Date = row.Date,
                             AbsenceType = row.AbsenceType,
-                            ClearedEventId = row.EventId,
+                            ClearedEventId = preTxRow.EventId,
                             ClearedHours = row.Hours,
                             // What is stored is what is given back (ADR-032 D2), never a recomputation;
                             // null for a type that draws on no balance.
-                            ClearedFeriedage = clearedType is null ? null : row.Feriedage,
+                            ClearedFeriedage = clearedType is null ? null : preTxRow.Feriedage,
                             ActorId = actor.ActorId,
                             ActorRole = actor.ActorRole,
                             CorrelationId = actor.CorrelationId

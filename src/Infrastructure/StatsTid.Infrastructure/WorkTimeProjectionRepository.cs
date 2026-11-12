@@ -78,12 +78,10 @@ public sealed class WorkTimeProjectionRepository
     /// </summary>
     internal const string ClearDaySql = @"
         UPDATE work_time_projection
-           SET cleared_by_outbox_id = @outboxId,
-               outbox_id = @outboxId
+           SET cleared_by_outbox_id = @outboxId
          WHERE employee_id = @employeeId
            AND date = @date
-           AND cleared_by_outbox_id IS NULL
-           AND outbox_id <= @outboxId";
+           AND cleared_by_outbox_id IS NULL";
 
     private readonly DbConnectionFactory _connectionFactory;
 
