@@ -527,6 +527,7 @@ public sealed class VacationSettlementService
     /// other type to VACATION, and Infrastructure cannot reference that Backend.Api map. The
     /// settlement's own recorded-absence read keys VACATION the same way (ReadRecordedFeriedageAsync).
     /// </summary>
+    // shortcut(pending): a second copy of EntitlementMapping's VACATION entry, which Infrastructure cannot reference; upgrade when another absence type maps to VACATION or the map moves to SharedKernel
     private static readonly string[] CarryoverSeedAbsenceTypes = [AbsenceTypes.Vacation];
 
     /// <summary>
