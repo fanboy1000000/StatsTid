@@ -947,7 +947,9 @@ export function SkemaPage() {
       if (editLocked) return
       setLocalCells((prev) => {
         const next = new Map(prev)
-        if (hours === null) {
+        // 0 is an emptied cell, as null is: local state never holds a 0, so the 422 revert's
+        // overlap guard (live vs. sent-as-absent) sees a refused removal for what it is.
+        if (hours === null || hours === 0) {
           next.delete(`${rowKey}:${date}`)
         } else {
           next.set(`${rowKey}:${date}`, hours)
