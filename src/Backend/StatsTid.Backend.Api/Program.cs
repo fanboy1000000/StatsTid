@@ -248,6 +248,14 @@ builder.Services.AddSingleton<IAuditProjectionMapper<PeriodEmployeeApproved>, Pe
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodEmployeeApproved), nameof(PeriodEmployeeApproved)));
 builder.Services.AddSingleton<IAuditProjectionMapper<PeriodReopened>, PeriodReopenedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodReopened), nameof(PeriodReopened)));
+// S148 / TASK-14840 (addendum A1 D-5, NR-A5) — the three Skema cell clears: one audit row each, written
+// by the Skema save in its own transaction; the startup audit backfill picks them up from the event store.
+builder.Services.AddSingleton<IAuditProjectionMapper<TimeEntryCleared>, TimeEntryClearedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(TimeEntryCleared), nameof(TimeEntryCleared)));
+builder.Services.AddSingleton<IAuditProjectionMapper<AbsenceCleared>, AbsenceClearedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(AbsenceCleared), nameof(AbsenceCleared)));
+builder.Services.AddSingleton<IAuditProjectionMapper<WorkTimeCleared>, WorkTimeClearedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(WorkTimeCleared), nameof(WorkTimeCleared)));
 // Overtime family (3)
 builder.Services.AddSingleton<IAuditProjectionMapper<OvertimePreApprovalCreated>, OvertimePreApprovalCreatedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OvertimePreApprovalCreated), nameof(OvertimePreApprovalCreated)));

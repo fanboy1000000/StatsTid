@@ -77,6 +77,25 @@ namespace StatsTid.Infrastructure;
 //   (time_entries_projection and absences_projection) and restart, so the rebuild
 //   runs from empty; or reseed. The live write path cannot produce this state
 //   (each row is written in the same transaction as its event).
+//
+// CELL CLEARS ON REBUILD (owner Q2; addendum A1 D-4). A Skema save can empty a cell:
+//   * TimeEntryCleared / AbsenceCleared retire the cell's current Skema row with the
+//     same MarkSupersededSkemaCellSql, the clear's own outbox_id as the marker, and
+//     insert nothing. Replayed exactly so: a cell registered again after its clear
+//     stays current (its row's outbox_id is larger than the clear's).
+//   * WorkTimeCleared keeps the day's row and marks it: WorkTimeProjectionRepository.
+//     ClearDaySql sets cleared_by_outbox_id and outbox_id to the clear's outbox_id, only
+//     for a current day whose outbox_id is <= the clear's, so a replayed clear never
+//     retires a day registered after it. The upsert below sets the marker back to NULL.
+//   Why the work-time row is kept rather than deleted: this rebuild runs at every
+//   Backend start and reads only `events`, which the publisher fills after commit, so a
+//   clear may not be in `events` yet. Over populated tables every cleared row is still
+//   there: an entry or absence replay conflicts on event_id, and a work-time replay meets
+//   the kept row, whose advanced outbox_id refuses the older registration. A re-run
+//   changes nothing (the marks find nothing current to retire; the work-time clear finds
+//   the marker already set).
+//   Not handled here: from EMPTY tables, a committed fact of any replayed type that is
+//   not yet published is absent until a start after it is published (O-31, registered).
 
 /// <summary>
 /// Counters returned by <see cref="ProjectionBackfillService.RunAsync"/>.
@@ -102,7 +121,13 @@ public sealed record ProjectionBackfillResult(
     // predecessor). Optional (defaulted) for the same positional-caller reason as above. A re-run
     // against a populated table marks nothing, so both are 0 on a second pass.
     int SupersededTime = 0,
-    int SupersededAbsences = 0);
+    int SupersededAbsences = 0,
+    // S148 / TASK-14840: rows the rebuild retired by replaying a cell clear (TimeEntryCleared,
+    // AbsenceCleared, WorkTimeCleared). Optional (defaulted) for the same positional-caller reason.
+    // A re-run against a populated table retires nothing, so all three are 0 on a second pass.
+    int ClearedTime = 0,
+    int ClearedAbsences = 0,
+    int ClearedWorkTime = 0);
 
 /// <summary>
 /// Replays <c>TimeEntryRegistered</c> + <c>AbsenceRegistered</c> events from
@@ -155,7 +180,8 @@ public sealed class ProjectionBackfillService
             events.stored_at
         FROM events
         LEFT JOIN outbox_events ON events.event_id = outbox_events.event_id
-        WHERE events.event_type IN ('TimeEntryRegistered', 'AbsenceRegistered', 'WorkTimeRegistered', 'EntitlementBalanceRevalued')
+        WHERE events.event_type IN ('TimeEntryRegistered', 'AbsenceRegistered', 'WorkTimeRegistered', 'EntitlementBalanceRevalued',
+                                    'TimeEntryCleared', 'AbsenceCleared', 'WorkTimeCleared')
         ORDER BY events.stream_id, events.stream_version
     ";
 
@@ -215,6 +241,7 @@ public sealed class ProjectionBackfillService
     // Replaying in (stream_id, stream_version) order with the outbox_id<= guard yields the
     // correct final per-(employee,date) state; re-running is idempotent (equal outbox_id
     // re-applies the same values; a newer live row is never clobbered by an older replayed event).
+    // A day registered again after its clear is current again: the update sets the marker to NULL.
     private const string UpsertWorkTimeSql = @"
         INSERT INTO work_time_projection (
             employee_id, date, intervals,
@@ -229,7 +256,8 @@ public sealed class ProjectionBackfillService
             actor_id = EXCLUDED.actor_id,
             actor_role = EXCLUDED.actor_role,
             correlation_id = EXCLUDED.correlation_id,
-            outbox_id = EXCLUDED.outbox_id
+            outbox_id = EXCLUDED.outbox_id,
+            cleared_by_outbox_id = NULL
         WHERE work_time_projection.outbox_id <= EXCLUDED.outbox_id
     ";
 
@@ -326,6 +354,13 @@ public sealed class ProjectionBackfillService
         upsertWorkTimeCmd.Parameters.Add("correlationId", NpgsqlDbType.Uuid);
         upsertWorkTimeCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
 
+        // S148 / TASK-14840 — the work-time clear (the live repository's SQL, verbatim).
+        await using var clearWorkTimeCmd = new NpgsqlCommand(
+            WorkTimeProjectionRepository.ClearDaySql, conn, tx);
+        clearWorkTimeCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
+        clearWorkTimeCmd.Parameters.Add("employeeId", NpgsqlDbType.Text);
+        clearWorkTimeCmd.Parameters.Add("date", NpgsqlDbType.Date);
+
         // Buffer rows from the SELECT before issuing INSERTs. We can't run
         // INSERT statements while a DataReader is open on the same
         // connection in Npgsql.
@@ -357,6 +392,9 @@ public sealed class ProjectionBackfillService
         int skippedWorkTime = 0;
         int supersededTime = 0;
         int supersededAbs = 0;
+        int clearedTime = 0;
+        int clearedAbs = 0;
+        int clearedWorkTime = 0;
 
         // ADR-032 D2 — buffer EntitlementBalanceRevalued replacement sets in event order
         // (rows already sorted by stream_id, stream_version). Applied AFTER the absence
@@ -511,6 +549,32 @@ public sealed class ProjectionBackfillService
                 if (affected == 1) appliedWorkTime++;
                 else skippedWorkTime++;
             }
+            else if (domainEvent is TimeEntryCleared tc)
+            {
+                // S148 / TASK-14840 — the live clear's mark, with the clear's outbox_id; no insert.
+                markTimeCmd.Parameters["outboxId"].Value = outboxId;
+                markTimeCmd.Parameters["employeeId"].Value = tc.EmployeeId;
+                markTimeCmd.Parameters["date"].Value = tc.Date;
+                markTimeCmd.Parameters["taskId"].Value = tc.TaskId;
+                clearedTime += await markTimeCmd.ExecuteNonQueryAsync(ct);
+            }
+            else if (domainEvent is AbsenceCleared ac)
+            {
+                markAbsCmd.Parameters["outboxId"].Value = outboxId;
+                markAbsCmd.Parameters["employeeId"].Value = ac.EmployeeId;
+                markAbsCmd.Parameters["date"].Value = ac.Date;
+                markAbsCmd.Parameters["absenceType"].Value = ac.AbsenceType;
+                clearedAbs += await markAbsCmd.ExecuteNonQueryAsync(ct);
+            }
+            else if (domainEvent is WorkTimeCleared wc)
+            {
+                // The guarded clear: 0 rows when the day is already cleared, absent, or registered
+                // again after this clear (its outbox_id is larger), each a no-op, not an error.
+                clearWorkTimeCmd.Parameters["outboxId"].Value = outboxId;
+                clearWorkTimeCmd.Parameters["employeeId"].Value = wc.EmployeeId;
+                clearWorkTimeCmd.Parameters["date"].Value = wc.Date;
+                clearedWorkTime += await clearWorkTimeCmd.ExecuteNonQueryAsync(ct);
+            }
             else if (domainEvent is EntitlementBalanceRevalued rev)
             {
                 // ADR-032 D2 — defer the per-absence feriedage overwrites; they ride
@@ -552,6 +616,9 @@ public sealed class ProjectionBackfillService
             AppliedWorkTime: appliedWorkTime,
             SkippedWorkTime: skippedWorkTime,
             SupersededTime: supersededTime,
-            SupersededAbsences: supersededAbs);
+            SupersededAbsences: supersededAbs,
+            ClearedTime: clearedTime,
+            ClearedAbsences: clearedAbs,
+            ClearedWorkTime: clearedWorkTime);
     }
 }

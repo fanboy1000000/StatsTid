@@ -19,18 +19,21 @@ namespace StatsTid.Infrastructure;
 /// <para><b>S145 / TASK-14507 (A0, QUAL-192) — a Skema save replaces the cell.</b> In plain terms:
 /// a Skema cell (one employee, one day, one task) holds ONE number. Saving it again appends a new
 /// event (events stay append-only) and a new row, and marks the earlier Skema row of the cell
-/// <c>superseded_by_outbox_id</c> = the new row's <c>outbox_id</c>. Superseded rows are kept, so
-/// a calculation can still be replayed from the exact rows it read (<see cref="GetByEventIdsAsync"/>),
+/// <c>superseded_by_outbox_id</c> = the new row's <c>outbox_id</c>. Emptying the cell (a
+/// <c>TimeEntryCleared</c>, addendum A1 D-4) marks the row the same way with the clear's
+/// <c>outbox_id</c> and inserts nothing (<see cref="RetireSkemaCellAsync"/>). Superseded rows are kept,
+/// so a calculation can still be replayed from the exact rows it read (<see cref="GetByEventIdsAsync"/>),
 /// but every total counts CURRENT rows only: both default reads below filter
-/// <c>superseded_by_outbox_id IS NULL</c>. A <c>POST /api/time-entries</c> row (source
-/// <c>TIME_POST</c>) is a separate additive registration: it is never marked and never marks.</para>
+/// <c>superseded_by_outbox_id IS NULL</c>. A <c>TIME_POST</c> row (written by the retired
+/// <c>POST /api/time-entries</c>) is an additive registration: it is never marked and never marks.</para>
 /// </summary>
 public sealed class TimeEntryProjectionRepository
 {
     /// <summary>
     /// S145 / TASK-14507 — the ONE supersession mark for a time-entry cell, shared verbatim by the
-    /// live <see cref="InsertAsync"/> and the from-events rebuild (<c>ProjectionBackfillService</c>)
-    /// so both reach the same current set. It runs BEFORE the new row's INSERT (mark, then insert,
+    /// live <see cref="InsertAsync"/>, the live clear (<see cref="RetireSkemaCellAsync"/>) and the
+    /// from-events rebuild (<c>ProjectionBackfillService</c>, for both registrations and clears) so all
+    /// reach the same current set. It runs BEFORE the new row's INSERT (mark, then insert,
     /// never the reverse: the partial unique index <c>ux_time_entries_proj_current_skema_cell</c>
     /// admits one current Skema row per cell, so an insert-first would collide with the row it is
     /// about to replace).
@@ -126,6 +129,32 @@ public sealed class TimeEntryProjectionRepository
         cmd.Parameters.AddWithValue("outboxId", outboxId);
         cmd.Parameters.AddWithValue("source", source);
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// The live clear of one Skema project cell (owner Q2; addendum A1 D-4): marks the cell's current
+    /// Skema row <c>superseded_by_outbox_id</c> = <paramref name="clearOutboxId"/> with the shared
+    /// <see cref="MarkSupersededSkemaCellSql"/>, and inserts nothing. The row is kept for replay and audit.
+    ///
+    /// <para>The caller has enqueued the <c>TimeEntryCleared</c> first (its <paramref name="clearOutboxId"/>),
+    /// holds the employee's consumption lock, and read the cell's current row on this same transaction; so
+    /// exactly one row is marked. Anything else is a broken invariant and throws, which rolls the save back
+    /// rather than committing a clear event that retired nothing or more than one row.</para>
+    /// </summary>
+    public async Task RetireSkemaCellAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly date, string taskId, long clearOutboxId,
+        CancellationToken ct = default)
+    {
+        await using var markCmd = new NpgsqlCommand(MarkSupersededSkemaCellSql, conn, tx);
+        markCmd.Parameters.AddWithValue("outboxId", clearOutboxId);
+        markCmd.Parameters.AddWithValue("employeeId", employeeId);
+        markCmd.Parameters.AddWithValue("date", date);
+        markCmd.Parameters.Add(new NpgsqlParameter("taskId", NpgsqlDbType.Text) { Value = taskId });
+        var marked = await markCmd.ExecuteNonQueryAsync(ct);
+        if (marked != 1)
+            throw new InvalidOperationException(
+                $"Clearing project cell ({employeeId}, {date:yyyy-MM-dd}, {taskId}) marked {marked} rows; exactly one current Skema row was expected.");
     }
 
     /// <summary>

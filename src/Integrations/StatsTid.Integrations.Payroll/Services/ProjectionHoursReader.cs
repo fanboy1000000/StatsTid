@@ -108,7 +108,7 @@ public sealed class ProjectionHoursReader : IRecordedHoursReader
     /// superseded rows); an empty id list returns an empty list without a query. Unlike
     /// <see cref="ReadCurrentAsync"/>, these two reads need no shared snapshot: a row read by event id is
     /// immutable in every field the calculation consumes — the only columns that change after insert are
-    /// <c>superseded_by_outbox_id</c> (set once, by a later re-save of the cell) and the absence row's
+    /// <c>superseded_by_outbox_id</c> (set once, by a later re-save or clear of the cell) and the absence row's
     /// <c>feriedage</c> (the ADR-032 vacation-day revaluation), and neither is a calculation input — so two
     /// reads at different moments return exactly the inputs one snapshot would.
     /// </remarks>

@@ -19,15 +19,19 @@ namespace StatsTid.Infrastructure;
 /// <para><b>S145 / TASK-14507 (A0, QUAL-192/193) — a Skema save replaces the cell.</b> A Skema
 /// absence cell is one employee, one day, one absence type. Saving it again appends a new event and
 /// a new row and marks the earlier Skema row of the cell <c>superseded_by_outbox_id</c> = the new
-/// row's <c>outbox_id</c>. Superseded rows are kept for replay (<see cref="GetByEventIdsAsync"/>);
-/// every total, including the vacation settlement and the quota, counts CURRENT rows only. An
-/// additive row (source <c>TIME_POST</c>) is never marked and never marks.</para>
+/// row's <c>outbox_id</c>. Emptying the cell (an <c>AbsenceCleared</c>, addendum A1 D-4) marks the
+/// row the same way with the clear's <c>outbox_id</c> and inserts nothing
+/// (<see cref="RetireSkemaCellAsync"/>). Superseded rows are kept for replay
+/// (<see cref="GetByEventIdsAsync"/>); every total, including the vacation settlement and the quota,
+/// counts CURRENT rows only. An additive row (source <c>TIME_POST</c>) is never marked and never
+/// marks.</para>
 /// </summary>
 public sealed class AbsenceProjectionRepository
 {
     /// <summary>
     /// S145 / TASK-14507 — the ONE supersession mark for an absence cell, shared verbatim by the
-    /// live <see cref="InsertAsync"/> and the from-events rebuild (<c>ProjectionBackfillService</c>).
+    /// live <see cref="InsertAsync"/>, the live clear (<see cref="RetireSkemaCellAsync"/>) and the
+    /// from-events rebuild (<c>ProjectionBackfillService</c>, for both registrations and clears).
     /// It runs BEFORE the new row's INSERT (the partial unique index
     /// <c>ux_absences_proj_current_skema_cell</c> admits one current Skema row per cell). The
     /// clauses mirror the time-entry mark: the cell; Skema rows only; not already retired
@@ -123,6 +127,32 @@ public sealed class AbsenceProjectionRepository
         cmd.Parameters.AddWithValue("outboxId", outboxId);
         cmd.Parameters.AddWithValue("source", source);
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// The live clear of one Skema absence cell (owner Q2; addendum A1 D-4): marks the cell's current
+    /// Skema row <c>superseded_by_outbox_id</c> = <paramref name="clearOutboxId"/> with the shared
+    /// <see cref="MarkSupersededSkemaCellSql"/>, and inserts nothing. The row is kept for replay and audit.
+    ///
+    /// <para>The caller has enqueued the <c>AbsenceCleared</c> first (its <paramref name="clearOutboxId"/>),
+    /// holds the employee's consumption lock, and read the cell's current row on this same transaction; so
+    /// exactly one row is marked. Anything else is a broken invariant and throws, which rolls the save back
+    /// rather than committing a clear event that retired nothing or more than one row.</para>
+    /// </summary>
+    public async Task RetireSkemaCellAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly date, string absenceType, long clearOutboxId,
+        CancellationToken ct = default)
+    {
+        await using var markCmd = new NpgsqlCommand(MarkSupersededSkemaCellSql, conn, tx);
+        markCmd.Parameters.AddWithValue("outboxId", clearOutboxId);
+        markCmd.Parameters.AddWithValue("employeeId", employeeId);
+        markCmd.Parameters.AddWithValue("date", date);
+        markCmd.Parameters.AddWithValue("absenceType", absenceType);
+        var marked = await markCmd.ExecuteNonQueryAsync(ct);
+        if (marked != 1)
+            throw new InvalidOperationException(
+                $"Clearing absence cell ({employeeId}, {date:yyyy-MM-dd}, {absenceType}) marked {marked} rows; exactly one current Skema row was expected.");
     }
 
     /// <summary>
@@ -244,15 +274,17 @@ public sealed class AbsenceProjectionRepository
 
     /// <summary>
     /// S145 / TASK-14507 (R23) — the CURRENT Skema rows of the employee dated in
-    /// <c>[start, end]</c>: the rows a Skema save is about to replace, read so the save can move the
-    /// quota by the SIGNED difference (new feriedage minus the stored feriedage of the replaced row)
-    /// instead of adding the full new value again. Additive (<c>TIME_POST</c>) rows are never
-    /// replaced, so they are not returned.
+    /// <c>[start, end]</c>: the rows a Skema save is about to replace or clear, read so the save can
+    /// move the quota by the SIGNED difference (new feriedage minus the stored feriedage of the
+    /// replaced or cleared rows) instead of adding the full new value again, and so a clear carries
+    /// the values of the row it retires. Additive (<c>TIME_POST</c>) rows are never replaced or
+    /// cleared, so they are not returned.
     ///
     /// <para>Reads on the caller's <paramref name="conn"/> + <paramref name="tx"/>. The Skema save
     /// calls it twice: in its advisory pre-check, on a short read-only REPEATABLE READ snapshot that
     /// the pre-check's balance reads share (so the two agree); and AFTER it took the employee's
-    /// consumption lock, inside the write transaction (the authoritative read).</para>
+    /// consumption lock, inside the write transaction, before its first write (the authoritative
+    /// read).</para>
     /// </summary>
     public async Task<IReadOnlyList<AbsenceProjectionRow>> GetCurrentSkemaRowsAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,

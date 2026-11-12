@@ -1194,13 +1194,15 @@ public static class ApprovalEndpoints
             }
 
             // (2d) worked(interval hours) per (employee, date) from work_time_projection: a day's
-            // clock periods are its only work-time record (ADR-043 D10, D-2.4).
+            // clock periods are its only work-time record (ADR-043 D10, D-2.4). Current days only:
+            // a cleared day is kept with cleared_by_outbox_id set and counts nothing (addendum A1 D-4).
             var workedByEmployeeDay = new Dictionary<(string, DateOnly), decimal>();
             await using (var cmd = new NpgsqlCommand(
                 """
                 SELECT employee_id, date, intervals
                 FROM work_time_projection
                 WHERE employee_id = ANY(@ids) AND date >= @start AND date <= @end
+                  AND cleared_by_outbox_id IS NULL
                 """, conn))
             {
                 cmd.Parameters.AddWithValue("ids", employeeIds);
@@ -1620,13 +1622,15 @@ public static class ApprovalEndpoints
             }
 
             // (b) worked(interval hours) per DAY from work_time_projection — the same read as the team
-            // overview's (2d): a day's clock periods are its only work-time record (ADR-043 D10, D-2.4).
+            // overview's (2d): a day's clock periods are its only work-time record (ADR-043 D10, D-2.4),
+            // current days only (a cleared day counts nothing, addendum A1 D-4).
             var workedByDay = new Dictionary<DateOnly, decimal>();
             await using (var cmd = new NpgsqlCommand(
                 """
                 SELECT date, intervals
                 FROM work_time_projection
                 WHERE employee_id = @id AND date >= @start AND date <= @end
+                  AND cleared_by_outbox_id IS NULL
                 """, conn))
             {
                 cmd.Parameters.AddWithValue("id", employeeId);
