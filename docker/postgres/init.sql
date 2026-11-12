@@ -315,9 +315,6 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     -- The child's call-home day (OK26 only; QUAL-236): an unmapped line is skipped by payroll, so
     -- every agreement that can carry one has its row.
     -- shortcut(QUAL-249): the call-home day is exported under the child's first sick day's code SLS_0530, provisional; upgrade when the Phase B payroll experts name its wage type (R-16)
-    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'AC', 'Childs sick day, call-home hours', '2020-01-01'),
-    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'HK', 'Childs sick day, call-home hours', '2020-01-01'),
-    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'PROSA', 'Childs sick day, call-home hours', '2020-01-01'),
     ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'AC', 'Parental leave', '2020-01-01'),
     ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'HK', 'Parental leave', '2020-01-01'),
     ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'PROSA', 'Parental leave', '2020-01-01'),
@@ -1284,7 +1281,6 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('CARE_DAY',          'SLS_0520', 'OK26', 'AC_RESEARCH', 'Care day (omsorgsdage)',             '2020-01-01'),
     ('CHILD_SICK_DAY',    'SLS_0530', 'OK26', 'AC_RESEARCH', 'Childs 1st sick day',                '2020-01-01'),
     -- shortcut(QUAL-249): the call-home day is exported under the child's first sick day's code SLS_0530, provisional; upgrade when the Phase B payroll experts name its wage type (R-16)
-    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'AC_RESEARCH', 'Childs sick day, call-home hours', '2020-01-01'),
     ('CHILD_SICK_DAY_2',  'SLS_0531', 'OK26', 'AC_RESEARCH', 'Childs 2nd sick day',                '2020-01-01'),
     ('CHILD_SICK_DAY_3',  'SLS_0532', 'OK26', 'AC_RESEARCH', 'Childs 3rd sick day',                '2020-01-01'),
     ('SENIOR_DAY',        'SLS_0550', 'OK26', 'AC_RESEARCH', 'Senior day',                         '2020-01-01'),
@@ -1320,7 +1316,6 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('CARE_DAY',          'SLS_0520', 'OK26', 'AC_TEACHING', 'Care day (omsorgsdage)',             '2020-01-01'),
     ('CHILD_SICK_DAY',    'SLS_0530', 'OK26', 'AC_TEACHING', 'Childs 1st sick day',                '2020-01-01'),
     -- shortcut(QUAL-249): the call-home day is exported under the child's first sick day's code SLS_0530, provisional; upgrade when the Phase B payroll experts name its wage type (R-16)
-    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'AC_TEACHING', 'Childs sick day, call-home hours', '2020-01-01'),
     ('CHILD_SICK_DAY_2',  'SLS_0531', 'OK26', 'AC_TEACHING', 'Childs 2nd sick day',                '2020-01-01'),
     ('CHILD_SICK_DAY_3',  'SLS_0532', 'OK26', 'AC_TEACHING', 'Childs 3rd sick day',                '2020-01-01'),
     ('SENIOR_DAY',        'SLS_0550', 'OK26', 'AC_TEACHING', 'Senior day',                         '2020-01-01'),

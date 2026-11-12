@@ -118,7 +118,7 @@ public static class AbsenceClassification
         new(AbsenceTypes.ChildSick1, AbsenceNormEffect.Credit),
         new(AbsenceTypes.ChildSick2, AbsenceNormEffect.Credit),
         new(AbsenceTypes.ChildSick3, AbsenceNormEffect.Credit),
-        new(AbsenceTypes.ChildSickCallHome, AbsenceNormEffect.Credit),
+        new(AbsenceTypes.ChildSickCallHome, AbsenceNormEffect.Neutral),
 
         // ── Barsel: CREDIT. Unchanged from pre-S147.
         new(AbsenceTypes.ParentalLeave, AbsenceNormEffect.Credit),
