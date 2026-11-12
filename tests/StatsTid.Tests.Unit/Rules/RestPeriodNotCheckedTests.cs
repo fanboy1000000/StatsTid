@@ -278,13 +278,16 @@ public class RestPeriodNotCheckedTests
     /// arithmetic). TASK-14706 moved no marker: this fact held <c>weekly-timeline-v1</c> green at
     /// its merge (<c>48a1ba25</c>). TASK-14708 then moved the marker to <c>weekly-timeline-v2</c>
     /// in the same wave, as planned (RR-1; its own pin is <c>ConfigFingerprintTests.cs:268</c>), so
-    /// the expected value is updated at that merge (Orchestrator merge fix-up). Red conditions: any
+    /// the expected value is updated at that merge (Orchestrator merge fix-up). S148's TASK-14811 then
+    /// moved it to <c>weekly-timeline-v3</c> (the call-home day is credited; its own pin is
+    /// <c>ConfigFingerprintTests.Timeline_EvaluationModel_IsWeeklyTimelineV3</c>); re-pointed here,
+    /// kind F (the "v3" string fails on the base). Red conditions: any
     /// change of the constant fails the exact-string assertion. The "a calculated month's lines are
     /// identical" half is carried by the existing golden payroll facts; 14706 changes no payroll code.
     /// </summary>
     [Fact]
-    public void ReplayMarker_IsWeeklyTimelineV2_RestCheckMovedNone()
+    public void ReplayMarker_IsWeeklyTimelineV3_RestCheckMovedNone()
     {
-        Assert.Equal("weekly-timeline-v2", WeeklyTimelineCore.EvaluationModel);
+        Assert.Equal("weekly-timeline-v3", WeeklyTimelineCore.EvaluationModel); // S148 S0-2 (R-24): v2 -> v3
     }
 }

@@ -11406,8 +11406,9 @@
       "StatsTid.Backend.Api.Contracts.YearOverviewTiles": {
         "required": [
           "careDayRemaining",
+          "childSickCallHomeDay",
+          "childSickDaysPerIllness",
           "childSickEligible",
-          "childSickRemaining",
           "ferieRemaining",
           "flexBalance",
           "flexBalanceMonth",
@@ -11445,10 +11446,13 @@
             "type": "integer",
             "format": "int32"
           },
-          "childSickRemaining": {
-            "type": "number",
-            "format": "double",
+          "childSickDaysPerIllness": {
+            "type": "integer",
+            "format": "int32",
             "nullable": true
+          },
+          "childSickCallHomeDay": {
+            "type": "boolean"
           },
           "childSickEligible": {
             "type": "boolean"

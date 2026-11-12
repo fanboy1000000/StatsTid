@@ -254,7 +254,7 @@ public sealed class ConfigFingerprintTests
     }
 
     [Fact]
-    public void Timeline_EvaluationModel_IsWeeklyTimelineV2()
+    public void Timeline_EvaluationModel_IsWeeklyTimelineV3()
     {
         // The marker a replay must match (`replay-evaluation-model-changed`, refinement A7). Changing
         // the arithmetic means bumping this string on purpose; changing the string by accident would
@@ -265,6 +265,11 @@ public sealed class ConfigFingerprintTests
         // (Statens arbejdstidsaftale § 7 nr. 2; AbsenceClassification), so the same hours give a different
         // flex closing than under v1, and a manifest recorded under v1 must be refused on replay, never
         // silently re-read under the new rule (ADR-016 D10).
-        Assert.Equal("weekly-timeline-v2", WeeklyTimelineCore.EvaluationModel); // S147 T3 (QUAL-231): v1 -> v2
+        //
+        // S148 S0-2 (R-24): v2 -> v3 (renamed from ..._IsWeeklyTimelineV2). Kind F ("v3" fails on the base, which
+        // returns v2). Why v3: the child's call-home day (CHILD_SICK_CALL_HOME) is a credited absence code, so a
+        // period holding call-home hours closes differently than v2 would close it; a manifest recorded under
+        // v2 is refused on replay (ADR-016 D10).
+        Assert.Equal("weekly-timeline-v3", WeeklyTimelineCore.EvaluationModel); // S148 S0-2 (R-24): v2 -> v3
     }
 }

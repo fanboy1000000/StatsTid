@@ -34,6 +34,7 @@ public class AbsenceClassificationTests
     {
         "SICK_DAY", "VACATION", "CARE_DAY", "CHILD_SICK_DAY", "CHILD_SICK_DAY_2", "CHILD_SICK_DAY_3",
         "PARENTAL_LEAVE", "SENIOR_DAY", "SPECIAL_HOLIDAY_ALLOWANCE", "LEAVE_WITH_PAY", "LEAVE_WITHOUT_PAY",
+        "CHILD_SICK_CALL_HOME", // S148 S0-2 (QUAL-236): the child's call-home day, the twelfth stored code
     };
 
     private static string[] ReflectedVocabulary() =>
@@ -45,7 +46,7 @@ public class AbsenceClassificationTests
 
     /// <summary>
     /// AC-231-2 (kind F: this fact names only <see cref="AbsenceTypes"/>, which existed before S147). Reflection over
-    /// <see cref="AbsenceTypes"/> yields exactly the accepted set: eleven stored spellings, no more, no fewer, none repeated.
+    /// <see cref="AbsenceTypes"/> yields exactly the accepted set: twelve stored spellings (S148 S0-2 (QUAL-236): the child's call-home day joined), no more, no fewer, none repeated.
     ///
     /// <para><b>Red condition (F, against <c>991a5890</c>).</b> The vocabulary there had ten codes, spelled
     /// <c>CHILD_SICK_1/2/3</c> and without <c>SICK_DAY</c> (<c>AbsenceEntry.cs:15-24</c>), so both assertions fail. M-7 does not
@@ -70,7 +71,7 @@ public class AbsenceClassificationTests
     /// <para><b>Red conditions (N; mutation M-7, per the plan's P-14: drop <c>SickDay</c> from
     /// <c>AbsenceClassification.InDeclarationOrder</c>, keeping the API).</b> With the <c>SICK_DAY</c> row removed, its
     /// occurrence count is 0, not 1, so <c>Assert.Equal(1, count)</c> fails for <c>SICK_DAY</c> (and the entry-count
-    /// assertion reads 10, not 11).</para>
+    /// assertion reads 11, not 12).</para>
     /// </summary>
     [Fact]
     public void EveryVocabularyCode_HasExactlyOneClassification()
@@ -105,8 +106,8 @@ public class AbsenceClassificationTests
     }
 
     /// <summary>
-    /// AC-231-2 (kind N). The whole classification table, from the spec: ten credit codes (the paid absences, § 7 nr. 2:
-    /// own sick day, holiday, omsorgsdag, the child's 1st, 2nd and 3rd sick day, barsel, seniordag, særlig feriedag,
+    /// AC-231-2 (kind N). The whole classification table, from the spec: eleven credit codes (the paid absences, § 7 nr. 2:
+    /// own sick day, holiday, omsorgsdag, the child's 1st, 2nd and 3rd sick day and the call-home day, barsel, seniordag, særlig feriedag,
     /// tjenestefrihed med løn) and ONE reduction (<c>LEAVE_WITHOUT_PAY</c>, unpaid). No code is neutral. The engine's two
     /// questions are a projection of the same table (one source, never a second list).
     ///
@@ -120,6 +121,7 @@ public class AbsenceClassificationTests
     [InlineData("CHILD_SICK_DAY", AbsenceNormEffect.Credit)]
     [InlineData("CHILD_SICK_DAY_2", AbsenceNormEffect.Credit)]
     [InlineData("CHILD_SICK_DAY_3", AbsenceNormEffect.Credit)]
+    [InlineData("CHILD_SICK_CALL_HOME", AbsenceNormEffect.Credit)] // S148 S0-2 (QUAL-236): kind F (the base has no classification row for the code, so TryGetEffect fails there); the three rows above are R, kept unchanged
     [InlineData("PARENTAL_LEAVE", AbsenceNormEffect.Credit)]
     [InlineData("SENIOR_DAY", AbsenceNormEffect.Credit)]
     [InlineData("SPECIAL_HOLIDAY_ALLOWANCE", AbsenceNormEffect.Credit)]
@@ -177,6 +179,7 @@ public class AbsenceClassificationTests
     [InlineData("CHILD_SICK_DAY")]
     [InlineData("CHILD_SICK_DAY_2")]
     [InlineData("CHILD_SICK_DAY_3")]
+    [InlineData("CHILD_SICK_CALL_HOME")] // S148 S0-2 (QUAL-236)
     [InlineData("PARENTAL_LEAVE")]
     [InlineData("SENIOR_DAY")]
     [InlineData("SPECIAL_HOLIDAY_ALLOWANCE")]

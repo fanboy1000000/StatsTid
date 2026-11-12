@@ -107,14 +107,18 @@ public static class AbsenceClassification
         //    Unchanged from pre-S147.
         new(AbsenceTypes.CareDay, AbsenceNormEffect.Credit),
 
-        // ── A child's 1st, 2nd and 3rd sick day: CREDIT. The leave is paid as during sickness
-        //    (029-24, 021-26 and 020-26 § 14 stk. 2; CIR1H 9333 § 18 stk. 6 for AC), so it is paid
-        //    absence under § 7 nr. 2 (research R1-7). Pre-S147 these were credited only under an
-        //    old numbered spelling that nothing stored (QUAL-231). Which agreements may use day 2 and
-        //    day 3, and the quotas, are NOT decided here (QUAL-236, S148).
+        // ── A child's 1st, 2nd and 3rd sick day, and the call-home day: CREDIT. The leave is paid
+        //    as during sickness (029-24, 021-26 and 020-26 § 14 stk. 2; CIR1H 9333 § 18 stk. 6 for
+        //    AC), so it is paid absence under § 7 nr. 2 (research R1-7). The call-home day pays the
+        //    remaining working hours of the day the child fell ill (021-26 and 020-26 § 14, OK26);
+        //    the Skema save holds it to the day's planned hours minus the hours worked (the
+        //    paid-absence day bound, ADR-043 D2). Which of these codes a date offers, per agreement
+        //    and OK version, and the order of days within one illness, are decided at the Skema
+        //    save, not here (DefaultEntitlementConfigs.ChildSickCodesOffered; QUAL-236).
         new(AbsenceTypes.ChildSick1, AbsenceNormEffect.Credit),
         new(AbsenceTypes.ChildSick2, AbsenceNormEffect.Credit),
         new(AbsenceTypes.ChildSick3, AbsenceNormEffect.Credit),
+        new(AbsenceTypes.ChildSickCallHome, AbsenceNormEffect.Credit),
 
         // ── Barsel: CREDIT. Unchanged from pre-S147.
         new(AbsenceTypes.ParentalLeave, AbsenceNormEffect.Credit),

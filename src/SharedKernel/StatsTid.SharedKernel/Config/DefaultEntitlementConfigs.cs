@@ -120,16 +120,19 @@ public static class DefaultEntitlementConfigs
         Description = "Omsorgsdage (2 dage pr. kalenderår)"
     };
 
+    /// <summary>
+    /// The CHILD_SICK row: the whole sick days a child's illness gives, counted PER ILLNESS
+    /// (<c>IsPerEpisode</c>; the AnnualQuota column holds the per-illness count, there is no yearly
+    /// cap). OK24: 2 days for every agreement (CIR1H 9333 § 18 stk. 6; 029-24 § 14; 012-25 § 14).
+    /// OK26, from 1 April 2026: 3 days (021-26 § 14, 020-26 § 14; for AC agreed in the AC
+    /// settlement item 4, its circular pending, so the description says provisional). These counts
+    /// decide which day codes the Skema save and catalogue offer (<see cref="ChildSickCodesOffered"/>),
+    /// so they must agree with the init.sql seeds (ADR-014; QUAL-236).
+    /// </summary>
     private static EntitlementConfig CreateChildSick(string agreementCode, string okVersion)
     {
-        // CHILD_SICK quota varies by agreement
-        var quota = agreementCode switch
-        {
-            "AC" => 1m,
-            "HK" => 2m,
-            "PROSA" => 3m,
-            _ => 1m
-        };
+        var days = okVersion == "OK26" ? 3 : 2;
+        var provisional = okVersion == "OK26" && agreementCode == "AC" ? " (foreløbig)" : "";
 
         return new EntitlementConfig
         {
@@ -137,14 +140,77 @@ public static class DefaultEntitlementConfigs
             EntitlementType = "CHILD_SICK",
             AgreementCode = agreementCode,
             OkVersion = okVersion,
-            AnnualQuota = quota,
+            AnnualQuota = days,
             AccrualModel = "IMMEDIATE",
             ResetMonth = 1,  // Calendar year
             CarryoverMax = 0m,
             ProRateByPartTime = false,
             IsPerEpisode = true,
-            Description = $"Barns sygedag ({quota} dag(e) pr. episode)"
+            Description = $"Barns sygedag – {days} dage pr. sygdomsforløb{provisional}"
         };
+    }
+
+    // ── The child's sick days: which codes a date offers (QUAL-236) ──
+
+    /// <summary>
+    /// Every child's-sick code: the 1st, 2nd and 3rd sick day and the call-home day. One set, so
+    /// the HR opt-in (ADR-029 D2) finds them all without going through the entitlement mapping,
+    /// which sends none of them to a yearly quota.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ChildSickCodes = new HashSet<string>(StringComparer.Ordinal)
+    {
+        AbsenceTypes.ChildSick1, AbsenceTypes.ChildSick2, AbsenceTypes.ChildSick3, AbsenceTypes.ChildSickCallHome,
+    };
+
+    // shortcut(QUAL-BF-005): the call-home day's availability per OK version is code, not entitlement config; upgrade when the config can carry per-illness extras
+    // The call-home day per OK version: OK24 has none; OK26 grants it (021-26 and 020-26 § 14; AC's
+    // circular pending). An OK version this table does not name gets none (fail-closed, as a
+    // missing CHILD_SICK row offers nothing).
+    private static readonly IReadOnlyDictionary<string, bool> ChildSickCallHomeDayByOkVersion =
+        new Dictionary<string, bool>(StringComparer.Ordinal)
+        {
+            ["OK24"] = false,
+            ["OK26"] = true,
+        };
+
+    /// <summary>
+    /// Whether <paramref name="okVersion"/> grants the call-home day (false for a version the
+    /// table does not name).
+    /// </summary>
+    public static bool ChildSickCallHomeDay(string okVersion) =>
+        ChildSickCallHomeDayByOkVersion.TryGetValue(okVersion, out var granted) && granted;
+
+    /// <summary>
+    /// The whole sick days per illness a dated CHILD_SICK row gives: the whole part of its
+    /// <c>AnnualQuota</c>, capped at 3 (the codes stop at day 3) and never below 0.
+    /// </summary>
+    public static int ChildSickDaysPerIllness(EntitlementConfig childSickConfig) =>
+        (int)Math.Clamp(Math.Floor(childSickConfig.AnnualQuota), 0m, 3m);
+
+    /// <summary>
+    /// The child's-sick codes a date offers, from the CHILD_SICK row dated at that date (read
+    /// under the date's OK version): the call-home day when <see cref="ChildSickCallHomeDay"/>
+    /// grants it for the row's OK version, then day 1 up to min(whole quota, 3). No row, or a row
+    /// giving no whole day, offers nothing, the call-home day included (it belongs to the same
+    /// entitlement). In display order: the call-home day happens first.
+    /// </summary>
+    public static IReadOnlyList<string> ChildSickCodesOffered(EntitlementConfig? childSickConfig)
+    {
+        if (childSickConfig is null)
+            return [];
+        var days = ChildSickDaysPerIllness(childSickConfig);
+        if (days < 1)
+            return [];
+
+        var codes = new List<string>(4);
+        if (ChildSickCallHomeDay(childSickConfig.OkVersion))
+            codes.Add(AbsenceTypes.ChildSickCallHome);
+        codes.Add(AbsenceTypes.ChildSick1);
+        if (days >= 2)
+            codes.Add(AbsenceTypes.ChildSick2);
+        if (days >= 3)
+            codes.Add(AbsenceTypes.ChildSick3);
+        return codes;
     }
 
     private static EntitlementConfig CreateSeniorDay(string agreementCode, string okVersion) => new()

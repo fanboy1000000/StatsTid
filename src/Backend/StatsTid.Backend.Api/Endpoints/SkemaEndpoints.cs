@@ -44,24 +44,39 @@ public static class SkemaEndpoints
     ];
 
     /// <summary>
-    /// Returns the absence types available for a given agreement code.
-    /// Child sick days vary: AC=1, HK=2, PROSA=3.
+    /// The absence types the catalogue lists for an agreement at a date: the base list in its
+    /// order, with the child's-sick slot (<see cref="AbsenceTypes.ChildSick1"/>'s place) replaced
+    /// by <paramref name="childSickCodesOffered"/>, the codes that agreement's dated CHILD_SICK
+    /// config offers at that date (<see cref="ChildSickCodesOfferedAsync"/>): OK24 day 1 and 2;
+    /// OK26 the call-home day and day 1 to 3; none without a dated row (QUAL-236).
     /// </summary>
-    private static HashSet<string> GetAbsenceTypesForAgreement(string agreementCode)
+    private static List<string> GetAbsenceTypesForAgreement(IReadOnlyList<string> childSickCodesOffered)
     {
-        var types = new HashSet<string>(BaseAbsenceTypes, StringComparer.Ordinal);
-
-        // HK gets 2 child sick days, PROSA gets 3
-        // (S147 / TASK-14708: the codes read the constants; WHICH agreements get day 2 and day 3
-        // is unchanged here — that is QUAL-236's, S148.)
-        if (agreementCode is "HK" or "PROSA")
-            types.Add(AbsenceTypes.ChildSick2);
-
-        if (agreementCode is "PROSA")
-            types.Add(AbsenceTypes.ChildSick3);
-
+        var types = new List<string>(BaseAbsenceTypes.Length + childSickCodesOffered.Count);
+        foreach (var type in BaseAbsenceTypes)
+        {
+            if (string.Equals(type, AbsenceTypes.ChildSick1, StringComparison.Ordinal))
+                types.AddRange(childSickCodesOffered);
+            else
+                types.Add(type);
+        }
         return types;
     }
+
+    /// <summary>
+    /// The child's-sick codes <paramref name="agreementCode"/> offers on <paramref name="date"/>:
+    /// the CHILD_SICK row dated at that date under that date's OK version (the dated read gate (c)
+    /// of <see cref="ComputeAbsenceCatalogAsync"/> makes for SPECIAL_HOLIDAY), turned into codes by
+    /// <c>DefaultEntitlementConfigs.ChildSickCodesOffered</c> (day 1 up to min(whole quota, 3), and
+    /// the call-home day where its OK version grants it). The one read the catalogue (at its
+    /// anchor), the save's per-code check (at the row's own date) and the illness chain (at day
+    /// 1's date) share, so the three cannot disagree (QUAL-236; ADR-021, ADR-014).
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> ChildSickCodesOfferedAsync(
+        EntitlementConfigRepository entitlementConfigRepo, string agreementCode, DateOnly date, CancellationToken ct)
+        => StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodesOffered(
+            await entitlementConfigRepo.GetByTypeAtAsync(
+                "CHILD_SICK", agreementCode, OkVersionResolver.ResolveVersion(date), date, ct));
 
     // ── Absence type → entitlement type mapping + StandardDayHours ──
     // S65 / TASK-6502 — promoted to the shared Backend.Api EntitlementMapping so the new
@@ -279,8 +294,8 @@ public static class SkemaEndpoints
             // S34 / TASK-3411 — ADR-023 D2 binding cutover for agreement_code on past-month
             // queries. The absence-types list shown for a past month must reflect the
             // agreement that was in effect at the START of that month (e.g. a user who
-            // switched AC → HK today should still see only 1 child-sick-day option when
-            // viewing September; HK's CHILD_SICK_DAY_2 should NOT appear retroactively).
+            // switched AC → HK today should still see, when viewing September, the absence
+            // types AC's dated entitlement configs gave, not HK's, applied retroactively).
             //
             // ADR-023 D3 (Skema = graceful-fallback consumer on the GET path): null dated
             // lookup falls through to live `user.AgreementCode`. Defensive only — the
@@ -967,6 +982,41 @@ public static class SkemaEndpoints
                     }, statusCode: 422);
             }
 
+            // ── The child's-sick per-code check (QUAL-236) ──
+            // A child's-sick code is saved only on a date whose own list offers it: the agreement
+            // this save validates against (dated at the month start, above) under that date's OK
+            // version, through the one read the catalogue makes (ChildSickCodesOfferedAsync). OK24
+            // offers day 1 and 2; OK26 the call-home day and day 1 to 3; an agreement with no dated
+            // CHILD_SICK row offers none. The grid posts only codes it was served, so this refuses a
+            // hand-built or stale request (HK's day 3 under OK24, a call-home day under OK24).
+            // After the vocabulary gate, so an unknown code still answers absence_type_unknown
+            // first; before every other absence check, the rule-engine calls, the lock and the
+            // transaction, so nothing is written. The body keeps the opt-in refusal's error and
+            // shape, so the screen shows its Danish message, and adds kind = "child-sick-not-offered"
+            // to tell the two apart; its date is the row's own registration date (ADR-040 D7).
+            {
+                var childSickOfferedByDate = new Dictionary<DateOnly, IReadOnlyList<string>>();
+                foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
+                {
+                    if (!StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Contains(absence.AbsenceType))
+                        continue;
+                    if (!childSickOfferedByDate.TryGetValue(absence.Date, out var offered))
+                    {
+                        offered = await ChildSickCodesOfferedAsync(entitlementConfigRepo, agreementCode, absence.Date, ct);
+                        childSickOfferedByDate[absence.Date] = offered;
+                    }
+                    if (!offered.Contains(absence.AbsenceType))
+                        return Results.Json(new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = absence.AbsenceType,
+                            date = absence.Date,
+                            message = $"{AbsenceTypeLabels.LabelFor(absence.AbsenceType)} kan ikke registreres den {absence.Date:dd-MM-yyyy}: overenskomsten giver ikke ret til den på denne dato.",
+                            kind = "child-sick-not-offered",
+                        }, statusCode: 422);
+                }
+            }
+
             // ── Per-day absence validation (S47 TASK-2C) ──
             // Reject early if the request contains duplicate absence types on the same day
             // or if total absence hours for any single day exceed the standard norm (7.4h).
@@ -1168,10 +1218,12 @@ public static class SkemaEndpoints
                     {
                         var gateEntitlementType = GetEntitlementType(absence.AbsenceType);
 
-                        // (a) CHILD_SICK — Backend fact-gate (not rule-engine logic): reject if
-                        //     the employee is ineligible as-of THIS absence's date. Absent row ⇒
-                        //     ineligible (same opt-in default as the GET filter).
-                        if (string.Equals(gateEntitlementType, "CHILD_SICK", StringComparison.Ordinal))
+                        // (a) CHILD_SICK — Backend fact-gate (not rule-engine logic): reject a
+                        //     child's-sick code (DefaultEntitlementConfigs.ChildSickCodes, the
+                        //     call-home day included; the entitlement mapping sends none of them to a
+                        //     quota, QUAL-236) if the employee is ineligible as-of THIS absence's
+                        //     date. Absent row ⇒ ineligible (same opt-in default as the GET filter).
+                        if (StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Contains(absence.AbsenceType))
                         {
                             var eligible = (await eligibilityRepo
                                 .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", absence.Date, ct)).Eligible;
@@ -1806,23 +1858,16 @@ public static class SkemaEndpoints
                 if (touchedDates.Count == 0)
                     return null;
 
-                // Inside the lock the absence and entry rows are read on the save's own (conn, tx);
-                // before the transaction on pooled connections (advisory only). Work time has only a
-                // self-connecting read: inside the lock it still sees every committed day, because
-                // every writer of work_time_projection but the offline backfill is this save, under
-                // this same lock (the ADR-032 D4 separate-connection rationale).
+                // Inside the lock the absence rows are read on the save's own (conn, tx); before the
+                // transaction on a pooled connection (advisory only). The entries and work time come
+                // from ReadStoredWorkAsync, on the same two paths.
                 var storedAbsences = conn is not null
                     ? await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
                         conn, tx!, employeeId, touchedDates.Min, touchedDates.Max, ct)
                     : await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
                         employeeId, touchedDates.Min, touchedDates.Max, ct);
-                var storedEntries = conn is not null
-                    ? await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                        conn, tx!, employeeId, touchedDates.Min, touchedDates.Max, ct)
-                    : await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                        employeeId, touchedDates.Min, touchedDates.Max, ct);
-                var storedWorkTime = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                    employeeId, touchedDates.Min, touchedDates.Max, ct);
+                var (storedEntries, storedWorkTime) = await ReadStoredWorkAsync(
+                    conn, tx, touchedDates.Min, touchedDates.Max);
 
                 var basisByDate = new Dictionary<DateOnly, decimal?>();
                 foreach (var consumption in basisAlreadyRead)
@@ -1841,25 +1886,7 @@ public static class SkemaEndpoints
                     if (paidAbsenceHours <= 0m)
                         continue; // no paid absence on the day: nothing to bound.
 
-                    var postedHoursByTask = new Dictionary<string, decimal>(StringComparer.Ordinal);
-                    foreach (var entry in postedEntries.Where(e => e.Date == date))
-                        postedHoursByTask[entry.ProjectCode] = entry.Hours;
-                    var projectHours = postedHoursByTask.Values.Sum()
-                        + storedEntries
-                            .Where(r => r.Date == date)
-                            .Where(r => !(r.Source == HoursSource.Skema
-                                && r.TaskId is not null && postedHoursByTask.ContainsKey(r.TaskId)))
-                            .Sum(r => r.Hours);
-
-                    var postedDay = postedWorkTime.LastOrDefault(d => d.Date == date);
-                    var intervalHours = postedDay is not null
-                        ? WorkTimeDayHours(
-                            (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)))
-                        : storedWorkTime
-                            .Where(w => w.Date == date)
-                            .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End))));
-
-                    var workedHours = Math.Max(projectHours, intervalHours);
+                    var workedHours = WorkedHoursOnDay(date, storedEntries, storedWorkTime);
 
                     // shortcut(QUAL-BF-001): the paid-absence bound reads the § 7 nr. 2 per-day norm
                     // (FullDayHoursAsync), not the configured credit basis; upgrade when stage 1 serves
@@ -1902,11 +1929,268 @@ public static class SkemaEndpoints
                 return Math.Round(seconds / 3600m, 2);
             }
 
+            // The stored project entries and work-time days of [from, to] that the save's worked figure
+            // reads. Inside the lock the entries are read on the save's own (conn, tx); before the
+            // transaction on a pooled connection (advisory only). Work time has only a self-connecting
+            // read: inside the lock it still sees every committed day, because every writer of
+            // work_time_projection but the offline backfill is this save, under this same lock (the
+            // ADR-032 D4 separate-connection rationale).
+            async Task<(IReadOnlyList<TimeEntryProjectionRow> Entries, IReadOnlyList<WorkTimeProjectionRow> WorkTime)> ReadStoredWorkAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx, DateOnly from, DateOnly to)
+            {
+                var storedEntries = conn is not null
+                    ? await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        conn, tx!, employeeId, from, to, ct)
+                    : await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        employeeId, from, to, ct);
+                var storedWorkTime = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, from, to, ct);
+                return (storedEntries, storedWorkTime);
+            }
+
+            // The hours worked on one date as the day will stand after this save: the one worked figure
+            // of the save, read by the paid-absence day bound and the call-home rule alike. It is the
+            // larger of the day's project hours and its interval hours, so a check holds whichever of
+            // the two the employee fills in first. Project hours: the posted entries (a cell posted twice
+            // ends at its later value) plus the stored entries no posted cell replaces (a posted entry
+            // replaces the current Skema row of its (date, task); TIME_POST rows always count). Interval
+            // hours: the posted work-time day, else the stored one, by WorkTimeDayHours's convention.
+            decimal WorkedHoursOnDay(
+                DateOnly date, IReadOnlyList<TimeEntryProjectionRow> storedEntries,
+                IReadOnlyList<WorkTimeProjectionRow> storedWorkTime)
+            {
+                var postedHoursByTask = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                foreach (var entry in (request.Entries ?? Array.Empty<SkemaEntry>()).Where(e => e.Date == date))
+                    postedHoursByTask[entry.ProjectCode] = entry.Hours;
+                var projectHours = postedHoursByTask.Values.Sum()
+                    + storedEntries
+                        .Where(r => r.Date == date)
+                        .Where(r => !(r.Source == HoursSource.Skema
+                            && r.TaskId is not null && postedHoursByTask.ContainsKey(r.TaskId)))
+                        .Sum(r => r.Hours);
+
+                var postedDay = (request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>()).LastOrDefault(d => d.Date == date);
+                var intervalHours = postedDay is not null
+                    ? WorkTimeDayHours(
+                        (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)))
+                    : storedWorkTime
+                        .Where(w => w.Date == date)
+                        .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End))));
+
+                return Math.Max(projectHours, intervalHours);
+            }
+
+            // ── The illness chain's resulting state (QUAL-236, R-3) ──
+            // The absence rows of [from, to] as they will stand after this save: the stored current
+            // rows the save does not replace, plus the posted rows, built exactly as the paid-absence
+            // day bound builds a day (a posted absence replaces only the current Skema row of its
+            // own (date, type); TIME_POST rows are never replaced). Inside the lock the stored rows
+            // are read on the save's own (conn, tx), before the transaction on a pooled connection.
+            // The one place the chain's state is built: no save removes a row today, so it has no
+            // removal arm; once cells can be cleared, a cleared cell leaves the state here and nowhere
+            // else (addendum A1 D-9).
+            async Task<List<(DateOnly Date, string AbsenceType)>> ChildSickChainResultingRowsAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx, DateOnly from, DateOnly to)
+            {
+                var postedAbsences = request.Absences ?? Array.Empty<SkemaAbsence>();
+                var storedAbsences = conn is not null
+                    ? await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(conn, tx!, employeeId, from, to, ct)
+                    : await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, from, to, ct);
+                var rows = storedAbsences
+                    .Where(r => !(r.Source == HoursSource.Skema
+                        && postedAbsences.Any(a => a.Date == r.Date && a.AbsenceType == r.AbsenceType)))
+                    .Select(r => (r.Date, r.AbsenceType))
+                    .ToList();
+                rows.AddRange(postedAbsences.Select(a => (a.Date, a.AbsenceType)));
+                return rows;
+            }
+
+            // ── The child's-sick judge: the illness chain, then rule A, then rule B (QUAL-236) ──
+            // Three rules on the same resulting state (ChildSickChainResultingRowsAsync), each refusing
+            // with the opt-in refusal's error and shape plus its own kind, naming a registration date
+            // (never an employment date, ADR-040 D7). They run in this order: on a save more than one
+            // refuses, the chain answers first, then rule A, then rule B.
+            //
+            // THE ILLNESS CHAIN (R-3, R-12; kind "child-sick-chain").
+            // A child's sick days are counted per illness, in calendar days from the first whole sick
+            // day: day 2 is the calendar day after day 1 and day 3 the one after day 2, working day or
+            // not (021-26, 020-26 and 027-26 § 14 remarks). So a CHILD_SICK_DAY_n on date x (n = 2, 3)
+            // needs, for each k < n, the day-k code on x − (n − k) in the resulting state, OR that day
+            // to have zero planned hours (a weekend: the day is used up and no row can be credited
+            // there, the paid-absence bound refuses one). A day whose planned hours are unknown (no
+            // dated profile, FullDayHoursAsync null) is not zero: it needs its row (fail-closed). A
+            // weekday public holiday keeps its norm until stage 1 (QUAL-222), so it needs its row too.
+            // The illness also keeps the OK version of its first whole sick day x − (n − 1): when the
+            // list as of that day (ChildSickCodesOfferedAsync, the save's agreement) does not offer
+            // day n, the row is refused even where its own date offers it (an illness from 30 March
+            // 2026 has OK24's two days, so a day 3 on 1 April is refused). The call-home day needs no
+            // partner day and is not part of the chain.
+            // Judged: every row of day 2 or 3 on a date holding a posted absence or within the two
+            // calendar days after one (the dates whose chain this save can change), on the resulting
+            // state, read across a month boundary (the stored rows of 30 and 31 March judge a 1 April
+            // save). Entries and work time change no input of the chain, so their dates are not judged.
+            // The refusal names the dependent date (the day-n row's date).
+            //
+            // RULE A: AN ILLNESS DOES NOT START ON THE DAY AFTER A CHILD'S SICK DAY (owner ruling Q5,
+            // 2026-11-12; kind "child-sick-illness-start"). The circular defines day 1 as the first whole
+            // sick day and day 2 as the calendar day straight after it, and the call-home day as the day
+            // the child falls ill after the parent met for work (research :196-197). So a day directly
+            // after a child's sick day belongs to the same illness: a CHILD_SICK_DAY on date d is
+            // refused when d − 1 holds CHILD_SICK_DAY, _2 or _3 (day 1 straight after a call-home day is
+            // how an illness goes on, and is accepted), and a CHILD_SICK_CALL_HOME on d is refused when
+            // d − 1 holds any child's-sick code. Plain adjacency: no planned-hours exception here.
+            // Judged on the chain's dates, so a child row posted on d − 1 before a stored day 1 on d is
+            // caught when d is judged. Without it, day 1 registered on five days in a row would pay five.
+            //
+            // RULE B: A CALL-HOME DAY NEEDS REGISTERED WORK THE SAME DAY (owner ruling Q5; kind
+            // "child-sick-call-home-without-work"). The call-home day is the day the parent met for work
+            // and was called home, so a CHILD_SICK_CALL_HOME on date d is refused unless the hours worked
+            // on d, as the day will stand after the save (WorkedHoursOnDay, the paid-absence bound's own
+            // figure), are above 0. Judged on every date the save touches whose resulting state holds a
+            // call-home row: a posted absence, entry or work-time day, because entries and work time are
+            // this rule's inputs. Today a save brings a day's work to 0 only by posting its work-time day
+            // with no intervals (a project cell is always above 0); cell clearing (TASK-14840) must add its
+            // cleared dates to the dates judged here.
+            //
+            // Runs like the paid-absence bound: advisory before the transaction, authoritatively inside
+            // the per-employee lock, each right after the bound (on a date both refuse, the bound answers
+            // first). Returns null when every rule holds, else the first 422 body.
+            // shortcut(QUAL-250): the illness chain reads this employee's rows only; the other parent's child's sick days are not modelled; upgrade when Phase B rules how the two parents' days combine (A-16, QUAL-236)
+            // shortcut(QUAL-BF-006): illnesses are told apart only by the day code chosen and calendar adjacency (days off and gap days are not checked against an earlier illness); upgrade when Phase B rules how an illness is identified
+            async Task<object?> FindChildSickChainBreachAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx,
+                IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption> basisAlreadyRead)
+            {
+                // The chain and rule A judge the posted-absence dates and the two days after each; rule B
+                // every date the save touches.
+                var postedAbsenceDates = new SortedSet<DateOnly>(
+                    (request.Absences ?? Array.Empty<SkemaAbsence>()).Select(a => a.Date));
+                var touchedDates = new SortedSet<DateOnly>(
+                    (request.Entries ?? Array.Empty<SkemaEntry>()).Select(e => e.Date)
+                        .Concat(postedAbsenceDates)
+                        .Concat((request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>()).Select(d => d.Date)));
+                if (touchedDates.Count == 0)
+                    return null;
+
+                var held = (await ChildSickChainResultingRowsAsync(
+                        conn, tx, touchedDates.Min.AddDays(-2), touchedDates.Max.AddDays(2)))
+                    .ToHashSet();
+                var judgedDates = new SortedSet<DateOnly>(
+                    postedAbsenceDates.SelectMany(d => new[] { d, d.AddDays(1), d.AddDays(2) }));
+
+                var plannedByDate = new Dictionary<DateOnly, decimal?>();
+                foreach (var consumption in basisAlreadyRead)
+                    plannedByDate[consumption.Date] = consumption.FullDayHours;
+
+                string[] dayCodes = [AbsenceTypes.ChildSick1, AbsenceTypes.ChildSick2, AbsenceTypes.ChildSick3];
+                foreach (var date in judgedDates)
+                {
+                    for (var n = 2; n <= 3; n++)
+                    {
+                        var dayNCode = dayCodes[n - 1];
+                        if (!held.Contains((date, dayNCode)))
+                            continue;
+
+                        // Each earlier day of the illness, nearest first.
+                        for (var k = n - 1; k >= 1; k--)
+                        {
+                            var dayK = date.AddDays(k - n);
+                            if (held.Contains((dayK, dayCodes[k - 1])))
+                                continue;
+                            if (!plannedByDate.TryGetValue(dayK, out var planned))
+                            {
+                                planned = await consumptionCalculator.FullDayHoursAsync(
+                                    employeeId, dayK, user.PrimaryOrgId, ct);
+                                plannedByDate[dayK] = planned;
+                            }
+                            if (planned == 0m)
+                                continue; // no planned hours: the day is used up and needs no row.
+                            return new
+                            {
+                                error = "absence_type_not_eligible",
+                                absenceType = dayNCode,
+                                date,
+                                message = $"{AbsenceTypeLabels.LabelFor(dayNCode)} den {date:dd-MM-yyyy} kræver {AbsenceTypeLabels.LabelFor(dayCodes[k - 1])} den {dayK:dd-MM-yyyy}: dagene i et sygdomsforløb er på hinanden følgende kalenderdage.",
+                                kind = "child-sick-chain",
+                            };
+                        }
+
+                        // The illness keeps the OK version of its first whole sick day.
+                        var dayOne = date.AddDays(1 - n);
+                        var offeredAtDayOne = await ChildSickCodesOfferedAsync(
+                            entitlementConfigRepo, agreementCode, dayOne, ct);
+                        if (!offeredAtDayOne.Contains(dayNCode))
+                            return new
+                            {
+                                error = "absence_type_not_eligible",
+                                absenceType = dayNCode,
+                                date,
+                                message = $"{AbsenceTypeLabels.LabelFor(dayNCode)} den {date:dd-MM-yyyy} kan ikke registreres: sygdomsforløbet begyndte den {dayOne:dd-MM-yyyy}, og overenskomsten gav på den dato ikke ret til den.",
+                                kind = "child-sick-chain",
+                            };
+                    }
+                }
+
+                // Rule A: no day 1 and no call-home day directly after a child's sick day.
+                foreach (var date in judgedDates)
+                {
+                    var dayBefore = date.AddDays(-1);
+                    if (held.Contains((date, AbsenceTypes.ChildSick1))
+                        && dayCodes.Any(code => held.Contains((dayBefore, code))))
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSick1,
+                            date,
+                            message = $"Barns 1. sygedag den {date:dd-MM-yyyy} kan ikke registreres: dagen før ({dayBefore:dd-MM-yyyy}) er registreret som barns sygdom, så dagen hører til samme sygdomsforløb.",
+                            kind = "child-sick-illness-start",
+                        };
+                    if (held.Contains((date, AbsenceTypes.ChildSickCallHome))
+                        && StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Any(code => held.Contains((dayBefore, code))))
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSickCallHome,
+                            date,
+                            message = $"Hjemkaldelsesdagen den {date:dd-MM-yyyy} kan ikke registreres: dagen før ({dayBefore:dd-MM-yyyy}) er registreret som barns sygdom, så dagen hører til samme sygdomsforløb.",
+                            kind = "child-sick-illness-start",
+                        };
+                }
+
+                // Rule B: a call-home day needs work above 0 the same day, on the save's worked figure.
+                var callHomeDates = touchedDates.Where(d => held.Contains((d, AbsenceTypes.ChildSickCallHome))).ToList();
+                if (callHomeDates.Count > 0)
+                {
+                    var (storedEntries, storedWorkTime) = await ReadStoredWorkAsync(
+                        conn, tx, callHomeDates[0], callHomeDates[^1]);
+                    foreach (var date in callHomeDates)
+                    {
+                        if (WorkedHoursOnDay(date, storedEntries, storedWorkTime) > 0m)
+                            continue;
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSickCallHome,
+                            date,
+                            message = $"Hjemkaldelsesdagen den {date:dd-MM-yyyy} kræver registreret arbejde samme dag: det er dagen, hvor barnet blev sygt, efter at du var mødt på arbejde.",
+                            kind = "child-sick-call-home-without-work",
+                        };
+                    }
+                }
+                return null;
+            }
+
             var advisoryBoundBreach = await FindPaidAbsenceDayBoundBreachAsync(
                 conn: null, tx: null,
                 basisAlreadyRead: Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>());
             if (advisoryBoundBreach is not null)
                 return Results.Json(advisoryBoundBreach, statusCode: 422);
+
+            var advisoryChainBreach = await FindChildSickChainBreachAsync(
+                conn: null, tx: null,
+                basisAlreadyRead: Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>());
+            if (advisoryChainBreach is not null)
+                return Results.Json(advisoryChainBreach, statusCode: 422);
 
             var streamId = $"employee-{employeeId}";
             var savedCount = 0;
@@ -2292,6 +2576,18 @@ public static class SkemaEndpoints
                     if (lockedBoundBreach is not null)
                         throw new SkemaConsumptionValidationException(lockedBoundBreach);
 
+                    // ── The child's-sick judge, AUTHORITATIVE (QUAL-236; FindChildSickChainBreachAsync) ──
+                    // The same illness chain, rule A and rule B as the advisory check, judged on the
+                    // absence, entry and work-time rows as committed while this save holds the
+                    // per-employee lock, before any write, right after the bound (so on a date both
+                    // refuse, the bound answers first). Planned hours reuse the basis the authoritative
+                    // consumption read under this lock. A breach throws, the catch below rolls the save
+                    // back, and the answer is the advisory check's 422 body.
+                    var lockedChainBreach = await FindChildSickChainBreachAsync(
+                        conn, tx, authoritativeConsumption);
+                    if (lockedChainBreach is not null)
+                        throw new SkemaConsumptionValidationException(lockedChainBreach);
+
                     // Save time entries (outbox enqueue + projection INSERT inside outer tx).
                     //
                     // S145 / TASK-14507 (A0) — a Skema save REPLACES the cell. Each posted entry still
@@ -2542,11 +2838,13 @@ public static class SkemaEndpoints
             }
             catch (SkemaConsumptionValidationException ex)
             {
-                // One of the four in-lock re-checks refused the save before any write, and the inner
+                // One of the five in-lock re-checks refused the save before any write, and the inner
                 // catch has rolled the transaction back: B1 (employment profile missing), B2 (the
                 // all-types cap) or B3 (full-day-only), each re-run because a profile change can race
-                // the save (ADR-032 D2/D3); or the paid-absence day bound (ADR-043 D2), refused mostly
+                // the save (ADR-032 D2/D3); the paid-absence day bound (ADR-043 D2), refused mostly
                 // because another save of the same employee committed while this one waited for the
+                // lock; or the child's-sick judge (QUAL-236: the illness chain, rule A on where an illness
+                // starts, rule B on the call-home day's work), judged on the rows as committed under the
                 // lock. The throw site already shaped the body to match its pre-tx sibling
                 // byte-for-byte; surface it unchanged so the race loser gets a clean validation 422
                 // (never a 500) and the frontend contract holds.
@@ -2790,7 +3088,9 @@ public static class SkemaEndpoints
     /// <summary>
     /// The ADDABLE absence-type catalog — the EXISTING filter chain extracted VERBATIM from
     /// the month GET's inline block (S72 / TASK-7201; SPRINT-72 R4 "reuse the existing chain,
-    /// do not reimplement"): agreement (<see cref="GetAbsenceTypesForAgreement"/>) → org
+    /// do not reimplement"): agreement (<see cref="GetAbsenceTypesForAgreement"/>, with the
+    /// child's-sick codes the agreement's dated CHILD_SICK config offers at the anchor,
+    /// <see cref="ChildSickCodesOfferedAsync"/>; QUAL-236) → org
     /// <c>absence_type_visibility</c> → per-employee eligibility. SELECTION-INDEPENDENT: the
     /// user's row preferences never feed this — removed rows stay re-addable. Consumed by the
     /// month GET (anchor = MONTH-END, the established S59 display anchor) and the
@@ -2803,9 +3103,10 @@ public static class SkemaEndpoints
     ///     gate per absence.Date is authoritative. The POST gate intentionally uses a
     ///     different anchor (per-row absence.Date); the two are NOT required to agree
     ///     mid-month (refinement line 19, SPRINT-59 TASK-5907).</item>
-    ///   <item><b>(a) CHILD_SICK:</b> drop all child-sick variants (those mapping to
-    ///     entitlement CHILD_SICK) when the employee is ineligible as-of the anchor. Absent
-    ///     eligibility row ⇒ ineligible (opt-in default).</item>
+    ///   <item><b>(a) CHILD_SICK:</b> drop every child's-sick code
+    ///     (<c>DefaultEntitlementConfigs.ChildSickCodes</c>, the call-home day included) when the
+    ///     employee is ineligible as-of the anchor. Absent eligibility row ⇒ ineligible (opt-in
+    ///     default).</item>
     ///   <item><b>(b) SENIOR_DAY:</b> DOB-derived age gate — hide when under the resolved
     ///     SENIOR_DAY MinAge as-of the anchor, OR when BirthDate is missing (fail-closed).
     ///     S59 / Step-7a BLOCKER 2: the SENIOR_DAY config is resolved AS-OF the anchor (not
@@ -2861,12 +3162,16 @@ public static class SkemaEndpoints
             "SPECIAL_HOLIDAY", agreementCode, OkVersionResolver.ResolveVersion(anchor), anchor, ct);
         var specialHolidayConfigured = specialHolidayConfig is not null;
 
-        // Agreement → visibility → eligibility, in the established order.
-        var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
+        // Agreement → visibility → eligibility, in the established order. The child's-sick codes
+        // are the ones the dated CHILD_SICK config offers at the anchor, under the anchor's OK
+        // version (as gate (c) reads SPECIAL_HOLIDAY): an April 2026 month (OK26) offers the
+        // call-home day and day 1 to 3, a March 2026 month (OK24) day 1 and 2 (QUAL-236).
+        var childSickCodesOffered = await ChildSickCodesOfferedAsync(entitlementConfigRepo, agreementCode, anchor, ct);
+        var agreementAbsenceTypes = GetAbsenceTypesForAgreement(childSickCodesOffered);
         var filteredTypes = agreementAbsenceTypes
             .Where(t => !hiddenTypes.Contains(t))
             .Where(t => childSickEligible
-                || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
+                || !StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Contains(t))
             .Where(t => seniorVisible || !string.Equals(t, AbsenceTypes.SeniorDay, StringComparison.Ordinal))
             .Where(t => specialHolidayConfigured
                 || !string.Equals(GetEntitlementType(t), "SPECIAL_HOLIDAY", StringComparison.Ordinal))
