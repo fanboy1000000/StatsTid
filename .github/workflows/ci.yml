@@ -166,6 +166,7 @@ jobs:
         run: dotnet test tests/StatsTid.Tests.Unit --no-build -c Release --logger "trx"
 
       - name: Run DemoSeed tests (QUAL-096)
+        if: ${{ !cancelled() }}
         # The StatsTid.Tests.DemoSeed suite (153 tests incl. the byte-exact Golden pins) was
         # COMPILED by CI — it is in StatsTid.sln, so the Build step above builds it — but was
         # never EXECUTED, so its green status was never established and a DemoSeed-generator
@@ -176,6 +177,7 @@ jobs:
         run: dotnet test tests/StatsTid.Tests.DemoSeed --no-build -c Release --logger "trx"
 
       - name: Apply init.sql to the services-postgres (schema + seeds for the :5432-coupled classes)
+        if: ${{ !cancelled() }}
         # S64 / TASK-6405: the compose-coupled classes read init.sql-seeded state (orgs,
         # reporting-line rows, entitlement configs). psql ships on the ubuntu-latest
         # runner image. ON_ERROR_STOP makes schema drift fail loudly here, not as
@@ -185,6 +187,7 @@ jobs:
         run: psql "host=localhost port=5432 dbname=statstid user=statstid" -v ON_ERROR_STOP=1 -q -f docker/postgres/init.sql
 
       - name: Run regression tests
+        if: ${{ !cancelled() }}
         run: dotnet test tests/StatsTid.Tests.Regression --no-build -c Release --logger "trx"
 
       - name: Collect coverage (baseline-recording only — no ≥X% gate this sprint)
