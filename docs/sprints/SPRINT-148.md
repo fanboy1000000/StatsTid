@@ -1047,3 +1047,8 @@ TASK-14842-T dispatched.
   - **The dead balance writer** `AdjustUsedAsync` (no transaction) is recorded below the floor.
   - **F8 registered:** the seed's sum on every save, accepted, revisit, with Codex's insert-only option.
   - No `shortcut(pending)` remains, and `check_docs` passes (13 shortcuts, all registered).
+- **GATE after the 14842 stack, on master `6bedcf2c`: green.**
+  - Build: 0 errors, 143 warnings, CA2100 113.
+  - Tests: Unit 1720, DemoSeed 170, Regression non-Docker 140.
+  - No frontend change in this stack.
+  - The AC-BS Docker facts are CI-W2's.
