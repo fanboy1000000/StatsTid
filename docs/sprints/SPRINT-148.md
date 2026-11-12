@@ -1260,3 +1260,67 @@ TASK-14842-T dispatched.
   - Frontend: tsc, lint, e2e typecheck and build all green; vitest 94 files / 1138 tests.
   - **Wave 2 is fully merged:** 14809→14810, 14811→14812 (with owner Q5's rules), 14842, and 14840→14841 (with owner Q6's extra round).
   - **Next:** CI-W2, CI-M2 and CI-M2b.
+
+**CI-W2 started** (draft PR #57, run 43233683529, `ci/s148-w2` at `03bde472`, headSha confirmed). It is the first run of wave 2's Docker facts.
+
+**CI-M2 and CI-M2b: the mutation branches are built.** The builder was a re-spawned `test-qa`; its report is `.claude/reviews/S148-CI-M2-M2b-builder-report.md`.
+- **What these runs are for.**
+  - A mutation is a deliberate break in production code. Each test written to guard a behaviour should go red when that behaviour is broken.
+  - Docker cannot run here, so for the Docker tests that red has only been argued. These two runs are where it is observed.
+  - The *frozen list* is written before CI runs. It names every test that must go red, and the check it must fail at first. That way a red cannot be explained away afterwards.
+- **CI-M2** (`ci/s148-m2`): the mutation commit `0f1e9b85`, carrying M-8, M-18, M-19, M-20 and M-21, then the evidence-only `ci.yml` commit `d12c7a94`.
+  - The `ci.yml` commit adds `if: ${{ !cancelled() }}` to three steps, three lines in all (rule 3).
+  - Locally at the mutation commit: build 0 errors, 143 warnings; Unit 1719 passed, 2 failed (both M-8, observed); DemoSeed 170; Regression non-Docker 140.
+- **CI-M2b** (`ci/s148-m2b`): `78f6a719`, carrying M-22 and M-23, then `06ff9fee`, the same three-line `ci.yml` commit.
+  - Locally: Unit 1720 passed, 1 failed (M-22, observed); DemoSeed 170; Regression non-Docker 140.
+- **Census corrections against the paired passes.** None changes a design; all are recorded here before CI.
+  1. **M-8 trips nine more facts than 14811-T counted.** Its census predates the Rule A and Rule B facts and 14840-T's re-pointed call-home fact. Every one of the nine goes red at the vocabulary gate, which is a save step (NR-P29). So they show only that M-8 makes the save refuse the code.
+  2. **M-18 also turns AC-CL-35 red**, not only AC-CL-34 as 14840-T's census said. A re-save queued behind a clear takes its give-back from the stale pre-lock sum, so the balance ends at −0,5.
+  3. **M-18 is a reconstruction.** The only pre-transaction read of absence rows is the phase-2 snapshot, which the code reduces straight to a sum. The builder kept its rows, matching 14840-T's three edits. When the snapshot does not run, the in-lock row is used, so those clears are unchanged.
+  4. **Two cites have drifted:**
+     - the vocabulary gate is now `SkemaEndpoints.cs:1062` (the plan says `:970`);
+     - the unmapped-line skip is in `src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs:3958-3963`.
+- **The CI-M2 frozen list** (verbatim in `0f1e9b85`'s message). O means observed locally; A means argued, and CI is where it is observed.
+  1. Unit `AbsenceClassificationTests.EveryVocabularyCode_HasExactlyOneClassification`: M-8; the entry count, expected 12, actual 11, `:81`. O
+  2. Unit `AbsenceClassificationTests.EveryCode_HasTheSpecifiedEffect_AndTheEngineReadsTheSameTable(CHILD_SICK_CALL_HOME, Credit)`: M-8; "CHILD_SICK_CALL_HOME has no classification", `:132`. O
+  3. `ChildSickCallHomePayrollTests.CallHome3Point5Hours_Worked3Point9_Credited`: M-8; the save's 200 assertion in `SaveCallHomeAsync` (`:116`), which gets 422 `absence_type_unknown`. NR-P29: a save step, not the credit half. A
+  4. `…_ExportedUnderSls0530`: M-8; the same save assertion. A
+  5. `ChildSickIllnessStartTests.CallHomeThenDayOne_Accepted`: M-8; the first `AssertOkAsync`, a setup save. A
+  6. `ChildSickIllnessStartTests.CallHomeAfterCallHome_Refused`: M-8; the first `AssertOkAsync`, a setup save. A
+  7. `ChildSickIllnessStartTests.CallHomeWithIntervals_Accepted`: M-8; `AssertOkAsync`. A
+  8. `ChildSickIllnessStartTests.CallHomeWithOnlyProjectHours_Accepted`: M-8; `AssertOkAsync`. A
+  9. `ChildSickIllnessStartTests.ClearingWorkOnStoredCallHomeDay_Refused`: M-8; the setup call-home save. A
+  10. `ChildSickIllnessStartTests.DayOneThenCallHome_CallHomeRefused`: M-8; the refusal's `error` is `absence_type_unknown` where `absence_type_not_eligible` is expected. The vocabulary gate answers before Rule A. A
+  11. `ChildSickIllnessStartTests.CallHomeWithoutWork_Refused`: M-8; `error` is `absence_type_unknown`. The vocabulary gate answers before Rule B. A
+  12. `ChildSickSaveTests.HkOk24_CallHome_NotOffered_Returns422`: M-8; `error` is `absence_type_unknown`. A
+  13. `ChildSickSaveTests.NoOptIn_CallHome_Returns422_OptInBody`: M-8; `error` is `absence_type_unknown`. A
+  14. `SkemaCellClearRaceTests.ClearQueuedBehindAResave_GivesBackTheInLockRow` (AC-CL-34): M-18; `clearedFeriedage` expected 0,5, actual 1,0 (then `used` −0,5). A
+  15. `SkemaCellClearRaceTests.ResaveQueuedBehindAClear_SaveRowIsCurrent` (AC-CL-35): M-18; the last assertion, `used` expected 0,5, actual −0,5. Census correction 2. A
+  16. `TeamOverviewAggregateTests.AwayToday_False_AfterTodaysAbsenceCleared` (AC-CL-24): M-19; the final `Assert.False(await AwayAsync())`. A
+  17. `ProjectionBackfillClearTests.UnpublishedClear_SurvivesTheRebuild` (AC-CL-33 (1)): M-20; `(marker, outbox_id)` reads `(−1, registration id)`. It is red under M-21 too, because the unpublished clear is never replayed. A
+  18. `ProjectionBackfillClearTests.PublishedClear_UnpublishedReRegistration_StaysCurrent` (AC-CL-38): M-21; `(intervals, outbox_id, marker)`, where the marker is the clear's id. It is red under M-20 too. A
+  19. `SkemaCellClearTests.ClearWorkTimeDay_RowKeptAndMarked_EveryReaderOmitsTheDay` (AC-CL-3): M-20; `Assert.Equal(clear.OutboxId, kept.OutboxId)`. A
+  20. `ProjectionBackfillClearTests.FromEmpty_ClearsReplayed_EqualsLive` (AC-CL-22 (1)): M-20; the final work-time tuple. A
+  21. `ProjectionBackfillClearTests.RerunOverPopulated_ResurrectsNoClearedCell` (AC-CL-22 (2)): M-20; the per-day `AssertAllClearedAsync` tuple. A
+  22. `ProjectionBackfillClearTests.SecondRerun_ChangesNothing` (AC-CL-22 (3)): M-20; the first `AssertAllClearedAsync`. A
+  23. `ProjectionBackfillClearTests.DrainedThenRerun_ClearedStayCleared_ReRegisteredStaysCurrent` (AC-CL-33 (4)): M-20; the final work-time tuple. A
+- **Argued green under CI-M2:**
+  - **Under M-8:**
+    - the reflection fact and the call-home golden-line row (they read constants and the engine line);
+    - `ChildSickCatalogueTests`, the 12-row S119 fact, the allowance tile, the mapping fact and the chain facts;
+    - no host start-up check of the classification exists, so every Docker host starts;
+    - the demo seed, smoke and e2e never use the code.
+  - **Under M-20 and M-21:** AC-CL-33 (2) and (3).
+  - **Under M-18:** `TwoConcurrentClears_SameVacationCell_GiveTheDayBackOnce`, `ClearQueuedBehindASend_409_RowStaysCurrent`, and every clear fact without a race.
+  - **Under M-19:** the other `awayToday` facts.
+- **Independence:** M-20 and M-21 edit one statement, and under both, pins 17 and 18 still reach their "must trip" assertion. M-8 touches only the call-home code, while M-18 uses VACATION and M-19 uses SICK_DAY.
+- **The CI-M2b frozen list** (verbatim in `78f6a719`'s message):
+  1. Unit `EveryCode_HasTheSpecifiedEffect…(CHILD_SICK_CALL_HOME, Credit)`: M-22; expected Credit, actual Neutral. O
+  2. `ChildSickCallHomePayrollTests.CallHome3Point5Hours_Worked3Point9_Credited`: M-22; the closing-flex member of the `Assert.Multiple`, expected 1,00, actual −2,50. The save answers 200 first. A
+  3. `…_ExportedUnderSls0530`: M-23; `Assert.Single` finds no call-home export line, because payroll skips an unmapped line. A
+  4. `ChildSickCallHomeMappingTests.EveryAgreement_HasAnOk26Sls0530Row`: M-23; "AC/OK26: … found []". A
+- **Argued green under CI-M2b:**
+  - **Under M-22:** the export fact, the mapping fact, the 12-entry count, and every Rule A, Rule B and save fact.
+  - **Under M-23:** the credit fact, the `wage_type_mappings` count, idempotency and schema facts, the DemoSeed, smoke and e2e.
+  - **Independence:** neither mutation turns red a fact on the other's list.
+- **Next:** push both branches as draft PRs and watch them. Each is judged against its list by the plan's rules (`PLAN-s148.md:576-585`): a pin counts only when its trx message is the listed assertion.
