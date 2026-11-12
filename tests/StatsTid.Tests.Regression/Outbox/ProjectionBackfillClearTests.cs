@@ -380,7 +380,7 @@ public sealed class ProjectionBackfillClearTests : SkemaCellClearTestBase, IAsyn
     /// registration and the published clear over a row whose registration is newer than the clear: the day is current
     /// (<c>cleared_by_outbox_id</c> null) with <c>outbox_id</c> equal to the re-registration's, and the month GET serves it.
     ///
-    /// <para>Kind R in intent (a kept behaviour). On base it is red even earlier than the rebuild: the <c>Assert.Single</c> on the nonexistent <c>WorkTimeCleared</c> outbox row trips, and the marker column read would error; it is "red with the column present and the clear ignored". Its red evidence for the guard is the
+    /// <para>Kind R in intent (a kept behaviour). On base it is red even earlier than the rebuild: the LINQ <c>.Single()</c> on the nonexistent <c>WorkTimeCleared</c> outbox row throws an <c>InvalidOperationException</c>, and the marker column read would error; it is "red with the column present and the clear ignored". Its red evidence for the guard is the
     /// mutation <b>M-21</b> (CI-M2; argued, not run locally): the replayed work-time clear's <c>outbox_id &lt;= @clear</c>
     /// guard removed from <c>ClearDaySql</c>. The saves answer 200 and the preconditions hold (the clear is published, the
     /// re-registration is not). The rebuild replays the published clear over the row of the NEWER, unpublished

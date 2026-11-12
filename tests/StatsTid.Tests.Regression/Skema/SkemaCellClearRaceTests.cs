@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace StatsTid.Tests.Regression.Skema;
 
@@ -157,15 +158,14 @@ public sealed class SkemaCellClearRaceTests : SkemaCellClearTestBase
 
     /// <summary>
     /// Rollback after the clear was written (Fable 5a W-1). An HK employee (employed since before 1 September 2025,
-    /// <c>VACATION</c> cap 25,0) has <c>VACATION</c> on Friday 12 June and <c>used</c> 24,0. With the lock held, one request
+    /// <c>VACATION</c> cap 25,0) has <c>VACATION</c> on Friday 12 June and <c>used</c> 23,0. With the lock held, one request
     /// is queued that clears Friday and posts <c>VACATION</c> on Wednesday 10 and Thursday 11 June (a net of +1,0, so the
-    /// pre-transaction quota check, seeing 24,0, passes). While it is queued, <c>used</c> is set to 25,0 by SQL, as a
+    /// pre-transaction quota check, seeing 23,0, passes: 24,0 of 25,0). While it is queued, <c>used</c> is set to 25,0 by SQL, as a
     /// concurrent booking would; the lock is released. Inside the lock the clear is written first and the quota guard then
     /// refuses the +1,0: 422, and the WHOLE save rolls back: no <c>AbsenceCleared</c> outbox row, no audit row, Friday's row
     /// still current, no row on Wednesday or Thursday, <c>used</c> still 25,0.
     ///
-    /// <para>Kind R (the atomicity of a save that fails after its clear ran). On base the clear is ignored and the request's
-    /// two posted days are refused earlier or in the lock, so it is green there too; the evidence it can fail is the
+    /// <para>Kind R (the atomicity of a save that fails after its clear ran). On base the clear is ignored and the request is two posted days against `used` 23,0: the pre-transaction check passes (23,0 + 2,0 = 25,0), the request queues, and after `used` becomes 25,0 the in-lock guard refuses (25,0 + 2,0 > 25,0) with the same body, so every assertion holds there too and it is green (with the feature: pre-check 22,0 + 2,0 = 24,0, guard 25,0 + 1,0 > 25,0 after the clear ran); the evidence it can fail is the
     /// mutation <b>"the clear's audit row or event is written outside the save's transaction"</b> (argued, CI-M2 candidate):
     /// the quota breach then rolls back the projection writes but not the separately committed event or audit row, so the
     /// <c>AbsenceCleared</c> and audit-count assertions (the first after the 422) trip. If the event is written on the
@@ -177,7 +177,7 @@ public sealed class SkemaCellClearRaceTests : SkemaCellClearTestBase
         var emp = await SeedEmployeeAsync("HK", employmentStart: new DateOnly(2024, 1, 1));
         var client = EmployeeClient(emp, "HK");
         await SaveOkAsync(emp, Save(absences: new[] { (Fri12, "VACATION", 7.4m) }), "VACATION Friday", client);
-        await ExecAsync("UPDATE entitlement_balances SET used = 24.0 WHERE employee_id = @e AND entitlement_type = 'VACATION'", ("e", emp));
+        await ExecAsync("UPDATE entitlement_balances SET used = 23.0 WHERE employee_id = @e AND entitlement_type = 'VACATION'", ("e", emp));
         var (conn, tx) = await HoldEmployeeLockAsync(emp);
         HttpResponseMessage rsp;
         try
@@ -198,6 +198,9 @@ public sealed class SkemaCellClearRaceTests : SkemaCellClearTestBase
 
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity, $"expected the in-lock quota 422, got {(int)rsp.StatusCode}: {raw}");
+        var body = JsonDocument.Parse(raw).RootElement;
+        Assert.Equal("Entitlement quota exceeded", body.GetProperty("error").GetString());
+        Assert.Equal("VACATION", body.GetProperty("absenceType").GetString());
         Assert.Empty(await OutboxAsync(emp, "AbsenceCleared"));
         Assert.Equal(0L, await AuditCountAsync(emp, "AbsenceCleared"));
         var rows = await AbsencesAsync(emp);
