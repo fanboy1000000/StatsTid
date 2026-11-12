@@ -1254,3 +1254,9 @@ TASK-14842-T dispatched.
     - **QUAL-252 (M):** a stalled Skema save can still be written after a newer one. The client orders saves only within 15 s, and the server not at all. Its residuals: the untested mirror patch, and the accepted half-typed-then-closed contract.
     - **Three below-floor notes:** the untested "seed quota unresolved" branch; a clear's dependence on its outbox row (beside O-31); the settled-year give-back reachability (pre-existing).
   - `check_docs`: 12 shortcuts, all registered. No `shortcut(pending)`, and the `shortcut(QUAL-248)` line is gone.
+- **GATE after the last wave-2 stack, on master `a331e452`: green.**
+  - Build: 0 errors, 143 warnings, CA2100 113.
+  - Backend tests: Unit 1721, DemoSeed 170, Regression non-Docker 140.
+  - Frontend: tsc, lint, e2e typecheck and build all green; vitest 94 files / 1138 tests.
+  - **Wave 2 is fully merged:** 14809→14810, 14811→14812 (with owner Q5's rules), 14842, and 14840→14841 (with owner Q6's extra round).
+  - **Next:** CI-W2, CI-M2 and CI-M2b.
