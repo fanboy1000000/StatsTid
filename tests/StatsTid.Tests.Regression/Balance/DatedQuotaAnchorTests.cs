@@ -332,21 +332,25 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════
     // R4 — graceful-vs-fail-closed isolation regression. The VacationSettlementService leaver /
-    // termination / deferred path STAYS fail-closed (throws, never values against the live quota —
-    // ADR-033 D10) and is NOT routed through the new graceful DatedEntitlementConfigResolver.
+    // termination / deferred VALUATION path STAYS fail-closed (throws, never values against the live
+    // quota — ADR-033 D10) and is NOT routed through the graceful DatedEntitlementConfigResolver. Since
+    // S148 (TASK-14842, QUAL-196) the service builds that resolver locally for ONE sanctioned use: the
+    // total_quota a carryover gives a next-year balance row it creates (ResolveCarryoverSeedQuotaAsync).
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Structural isolation pin: <see cref="VacationSettlementService"/> does NOT take a
-    /// <see cref="StatsTid.Infrastructure.DatedEntitlementConfigResolverFactory"/> dependency, so the
-    /// 8102 graceful resolver cutover cannot have leaked into the fail-closed settlement family. (The
+    /// Structural pin: <see cref="VacationSettlementService"/>'s constructor does NOT take a
+    /// <see cref="StatsTid.Infrastructure.DatedEntitlementConfigResolverFactory"/> or resolver, so the
+    /// graceful chain is not a wired dependency of the settlement family. It does not prove the service
+    /// never calls the chain: since S148 the carryover seed (<c>ResolveCarryoverSeedQuotaAsync</c>) builds it
+    /// locally, the one sanctioned use; the valuation reads stay fail-closed. (The
     /// fail-closed THROW behaviour itself is exercised by
     /// <c>TerminationSettlementTests.Termination_MissingDatedConfig_FailsClosed_NoLiveFallback_NoRow</c>
     /// and <c>...LeaverDeferred_MissingDatedConfig_FailsClosed_NoLiveFallback_NoRow</c>; this pin
     /// guards against a future refactor wiring the graceful resolver into the leaver path.)
     /// </summary>
     [Fact]
-    public void R4_SettlementService_DoesNotDependOnGracefulResolver()
+    public void R4_SettlementService_ConstructorTakesNoGracefulResolver()
     {
         var ctor = typeof(StatsTid.Infrastructure.VacationSettlementService)
             .GetConstructors()

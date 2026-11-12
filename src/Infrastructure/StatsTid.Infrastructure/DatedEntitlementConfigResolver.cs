@@ -22,7 +22,9 @@ namespace StatsTid.Infrastructure;
 /// <para>
 /// <b>Graceful-only (ADR-023 D3, never 500).</b> This is the GRACEFUL family (S81 R4): the fail-CLOSED
 /// settlement resolvers (<c>VacationSettlementService</c>) are deliberately NOT folded in. The dated
-/// read misses fall through a live-config chain rather than throwing.
+/// read misses fall through a live-config chain rather than throwing. One sanctioned exception (S148,
+/// TASK-14842): the settlement builds this resolver for the <c>total_quota</c> a carryover gives a
+/// next-year balance row it creates; its valuation reads stay fail-closed.
 /// </para>
 ///
 /// <para>
@@ -30,7 +32,10 @@ namespace StatsTid.Infrastructure;
 /// lives in Infrastructure (NOT the pure SharedKernel <see cref="EntitlementPeriodResolver"/>). Uses
 /// the non-tx <see cref="EntitlementConfigRepository.GetByTypeAtAsync(string, string, string, DateOnly, System.Threading.CancellationToken)"/>
 /// read overload (YearOverview is a pure read; the Skema consumer in TASK-8102 is a pre-transaction
-/// validation, so the non-tx overload suffices there too).
+/// validation, so the non-tx overload suffices there too). Since S148 (TASK-14842) two callers use it
+/// inside a locked transaction (the profile PUT's revaluation seed, the settlement's carryover seed);
+/// the reads still take their own connection, which is sound because config rows are not written
+/// under the employee lock those transactions hold.
 /// </para>
 /// </summary>
 public sealed class DatedEntitlementConfigResolver

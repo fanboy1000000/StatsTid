@@ -953,3 +953,97 @@ TASK-14811-T dispatched on `162da27c`.
   - Unit 1720, DemoSeed 170, Regression non-Docker 140.
   - Frontend: tsc, lint, e2e typecheck and build green; vitest 87 files / 1096 tests.
   - The Docker facts (the chain, Rules A and B, the race, payroll, the mapping, the tile) and M-8, M-22 and M-23 are CI-W2, CI-M2 and CI-M2b's.
+
+**Wave 2 — TASK-14842** (`backend-infrastructure`; branch `worktree-agent-ab112bd82ed22a09a`, tip `bbbd5eea` on `87b26453`; report `.claude/reviews/S148-TASK-14842-report.md`). This fixes QUAL-196 (owner Q3) with owner Q4's quota seed.
+
+**What was wrong, in plain words.** Each employee has one holiday balance record per type and year. When that record was missing, the code that created it got it wrong in three ways:
+- It started the days used at 0, ignoring holidays already booked. Two booked days plus a third gave "1 used" instead of 3.
+- When HR backdated a change of working hours, the recalculation set the year's entitlement to 0. The team overview then showed "of 0 days" for good.
+- The year-end carryover gave next year the closing year's entitlement, even when the entitlement changed on the new year's first day.
+
+**What it does now.** Every created record gets two things:
+- the sum of the employee's current bookings for that type and holiday year (each type with its own year window);
+- the entitlement in force on the first day of its own holiday year, read the way the Skema save reads it, never the live row.
+
+**The change, for the record.**
+- Five source-compatible writer signatures. All five production call sites pass the seed inputs explicitly.
+- The carryover is fixed at both of its call sites.
+- If no configuration exists for the new year, the carryover falls back to the closing year's total and logs it (OA-5).
+
+**Local gate:** green, with no existing fact expected red.
+
+**Orchestrator rulings on the report:**
+- **Accepted:**
+  - the rescue now fails closed (500, rolled back) on a snapshot with no reset month, instead of writing a zero-quota row; with the reseed, that state cannot occur;
+  - the settlement service is injected into the resolve head, so both carryovers share one chain;
+  - one extra helper parameter;
+  - comment edits in authorized files.
+- **Put to both 5a lenses:**
+  - **the security question:** the rescue's new terminated-inclusive user read, which the R9c allowlist names as "settlement resolve";
+  - **the cost question:** one extra sum query per type on every save, even when the record exists, which the reviewers judge as "seed only on insert" versus an F-row.
+- **Accepted as a shortcut, registered at merge:** the year-end close names the VACATION absence code itself, because Infrastructure cannot reference the Backend mapping.
+
+**Found, not fixed:** the dead writer `AdjustUsedAsync` (creates `total_quota` 0, no production caller), and three stale test or resolver remarks.
+
+TASK-14842-T dispatched.
+- **TASK-14842-T** (`test-qa`; tip `2dcac3e3` on `bbbd5eea`; report `.claude/reviews/S148-TASK-14842-T-report.md`): three new Docker test files, all F except one R. No existing fact moves; the census of 31 files classifies them all.
+  - **The booking path:** the missing row is seeded from current bookings; the over-long-window guards on 1 Oct 2026 and 30 Apr 2026 are in the fixture.
+  - **The reduction path.**
+  - **An existing row adds only the change:** the R pin.
+  - **The revaluation:** the seed is read after the overwrite; the quota comes from the year-start row, not the live one (25, not 26); the new fraction gives 12,5.
+  - **The carryover:** both call sites seed 26, not the settled year's 25 and not the live 27.
+  - **Local gate:** green.
+  - **Unproven until CI:** four fixture risks. HK was used for AC-BS-4 rather than the settlement harness's AC precedent; if CI shows an HK-specific failure, switching is a one-line change.
+- **Dispatched in parallel:** 5a Fable, 5a Codex (high-risk: balance correctness, concurrency, the security question) and 5α, all over `87b26453..2dcac3e3`.
+- **5a on `87b26453..2dcac3e3` (14842 + 14842-T), cycle 1:**
+  - **Codex: CHANGES-REQUIRED**, 1 B / 0 W / 4 N (`S148-TASK-14842-5a-codex.md`).
+  - **Fable 5.2: APPROVED-WITH-WARNINGS**, 0 B / 2 W / 6 N (`S148-TASK-14842-5a-reviewer.md`).
+  - **5α: PASS** (`S148-TASK-14842-5alpha.md`). The terminated-inclusive read is behind the allowlisted LocalHR gate. Infrastructure takes no Backend dependency. No contract changed, so no REGEN is needed.
+  - **Both lenses independently, the blocker (Codex B-1 = Fable W-2).** The carryover falls back to the closing year's entitlement whenever next year's settings key has no *open* row. That covers a key whose open row an admin later deleted while the row in force on the year's first day remains, so a rescue would seed 25 where the year-start row says 26, for good. The ruling allows the fallback only when the key has no row at all.
+  - **Fable W-1.** The R4 pin "settlement does not use the graceful resolver" is green while the carryover seed now uses it. Its name, its docstring and the resolver's remarks are untrue.
+  - **Both lenses agree on the questions put to them:**
+    - The security question is safe: the read sits after the LocalHR scope gate for the same employee, on the R9c allowlist.
+    - The deviations are acceptable.
+    - The per-save sum is not a merge blocker. Codex recommends an insert-only sum; Fable says leave it unless measured.
+  - **Disposition.** Fix-up 1 is dispatched to the implementer:
+    - check the dated row before OA-5;
+    - use the service's own type mapping instead of a fixed VACATION list, which retires that shortcut;
+    - pin ReadCommitted explicitly on the profile PUT and the resolve route.
+    
+    Then 14842-T adds the dated-row-without-open-row regression case. W-1 (the R4 pin and the resolver remarks) is the Orchestrator's at merge. The per-save sum becomes an F-series row at merge.
+- **TASK-14842 fix-up 1** (tip `73a395dc`; `S148-TASK-14842-c2-report.md`):
+  - **The OA-5 fallback is narrowed.** With no open row, the carryover reads the row in force at year N+1's start under the same key, and falls back only when there is none.
+  - **The settled type's absence code** comes from the service's own `SettledAbsenceType` switch. The VACATION constant and its `shortcut(pending)` are gone, so this stack has no shortcut left to register.
+  - **The isolation level is explicit.** The profile PUT and the resolve route now open their transactions as ReadCommitted (PAT-015).
+  - **Gate:** green.
+- **TASK-14842-T fix-up 1** (tip `cbababe8`; `S148-TASK-14842-T-c2-report.md`): three AC-BS-4 rows.
+  - (d) The year-start row is in force but has no open row: the close seeds 26 (F).
+  - (f) The same through the feriehindring rescue (F).
+  - (e) No row is in force at all: OA-5 gives 25 (R).
+  - **A fixture risk the pass marks unproven:** with no open row, the settled year's fail-closed snapshot capture may refuse. Both 5a lenses are asked to rule on it.
+- **Dispatched:** 5a cycle 2, on both lenses, over `2dcac3e3..cbababe8`.
+- **5a cycle 2 on `2dcac3e3..cbababe8`:**
+  - **Codex: CHANGES-REQUIRED**, 1 B (`S148-TASK-14842-5a-codex-c2.md`).
+  - **Fable 5.2: CHANGES-REQUIRED**, 1 B / 2 N (`S148-TASK-14842-5a-reviewer-c2.md`).
+  - **What is closed.** Both lenses close the production blocker: the dated row in force at the year start now seeds the quota, and OA-5 fires only when no row is in force. Both carryover call sites use it. N-1 and N-5 are closed too.
+  - **The same new blocker, from both lenses: the test fixture.**
+    - Cases (d) and (e) leave the employee's own current config key (HK, OK24) with no open row.
+    - The year-end close's snapshot capture needs that row to learn when the holiday year starts, and it refuses (throws) before the seed runs. That happens on the base and on the fix alike.
+    - So (d) is red for the wrong reason, and (e) is red when it should be green.
+    - **Fix:** seed the employee on OK26, today's version on the pinned clock, so capture uses an untouched key, and keep the OK24 history as is. Move (e)'s close date to 1 Sep 2025 to pin the same-day boundary (Fable N-8). Dispatched as 14842-T fix-up 2.
+  - **Fable N-7, recorded neutrally.** At year-end the new dated read matters only when the employee's current key differs from next year's. A deleted open row for the employee's current key already makes the close refuse, which is the existing fail-closed choice (ADR-033 D10). Whether capture should try a dated row before refusing is a separate question for the register, if the owner wants it.
+- **TASK-14842-T fix-up 2** (tip `6946caa0`; `S148-TASK-14842-T-c3-report.md`). In (d) and (e) the employee is seeded on OK26, so the capture uses an untouched key, and (e)'s close date moves to 1 Sep 2025.
+- **5a cycle 3 on `cbababe8..6946caa0`:**
+  - **Codex: APPROVED** (`S148-TASK-14842-5a-codex-c3.md`). Both repaired cases reach the seed. (d) is red on the base at exactly 25 versus 26; (e) is green on both sides.
+  - **Fable 5.2: APPROVED**, 0 B / 0 W / 1 N (`S148-TASK-14842-5a-reviewer-c3.md`). B-1 and N-8 are closed.
+  - **N-9 (open):** (e) exercises the same-day boundary but cannot detect a change to it. The closed row and the fallback both give 25.
+  - **The fix:** a closed row worth 26, superseded inside the settled year, so that an inclusive boundary would turn (e) red. It is small, and is dispatched as 14842-T fix-up 3 under the complete-fix preference.
+- **TASK-14842-T fix-up 3** (tip `82b3f9bf`; `S148-TASK-14842-T-c4-report.md`). Case (e) now pins the same-day boundary. A 26 row is superseded inside the settled year and closed on 1 Sep 2025, so an inclusive boundary gives 26 and turns (e) red, while the correct read falls back to 25.
+- **5a cycle 4 on `6946caa0..82b3f9bf`: Codex APPROVED** (`S148-TASK-14842-5a-codex-c4.md`) and **Fable 5.2 APPROVED** (`S148-TASK-14842-5a-reviewer-c4.md`). N-9 is closed. Two hygiene notes, a stale comment line and a lost space, were fixed by the Orchestrator at merge.
+- **Merged** (TASK-14842 stack, `--no-ff` from `82b3f9bf`). The merge commit also carries:
+  - **Fable c1 W-1.** The R4 pin is renamed `R4_SettlementService_ConstructorTakesNoGracefulResolver`, and its docstring and section comment now name the carryover seed as the one sanctioned use of the graceful resolver. The resolver's two remarks say the same, and that two callers now use it inside a locked transaction.
+  - **Fable c2 N-7.** One clause in the carryover seed's remark: at YEAR_END the new dated read reaches only a next-year key that differs from the employee's current one.
+  - **QUAL-196 closed FIXED in the register**, with its two residuals: readers show 0 used until a write creates the row, and OA-5, now pinned by AC-BS-4 (e).
+  - **The dead balance writer** `AdjustUsedAsync` (no transaction) is recorded below the floor.
+  - **F8 registered:** the seed's sum on every save, accepted, revisit, with Codex's insert-only option.
+  - No `shortcut(pending)` remains, and `check_docs` passes (13 shortcuts, all registered).

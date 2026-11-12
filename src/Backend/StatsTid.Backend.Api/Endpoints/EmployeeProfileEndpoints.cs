@@ -299,6 +299,8 @@ public static class EmployeeProfileEndpoints
             AbsenceProjectionRepository absenceProjectionRepo,
             EntitlementBalanceRepository entitlementBalanceRepo,
             EntitlementConfigRepository entitlementConfigRepo,
+            // QUAL-196 (owner Q4) — the year-start quota of a balance row the revaluation creates.
+            DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
             // S138 / TASK-13802 — the settled-year SKIP (OQ-2 (i)) + the HR diagnostic worklist.
             VacationSettlementRepository settlementRepo,
             HrBackdateWorklistRepository worklistRepo,
@@ -382,7 +384,8 @@ public static class EmployeeProfileEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the post-lock reads, the revaluation's balance seed among them, must see the lock winner's commit.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // ── S66 / TASK-6604 (ADR-032 D4) — employee-scoped advisory lock FIRST ──
@@ -891,10 +894,10 @@ public static class EmployeeProfileEndpoints
                         // stream. Caught by the Adr032RevaluationTests stream pin (TASK-6607).
                         skippedSettledGroups = await RevalueAbsencesInIntervalAsync(
                             conn, tx, employeeId, partTimeFraction, position,
-                            writtenFrom, writtenTo, auditUser.PrimaryOrgId,
+                            writtenFrom, writtenTo, auditUser.PrimaryOrgId, auditUser.AgreementCode,
                             triggeringProfileEventId, actor, auditCtx,
                             consumptionCalculator, profileResolver, absenceProjectionRepo,
-                            entitlementBalanceRepo, entitlementConfigRepo, settlementRepo,
+                            entitlementBalanceRepo, entitlementConfigRepo, datedConfigResolverFactory, settlementRepo,
                             outbox, revaluedAuditMapper,
                             auditRepo, $"employee-{employeeId}", ct);
                     }
@@ -1732,6 +1735,9 @@ public static class EmployeeProfileEndpoints
         DateOnly from,
         DateOnly? toExclusive,
         string fallbackOrgId,
+        // QUAL-196 (owner Q4) — the live agreement fallback operand of the year-start quota chain
+        // (the Skema save passes user.AgreementCode in the same place).
+        string liveAgreementCode,
         Guid triggeringProfileEventId,
         ActorContext actor,
         AuditProjectionContext auditCtx,
@@ -1740,6 +1746,7 @@ public static class EmployeeProfileEndpoints
         AbsenceProjectionRepository absenceProjectionRepo,
         EntitlementBalanceRepository entitlementBalanceRepo,
         EntitlementConfigRepository entitlementConfigRepo,
+        DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
         VacationSettlementRepository settlementRepo,
         IOutboxEnqueue outbox,
         IAuditProjectionMapper<EntitlementBalanceRevalued> revaluedAuditMapper,
@@ -1762,9 +1769,15 @@ public static class EmployeeProfileEndpoints
         // Accumulator per (entitlementType, entitlementYear): the replacement set + Σ(new − old).
         var groups = new Dictionary<(string Type, int Year), (List<AbsenceFeriedageReplacement> Repl, decimal UsedDelta, bool AnyChanged)>();
 
-        // Cache the live reset_month per (entitlementType, agreementCode, okVersion) so the
-        // entitlement-year derivation doesn't re-read the config for every absence row.
-        var resetMonthCache = new Dictionary<string, int?>(StringComparer.Ordinal);
+        // QUAL-196 (owner Q4; cycle-3 ruling R2) — per group, the row at its first absence date: its
+        // live row and dated key are the operands of the year-start quota chain below, as the Skema
+        // save takes them at its first absence date.
+        var groupSeedAnchors = new Dictionary<(string Type, int Year), (DateOnly Date, EntitlementConfig LiveConfig, string AgreementCode, string OkVersion)>();
+
+        // Cache the live (open) config per (entitlementType, agreementCode, okVersion) so the
+        // entitlement-year derivation doesn't re-read the config for every absence row. Its
+        // reset_month keys the year; the row itself is the quota chain's live operand.
+        var liveConfigCache = new Dictionary<string, EntitlementConfig?>(StringComparer.Ordinal);
 
         foreach (var row in rows)
         {
@@ -1822,14 +1835,13 @@ public static class EmployeeProfileEndpoints
             // derivation as the Skema/Balance paths). reset_month is frozen per natural key
             // (ADR-021 Q1), so the live read is safe for any historical date of this key.
             var resetKey = $"{entitlementType}|{datedProfile.AgreementCode}|{datedProfile.OkVersion}";
-            if (!resetMonthCache.TryGetValue(resetKey, out var resetMonth))
+            if (!liveConfigCache.TryGetValue(resetKey, out var liveConfig))
             {
-                var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
+                liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
                     entitlementType, datedProfile.AgreementCode, datedProfile.OkVersion, ct);
-                resetMonth = liveConfig?.ResetMonth;
-                resetMonthCache[resetKey] = resetMonth;
+                liveConfigCache[resetKey] = liveConfig;
             }
-            if (resetMonth is null)
+            if (liveConfig is null)
                 continue; // no config for this type/agreement/ok — cannot anchor the year; skip.
 
             // S80 / TASK-8001 (BLOCKER 3 fix) — route the per-row entitlement (accrual) year through
@@ -1841,7 +1853,7 @@ public static class EmployeeProfileEndpoints
             // vs booking). The resolver reproduces the pre-S80 keying EXACTLY for VACATION + every
             // other type, so those revaluations are byte-identical.
             var entitlementYear = EntitlementPeriodResolver
-                .Resolve(entitlementType, resetMonth.Value, row.Date).EntitlementYear;
+                .Resolve(entitlementType, liveConfig.ResetMonth, row.Date).EntitlementYear;
 
             var key = (entitlementType, entitlementYear);
             if (!groups.TryGetValue(key, out var acc))
@@ -1850,6 +1862,9 @@ public static class EmployeeProfileEndpoints
             acc.UsedDelta += newVal - oldVal;
             acc.AnyChanged = acc.AnyChanged || newVal != oldVal;
             groups[key] = acc;
+
+            if (!groupSeedAnchors.TryGetValue(key, out var anchor) || row.Date < anchor.Date)
+                groupSeedAnchors[key] = (row.Date, liveConfig, datedProfile.AgreementCode, datedProfile.OkVersion);
         }
 
         // S138 / TASK-13810 — the groups this call declines to re-record because the holiday year
@@ -1891,8 +1906,35 @@ public static class EmployeeProfileEndpoints
                 continue;
             }
 
+            // ── QUAL-196 (owner Q1 and Q4, 2026-11-11; cycle-3 ruling R2) — the seed inputs of a
+            // balance row this revaluation creates (an existing row only moves by the delta) ──
+            // total_quota: the config in force at the start of the record's own entitlement year,
+            // read through the Skema save's chain (DatedEntitlementConfigResolverFactory →
+            // ResolveDatedConfigAsync at the year start, under the year-start OK version and the
+            // agreement dated there; ADR-021 D4, ADR-023 D3 graceful), with the group's first-date
+            // live row as the chain's live operand: never that live row's own quota, which may have
+            // been superseded since the year began. Pro-rated by the NEW fraction where the
+            // year-start row says so. used: the Σ the repository reads after its overwrite.
+            var seedAnchor = groupSeedAnchors[(entitlementType, entitlementYear)];
+            var seedResetMonth = seedAnchor.LiveConfig.ResetMonth;
+            var entitlementYearStart = EntitlementPeriodResolver
+                .ResolveForYear(entitlementType, seedResetMonth, entitlementYear).AccrualStart;
+            var yearStartConfig = await datedConfigResolverFactory
+                .Create(employeeId, seedAnchor.OkVersion, liveAgreementCode, seedAnchor.AgreementCode)
+                .ResolveDatedConfigAsync(
+                    entitlementType, entitlementYearStart,
+                    OkVersionResolver.ResolveVersion(entitlementYearStart), seedAnchor.LiveConfig, ct);
+            var seedQuota = yearStartConfig.ProRateByPartTime
+                ? yearStartConfig.AnnualQuota * newPartTimeFraction
+                : yearStartConfig.AnnualQuota;
+            var seedAbsenceTypes = Services.EntitlementMapping.AbsenceToEntitlementType
+                .Where(m => string.Equals(m.Value, entitlementType, StringComparison.Ordinal))
+                .Select(m => m.Key)
+                .ToArray();
+
             await entitlementBalanceRepo.ApplyRevaluationAsync(
-                conn, tx, employeeId, entitlementType, entitlementYear, acc.UsedDelta, acc.Repl, ct);
+                conn, tx, employeeId, entitlementType, entitlementYear, acc.UsedDelta, acc.Repl,
+                seedQuota: seedQuota, seedResetMonth: seedResetMonth, seedAbsenceTypes: seedAbsenceTypes, ct);
 
             var revaluedEvent = new EntitlementBalanceRevalued
             {

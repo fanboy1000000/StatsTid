@@ -1309,7 +1309,9 @@ public static class SkemaEndpoints
             // bookableLimit MINUS carryover (for IMMEDIATE types it equals the annual
             // effectiveQuota, so behavior is unchanged); SeedQuota seeds total_quota on a
             // first-INSERT with the annual entitlement (its invariant meaning, ADR-021 D6 / P3).
-            var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal GuardCap, decimal SeedQuota)>(StringComparer.Ordinal);
+            // ResetMonth (QUAL-196) is the reset_month that keyed EntitlementYear: it fixes the year's
+            // date window for the used-seed of a balance row the in-lock write creates.
+            var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal GuardCap, decimal SeedQuota, int ResetMonth)>(StringComparer.Ordinal);
 
             // S73 / TASK-7301 Step-7a B1 — resolve which absence rows are FULL-DAY-ONLY
             // (CARE_DAY / SENIOR_DAY under SPRINT-73 R2), so their consumption divides by the
@@ -1799,7 +1801,11 @@ public static class SkemaEndpoints
 
                     // GuardCap is carryover-EXCLUDED (CheckAndAdjustAsync re-adds carryover once);
                     // SeedQuota = annual effectiveQuota (seeds total_quota on a first-INSERT only).
-                    entitlementData[entitlementType] = (requestedDays, plan.EntitlementYear, plan.GuardCap, plan.EffectiveQuota);
+                    // ResetMonth = the live row's reset_month that keyed the year in phase 1: the year
+                    // starts on the 1st of that month (EntitlementPeriodResolver; SPECIAL_HOLIDAY's
+                    // window ignores it), so the month of EntitlementYearStart is that reset_month.
+                    entitlementData[entitlementType] = (requestedDays, plan.EntitlementYear, plan.GuardCap, plan.EffectiveQuota,
+                        plan.EntitlementYearStart.Month);
                 }
             }
 
@@ -2741,6 +2747,15 @@ public static class SkemaEndpoints
                             var replacedDays = replacedByEntitlementType.GetValueOrDefault(entitlementType);
                             var deltaDays = totalFeriedage - replacedDays;
 
+                            // QUAL-196 (owner Q1, 2026-11-11) — the seed inputs of a balance row this
+                            // write creates: the absence types the mapping sends to this entitlement
+                            // type and the reset_month that keyed the year. The rows above are already
+                            // written, so the writer seeds `used` at the Σ before this save.
+                            var seedAbsenceTypes = AbsenceToEntitlementType
+                                .Where(m => string.Equals(m.Value, entitlementType, StringComparison.Ordinal))
+                                .Select(m => m.Key)
+                                .ToArray();
+
                             bool success;
                             decimal newUsed;
                             if (deltaDays > 0m)
@@ -2751,7 +2766,8 @@ public static class SkemaEndpoints
                                 // (= annual entitlement, seeds total_quota on a first-INSERT only).
                                 (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
                                     conn, tx, employeeId, entitlementType, data.EntitlementYear,
-                                    deltaDays, data.GuardCap, data.SeedQuota, ct);
+                                    deltaDays, data.GuardCap, data.SeedQuota,
+                                    seedResetMonth: data.ResetMonth, seedAbsenceTypes: seedAbsenceTypes, ct);
                             }
                             else
                             {
@@ -2761,7 +2777,8 @@ public static class SkemaEndpoints
                                 // `used + delta <= cap` there although the save lowers `used`).
                                 newUsed = await entitlementBalanceRepo.AdjustUsedAsync(
                                     conn, tx, employeeId, entitlementType, data.EntitlementYear,
-                                    deltaDays, data.SeedQuota, ct);
+                                    deltaDays, data.SeedQuota,
+                                    seedResetMonth: data.ResetMonth, seedAbsenceTypes: seedAbsenceTypes, ct);
                                 success = true;
                             }
 
