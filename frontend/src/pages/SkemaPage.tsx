@@ -462,11 +462,11 @@ export function SkemaPage() {
   // Days whose period rows were all removed (and not re-entered since): posted as removals.
   const workTimeRemovedRef = useRef<Set<string>>(new Set())
   // Re-seeds the open day panel's rows for reverted days (set once the panel state exists below).
-  const reseedPanelRef = useRef<(dates: string[]) => void>(() => {})
-  // Per day, what the NEWEST unanswered work-time save sent (seq + intervals; a removal sends []).
-  // The grid must end up equal to the server once saves settle, so a restore goes to this value
-  // first and to server truth only when nothing is in flight.
-  const workTimeInFlightRef = useRef<Map<string, { seq: number; intervals: WorkTimeDay['intervals'] }>>(new Map())
+  const reseedPanelRef = useRef<(dates: string[], exceptSeq?: number) => void>(() => {})
+  // Per day, EVERY unanswered work-time save, keyed by its sequence (a removal sends []). The grid
+  // must end up equal to the server once saves settle, so a restore goes to the newest save still
+  // outstanding and to server truth only when none is. A save settling removes only its own entry.
+  const workTimeInFlightRef = useRef<Map<string, Map<number, WorkTimeDay['intervals']>>>(new Map())
   // Days whose open panel holds only half-typed rows: such a day sends nothing, even on a retry.
   const halfTypedDaysRef = useRef<Set<string>>(new Set())
 
@@ -619,18 +619,30 @@ export function SkemaPage() {
 
   /** Put days back in the grid: to what the newest unanswered save (other than `exceptSeq`) sent,
       else to server truth. */
-  const restoreWorkTimeDays = useCallback((dates: string[], exceptSeq?: number) => {
+  const restoreTarget = useCallback((d: string, exceptSeq?: number, newerThan = -1) => {
+    let newest = -1
+    let target: WorkTimeDay['intervals'] | undefined
+    for (const [q, intervals] of workTimeInFlightRef.current.get(d) ?? []) {
+      if (q !== exceptSeq && q > newerThan && q > newest) {
+        newest = q
+        target = intervals
+      }
+    }
+    return target ?? serverWorkIntervalsRef.current.get(d)
+  }, [])
+
+  /** `newerThan`: only a save sent AFTER that one counts (a settled save's own answer). */
+  const restoreWorkTimeDays = useCallback((dates: string[], exceptSeq?: number, newerThan?: number) => {
+    const targets = dates.map((d): [string, WorkTimeDay['intervals'] | undefined] => [d, restoreTarget(d, exceptSeq, newerThan)])
     setLocalWorkIntervals((prev) => {
       const next = new Map(prev)
-      for (const d of dates) {
-        const flying = workTimeInFlightRef.current.get(d)
-        const target = flying && flying.seq !== exceptSeq ? flying.intervals : serverWorkIntervalsRef.current.get(d)
+      for (const [d, target] of targets) {
         if (target && target.length > 0) next.set(d, target.map((iv) => ({ ...iv })))
         else next.delete(d)
       }
       return next
     })
-  }, [])
+  }, [restoreTarget])
 
   /** Send work-time rows under their own month (the month on screen when they were queued). On
       FAILURE: while that month is still the data on screen the dates go back to the dirty set
@@ -649,7 +661,11 @@ export function SkemaPage() {
       ...payload.map((r): [string, { intervals: WorkTimeDay['intervals'] }] => [r.date, { intervals: r.intervals }]),
       ...clearedDates.map((d): [string, { intervals: WorkTimeDay['intervals'] }] => [d, { intervals: [] }]),
     ])
-    for (const d of dates) workTimeInFlightRef.current.set(d, { seq, intervals: sentByDate.get(d)!.intervals })
+    for (const d of dates) {
+      const outstanding = workTimeInFlightRef.current.get(d) ?? new Map()
+      outstanding.set(seq, sentByDate.get(d)!.intervals)
+      workTimeInFlightRef.current.set(d, outstanding)
+    }
     const save = saveSerial({
       year: env.year,
       month: env.month,
@@ -681,16 +697,8 @@ export function SkemaPage() {
           revertDates.push(d)
         }
         if (revertDates.length > 0) {
-          setLocalWorkIntervals((prev) => {
-            const next = new Map(prev)
-            for (const d of revertDates) {
-              const truth = serverWorkIntervalsRef.current.get(d)
-              if (truth && truth.length > 0) next.set(d, truth.map((iv) => ({ ...iv })))
-              else next.delete(d)
-            }
-            return next
-          })
-          reseedPanelRef.current(revertDates)
+          restoreWorkTimeDays(revertDates, seq)
+          reseedPanelRef.current(revertDates, seq)
         }
         return true // resolved: reverted to server truth.
       }
@@ -711,29 +719,23 @@ export function SkemaPage() {
           else serverWorkIntervalsRef.current.delete(d)
         }
         if (removedSomething) announceRemoval()
-        // The grid matches the server: a day with no newer change (unsent or in flight) shows
-        // what this save sent, which is now server truth.
-        const settled = dates.filter(
-          (d) => workTimeInFlightRef.current.get(d)?.seq === seq && !workTimeDirtyRef.current.has(d),
-        )
-        if (settled.length > 0) {
-          setLocalWorkIntervals((prev) => {
-            const next = new Map(prev)
-            for (const d of settled) {
-              const sent = sentByDate.get(d)!.intervals
-              if (sent.length > 0) next.set(d, sent.map((iv) => ({ ...iv })))
-              else next.delete(d)
-            }
-            return next
-          })
-        }
+        // The grid matches the server: a day with no newer unsent change shows the newest save sent
+        // after this one that is still outstanding, else server truth (which this save advanced).
+        const settled = dates.filter((d) => !workTimeDirtyRef.current.has(d))
+        if (settled.length > 0) restoreWorkTimeDays(settled, seq, seq)
         return true
       }
       // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty dates (B2 retry;
       // the local refs still hold the edits), EXCEPT a day whose panel is half-typed: that day
       // sends nothing, and the grid goes back to what is in flight or stored.
       const halfTyped = dates.filter((d) => halfTypedDaysRef.current.has(d))
-      for (const d of dates) if (!halfTyped.includes(d)) workTimeDirtyRef.current.add(d)
+      for (const d of dates) {
+        if (halfTyped.includes(d)) continue
+        workTimeDirtyRef.current.add(d)
+        // A removal that failed while the grid shows the day empty is retried as a removal (a
+        // half-typed withdrawal may have dropped its mark).
+        if (clearedDates.includes(d) && (workIntervalsRef.current.get(d)?.length ?? 0) === 0) workTimeRemovedRef.current.add(d)
+      }
       if (halfTyped.length > 0) {
         for (const d of halfTyped) workTimeRemovedRef.current.delete(d)
         restoreWorkTimeDays(halfTyped, seq)
@@ -743,7 +745,11 @@ export function SkemaPage() {
     workTimeSavesInFlightRef.current.set(save, env)
     void save.finally(() => {
       workTimeSavesInFlightRef.current.delete(save)
-      for (const d of dates) if (workTimeInFlightRef.current.get(d)?.seq === seq) workTimeInFlightRef.current.delete(d)
+      for (const d of dates) {
+        const outstanding = workTimeInFlightRef.current.get(d)
+        outstanding?.delete(seq)
+        if (outstanding?.size === 0) workTimeInFlightRef.current.delete(d)
+      }
     })
     return save
   }, [saveSerial, announceRemoval, restoreWorkTimeDays])
@@ -1142,15 +1148,15 @@ export function SkemaPage() {
     halfTypedDaysRef.current = new Set() // a closed or switched panel holds no half-typed day
   }, [openDayDate])
   useEffect(() => {
-    reseedPanelRef.current = (dates) => {
+    reseedPanelRef.current = (dates, exceptSeq) => {
       const open = openDayRef.current
       if (open === null || !dates.includes(open)) return
-      const truth = serverWorkIntervalsRef.current.get(open) ?? []
+      const truth = restoreTarget(open, exceptSeq) ?? []
       setPanelPeriods((prev) =>
         truth.map((iv, i) => ({ id: prev[i]?.id ?? `srv-${++panelIdRef.current}`, from: iv.start, to: iv.end })),
       )
     }
-  }, [])
+  }, [restoreTarget])
 
   const handleOpenDay = useCallback((date: string) => {
     // S147 / QUAL-241 — seed from the committed STATE (which the render-time hydration

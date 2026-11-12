@@ -230,19 +230,69 @@ describe('SkemaPage — the grid follows the newest unanswered work-time save (A
     expect(saveBodies).toHaveLength(1)
   })
 
-  it('a 5xx on a day whose panel is half-typed is not re-queued: navigation posts nothing and the grid shows the stored day', async () => {
+  // Deleting the `!halfTyped.includes(d)` filter in the failure branch re-queues the day, and this
+  // navigation then posts the restored 08:00-16:00 (a second POST): the test goes red.
+  it('a 5xx on a day whose panel is half-typed is not re-queued: navigation, panel still half-typed, posts nothing', async () => {
     const held = holdSaves()
     await renderLoaded()
     const drawer = await sendNineToSixteenHeld(held)
     fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
     held[0](500)
     await screen.findByRole('alert')
-    const reopened = await reopen('2026-03-02')
-    expect(times(reopened)).toEqual(['08:00', '16:00'])
-    fireEvent.change(within(reopened).getByLabelText('Til'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
     await settle()
     expect(saveBodies).toHaveLength(1)
+  })
+
+  it('a 5xx on a half-typed day restores the grid to the stored day', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await sendNineToSixteenHeld(held)
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    held[0](500)
+    await screen.findByRole('alert')
+    expect(times(await reopen('2026-03-02'))).toEqual(['08:00', '16:00'])
+  })
+
+  it('a removal that failed after the user half-typed and closed the panel is retried as a removal', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(1))
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '16:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Luk' }))
+    held[0](500)
+    await screen.findByRole('alert')
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await waitFor(() => expect(saveBodies).toHaveLength(2))
+    expect(saveBodies[1].cleared?.workTime).toEqual([{ date: '2026-03-02' }])
+    expect(saveBodies[1].workTime).toBeNull()
+  })
+
+  it('overlapping saves: the newer is refused (422) first, then the older answers 200: the grid ends at the older save', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09:00' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // A leaves and is held
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '10:00' } })
+    // B waits behind A for the queue's bound, then leaves too.
+    await act(async () => { await vi.advanceTimersByTimeAsync(17000) })
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(2))
+    held[1](422) // B refused first
+    await settle()
+    held[0](200) // then A answers
+    await settle()
+    expect(times(await reopen('2026-03-02'))).toEqual(['09:00', '16:00'])
   })
 })
 

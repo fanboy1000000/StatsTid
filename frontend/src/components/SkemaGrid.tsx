@@ -453,6 +453,9 @@ export function SkemaGrid({
       setNoBasisCell((cur) => (cur === cellKey ? null : cur))
       setNegativeCell((cur) => (cur === cellKey ? null : cur))
       setEditing({ key: cellKey, raw: fmt, initial: fmt })
+      // The seeded text counts as this input's remembered value: untouched since focus, it may be
+      // reset by a refusal, whichever input propagated last.
+      propagatedRawRef.current = { key: cellKey, raw: fmt }
     },
     [],
   )

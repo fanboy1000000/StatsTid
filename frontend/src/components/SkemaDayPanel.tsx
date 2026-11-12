@@ -387,7 +387,11 @@ export function SkemaDayPanel({
                   placeholder="0"
                   inputMode="decimal"
                   disabled={stepTwoDisabled}
-                  onFocus={() => setEditingAlloc({ key: p.key, raw: allocDisplay(p.key) })}
+                  onFocus={() => {
+                    // The seeded text counts as this input's remembered value (see the reset above).
+                    propagatedAllocRef.current = { key: p.key, raw: allocDisplay(p.key) }
+                    setEditingAlloc({ key: p.key, raw: allocDisplay(p.key) })
+                  }}
                   onChange={(e) => handleAllocInput(p.key, e.target.value)}
                   onBlur={() => {
                     setEditingAlloc(null)

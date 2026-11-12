@@ -261,6 +261,58 @@ describe('SkemaPage — a refused clear restores the value (AC-CL-29 (1), F)', (
     await waitFor(() => expect(alloc.value).toBe('3'))
   })
 
+  // Kind F: the seeded text counts as the remembered value, so a cell the person returned to after
+  // typing in another cell (the last propagating input) is still reset by the refusal.
+  it('a grid cell returned to after typing in another cell shows the restored value while focused', async () => {
+    const held = heldRefusal('VACATION', '2026-03-06')
+    await renderLoaded()
+    const a = screen.getByLabelText('Ferie dag 6') as HTMLInputElement
+    const b = screen.getByLabelText('Ferie dag 7') as HTMLInputElement
+    act(() => a.focus())
+    vi.useFakeTimers()
+    fireEvent.change(a, { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(1))
+    act(() => b.focus())
+    fireEvent.change(b, { target: { value: '2' } })
+    act(() => a.focus())
+    held[0]()
+    await screen.findByText(/Kan ikke fjernes/)
+    await waitFor(() => expect(a.value).toBe('7,4'))
+  })
+
+  it('a day-panel allocation input returned to after typing in another one shows the restored value while focused', async () => {
+    const held = heldRefusal('DRIFT', '2026-03-02')
+    const udv = { projectId: 'p-udv', projectCode: 'UDV', projectName: 'Udvikling', sortOrder: 1 }
+    monthData = makeMonth({
+      projects: [drift, udv],
+      entries: [{ date: '2026-03-02', projectCode: 'DRIFT', hours: 3 }],
+      rowPreferences: {
+        configured: true,
+        projects: [drift, udv],
+        absenceTypes: [{ ...VACATION, sortOrder: 0 }],
+      },
+      catalogs: { projects: [drift, udv], absenceTypes: [VACATION] },
+    })
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    const a = within(drawer).getByLabelText('Drift & support') as HTMLInputElement
+    const b = within(drawer).getByLabelText('Udvikling') as HTMLInputElement
+    act(() => a.focus())
+    vi.useFakeTimers()
+    fireEvent.change(a, { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(1))
+    act(() => b.focus())
+    fireEvent.change(b, { target: { value: '2' } })
+    act(() => a.focus())
+    held[0]()
+    await screen.findByText(/Kan ikke fjernes/)
+    await waitFor(() => expect(a.value).toBe('3'))
+  })
+
   it('a refused removal shows the restored value in a day-panel allocation input that is still focused', async () => {
     saveAnswer = () => ({
       status: 422,
