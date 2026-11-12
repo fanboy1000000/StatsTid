@@ -116,12 +116,19 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
     /// <b>(d) kind F:</b> the year-start row is in force but the key has no OPEN row: 25 to 26 effective 1 Sep
     /// 2025, then the 26 row closed (<c>effective_to</c> 15 Jan 2026, before the clock, as the admin
     /// soft-delete stamps it). The close creates the row at <c>total_quota</c> 26, <c>used</c> 1,0,
-    /// <c>carryover_in</c> 5. Red on <c>2dcac3e3</c> and <c>bbbd5eea</c>: no open row meant the fallback to the
-    /// settled year's 25, so <c>Assert.Equal(26m, total_quota)</c> trips.
-    /// <b>(f) kind F:</b> (d) through the §22 rescue (carryover_in 10); red for the same reason.
-    /// <b>(e) kind R:</b> the OA-5 companion: no row in force on 1 Sep 2025 at all (the original row closed
-    /// 1 Jun 2025), so the seed falls back to the settled year's 25. The old code also gave 25 here, so it is
-    /// green before and after; it fails if the fallback is lost (0, or a throw).</para>
+    /// <c>carryover_in</c> 5. The employee is seeded with OK version OK26 (the pinned clock's), so the
+    /// snapshot capture reads today's key (HK, OK26), which has an open row (asserted); the capture's dated
+    /// anchor reads are keyed by the OK version at 1 Sep 2024 (OK24), whose row there is 25. The carryover seed
+    /// resolves year N+1's key (HK, OK24) with no open row, then the dated row at 1 Sep 2025: 26. Red on
+    /// <c>2dcac3e3</c> and <c>bbbd5eea</c>: no open row meant the fallback to the settled year's 25, so
+    /// <c>Assert.Equal(26m, total_quota)</c> trips (the capture succeeds on both, so that is the assertion
+    /// that fails).
+    /// <b>(f) kind F:</b> (d) through the §22 rescue (carryover_in 10; no capture runs); red for the same
+    /// reason.
+    /// <b>(e) kind R:</b> the OA-5 companion: the original row is closed ON Mon 1 Sep 2025 (half-open
+    /// interval: not in force that day), so no row is in force at year N+1's start and the seed falls back to
+    /// the settled year's 25 (same OK26 employee and capture path as (d)). The old code also gave 25 here, so
+    /// it is green before and after; it fails if the fallback is lost (0, or a throw).</para>
     ///
     /// <para><b>Red conditions (Docker; argued).</b> On the base <c>87b26453</c> the carryover creates the
     /// missing row with <c>used = 0</c> and <c>total_quota = seedQuota</c> where the YEAR_END close passes the
@@ -151,7 +158,15 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
         Assert.Equal("OK24", OkVersionResolver.ResolveVersion(NextYearStart));
         Assert.Equal("OK24", OkVersionResolver.ResolveVersion(SettledYearAnchor));
 
-        var emp = await SeedEmployeeAsync();
+        // (d) and (e) leave (VACATION, HK, OK24) with no open row, so the employee carries the OK version of
+        // the pinned clock (OK26): the settlement's snapshot capture reads today's key (HK, user.OkVersion)
+        // open, and throws "no entitlement config resolvable" when that key has no open row.
+        var emp = await SeedEmployeeAsync(caseId is "d" or "e" ? "OK26" : "OK24");
+        if (caseId is "d" or "e")
+        {
+            Assert.Equal("OK26", OkVersionResolver.ResolveVersion(F));
+            Assert.Equal(9, await OpenResetMonthAsync("HK", "OK26")); // premise: today's key has an open row
+        }
 
         // Year N+1's current row, and the two rows that must not count toward its Σ (feriedage 1,0, SKEMA).
         await SeedSkemaAbsenceAsync(emp, Wed10, 7.4m, 1.0m);
@@ -178,9 +193,10 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
         }
         else if (caseId == "e")
         {
-            // No row in force on 1 Sep 2025 at all (the original row closed before it); the settled year's
-            // anchor, 1 Sep 2024, still reads 25.
-            await CloseOpenRowAsync("HK", "OK24", new DateOnly(2025, 6, 1));
+            // No row in force on 1 Sep 2025 at all: the original row is closed ON that day, and the interval
+            // is half-open (a row closed on the year's first day is not in force that day). The settled
+            // year's anchor, 1 Sep 2024, still reads 25.
+            await CloseOpenRowAsync("HK", "OK24", NextYearStart);
             Assert.False(await HasOpenRowAsync("HK", "OK24"), "premise: the key has no open row.");
             Assert.Null(await DatedQuotaOrNullAsync("HK", "OK24", NextYearStart));
             Assert.Equal(25m, await DatedQuotaAsync("HK", "OK24", SettledYearAnchor));
@@ -266,11 +282,25 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
     // SQL seeding and reads (literal statements only: a non-constant command text trips CA2100)
     // ════════════════════════════════════════════════════════════════════════
 
-    private async Task<string> SeedEmployeeAsync()
+    private async Task<string> SeedEmployeeAsync(string okVersion = "OK24")
     {
         var emp = "emp_s148_co_" + Guid.NewGuid().ToString("N")[..8];
-        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, OrgId, "HK", "OK24");
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, OrgId, "HK", okVersion);
         return emp;
+    }
+
+    private async Task<int> OpenResetMonthAsync(string agreementCode, string okVersion)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT reset_month FROM entitlement_configs
+            WHERE entitlement_type = 'VACATION' AND agreement_code = @a AND ok_version = @ok AND effective_to IS NULL
+            """, conn);
+        cmd.Parameters.AddWithValue("a", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
 
     private async Task SeedSkemaAbsenceAsync(string emp, DateOnly date, decimal hours, decimal feriedage)
