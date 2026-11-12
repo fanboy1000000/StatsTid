@@ -112,6 +112,17 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
     ///     carries <c>resetMonth</c> 9 (the rescue now needs it) and the settled year's quota 25.</item>
     /// </list>
     ///
+    /// <para><b>Fix-up 1 cases (14842 cycle 1, Codex B-1 = Fable W-2).</b>
+    /// <b>(d) kind F:</b> the year-start row is in force but the key has no OPEN row: 25 to 26 effective 1 Sep
+    /// 2025, then the 26 row closed (<c>effective_to</c> 15 Jan 2026, before the clock, as the admin
+    /// soft-delete stamps it). The close creates the row at <c>total_quota</c> 26, <c>used</c> 1,0,
+    /// <c>carryover_in</c> 5. Red on <c>2dcac3e3</c> and <c>bbbd5eea</c>: no open row meant the fallback to the
+    /// settled year's 25, so <c>Assert.Equal(26m, total_quota)</c> trips.
+    /// <b>(f) kind F:</b> (d) through the §22 rescue (carryover_in 10); red for the same reason.
+    /// <b>(e) kind R:</b> the OA-5 companion: no row in force on 1 Sep 2025 at all (the original row closed
+    /// 1 Jun 2025), so the seed falls back to the settled year's 25. The old code also gave 25 here, so it is
+    /// green before and after; it fails if the fallback is lost (0, or a throw).</para>
+    ///
     /// <para><b>Red conditions (Docker; argued).</b> On the base <c>87b26453</c> the carryover creates the
     /// missing row with <c>used = 0</c> and <c>total_quota = seedQuota</c> where the YEAR_END close passes the
     /// settled year's <c>snapshot.AnnualQuota</c> (<c>VacationSettlementService.cs:451-453</c>) and the
@@ -126,6 +137,9 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
     [InlineData("a")]
     [InlineData("b")]
     [InlineData("c")]
+    [InlineData("d")]
+    [InlineData("e")]
+    [InlineData("f")]
     public async Task MissingNextYearRow_CarryoverSeedsFromCurrentRows(string caseId)
     {
         // The years and dates are contract: weekdays (S138) and the close's clock after 1 Dec 2025.
@@ -144,7 +158,7 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
         await SeedSkemaAbsenceAsync(emp, PreviousFerieaarDay, 7.4m, 1.0m);
         await SeedSkemaAbsenceAsync(emp, NextFerieaarDay, 7.4m, 1.0m);
 
-        if (caseId != "a")
+        if (caseId is "b" or "c")
         {
             await SupersedeVacationQuotaAsync("HK", "OK24", NextYearStart, 26m);
             await SupersedeVacationQuotaAsync("HK", "OK24", SecondRaise, 27m);
@@ -152,13 +166,32 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
             Assert.Equal(26m, await DatedQuotaAsync("HK", "OK24", NextYearStart));   // year N+1's year-start row
             Assert.Equal(25m, await DatedQuotaAsync("HK", "OK24", SettledYearAnchor)); // the settled year's anchor
         }
+        else if (caseId is "d" or "f")
+        {
+            // The year-start row is in force but the key has no open row: 25 to 26 effective 1 Sep 2025, then
+            // the 26 row closed after that and before the close's clock, as the admin soft-delete stamps it.
+            await SupersedeVacationQuotaAsync("HK", "OK24", NextYearStart, 26m);
+            await CloseOpenRowAsync("HK", "OK24", new DateOnly(2026, 1, 15));
+            Assert.False(await HasOpenRowAsync("HK", "OK24"), "premise: the key has no open row.");
+            Assert.Equal(26m, await DatedQuotaAsync("HK", "OK24", NextYearStart));
+            Assert.Equal(25m, await DatedQuotaAsync("HK", "OK24", SettledYearAnchor));
+        }
+        else if (caseId == "e")
+        {
+            // No row in force on 1 Sep 2025 at all (the original row closed before it); the settled year's
+            // anchor, 1 Sep 2024, still reads 25.
+            await CloseOpenRowAsync("HK", "OK24", new DateOnly(2025, 6, 1));
+            Assert.False(await HasOpenRowAsync("HK", "OK24"), "premise: the key has no open row.");
+            Assert.Null(await DatedQuotaOrNullAsync("HK", "OK24", NextYearStart));
+            Assert.Equal(25m, await DatedQuotaAsync("HK", "OK24", SettledYearAnchor));
+        }
 
         // Premise: no balance row in either year.
         Assert.Null(await ReadBalanceAsync(emp, N));
         Assert.Null(await ReadBalanceAsync(emp, NextYear));
 
         decimal expectedCarryover;
-        if (caseId != "c")
+        if (caseId is not ("c" or "f"))
         {
             await SeedTransferAgreementAsync(emp, N, 5m);
             var outcome = await SettleAsync(emp, N);
@@ -185,7 +218,7 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
 
         Assert.Equal(1.0m, used);                         // the Σ of year N+1's current rows, not 0
         Assert.Equal(expectedCarryover, carryoverIn);     // the transfer (in (c), the rescued days)
-        Assert.Equal(caseId == "a" ? 25m : 26m, totalQuota); // year N+1's year-start quota
+        Assert.Equal(caseId is "a" or "e" ? 25m : 26m, totalQuota); // year N+1's year-start quota (e: OA-5 fallback)
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -358,6 +391,53 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
             Assert.Equal(1, await open.ExecuteNonQueryAsync());
         }
         await tx.CommitAsync();
+    }
+
+    /// <summary>Closes the open VACATION row of a key at <paramref name="effectiveTo"/> (the soft-delete shape).</summary>
+    private async Task CloseOpenRowAsync(string agreementCode, string okVersion, DateOnly effectiveTo)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE entitlement_configs SET effective_to = @to
+            WHERE entitlement_type = 'VACATION' AND agreement_code = @a AND ok_version = @ok AND effective_to IS NULL
+            """, conn);
+        cmd.Parameters.AddWithValue("to", effectiveTo);
+        cmd.Parameters.AddWithValue("a", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+    }
+
+    private async Task<bool> HasOpenRowAsync(string agreementCode, string okVersion)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM entitlement_configs
+            WHERE entitlement_type = 'VACATION' AND agreement_code = @a AND ok_version = @ok AND effective_to IS NULL
+            """, conn);
+        cmd.Parameters.AddWithValue("a", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync()) > 0;
+    }
+
+    private async Task<decimal?> DatedQuotaOrNullAsync(string agreementCode, string okVersion, DateOnly asOf)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT annual_quota FROM entitlement_configs
+            WHERE entitlement_type = 'VACATION' AND agreement_code = @a AND ok_version = @ok
+              AND effective_from <= @d AND (effective_to IS NULL OR effective_to > @d)
+            """, conn);
+        cmd.Parameters.AddWithValue("a", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        cmd.Parameters.AddWithValue("d", asOf);
+        var r = await cmd.ExecuteScalarAsync();
+        return r is null or DBNull ? null : Convert.ToDecimal(r);
     }
 
     /// <summary>The VACATION quota of (agreement, OK version) in force on <paramref name="asOf"/>; null =
