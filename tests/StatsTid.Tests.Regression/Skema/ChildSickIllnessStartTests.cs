@@ -252,24 +252,26 @@ public sealed class ChildSickIllnessStartTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Rule B (8). A stored call-home day with work (the shape of `CallHomeWithIntervals_Accepted`: 3,50 h, 08:00-11:54). A later save posts that date's
-    /// work-time day with an EMPTY <c>intervals</c> array and no project hours, which would bring the day's worked hours to 0:
-    /// refused, <c>kind = child-sick-call-home-without-work</c>, naming Wednesday 10 June. The stored work-time day is
-    /// unchanged (still 08:00-11:54) and the call-home row is still stored.
+    /// Rule B (8), re-pointed by S148 TASK-14840-T (was `EmptyIntervalsOnStoredCallHomeDay_Refused`: a posted empty day is now
+    /// refused first, 400 `skema_work_time_day_empty`, W-a; that fact is `SkemaCellClearTests.EmptyWorkTimeDay_Returns400_NothingWritten`).
+    /// A stored call-home day with work (the shape of `CallHomeWithIntervals_Accepted`: 3,50 h, 08:00-11:54). A later save CLEARS that
+    /// date's work-time day (<c>cleared.workTime</c>), which would bring the day's worked hours to 0: refused,
+    /// <c>kind = child-sick-call-home-without-work</c>, naming Wednesday 10 June. The stored work-time day is unchanged (still
+    /// 08:00-11:54, not marked cleared) and the call-home row is still stored.
     ///
-    /// <para><b>Kind F.</b> Red on the base: nothing refuses an empty-intervals work-time day, so the save answers 200 and
-    /// the stored day's intervals are replaced by none.</para>
+    /// <para><b>Kind F.</b> Red on the base: the <c>cleared</c> member is ignored, so the save answers 200 and the 422 assertion
+    /// trips (nothing is cleared there either).</para>
     /// </summary>
     [Fact]
-    public async Task EmptyIntervalsOnStoredCallHomeDay_Refused()
+    public async Task ClearingWorkOnStoredCallHomeDay_Refused()
     {
         var emp = await _host.SeedEmployeeAsync("HK");
         await ChildSickHost.AssertOkAsync(await _host.SaveRawAsync(emp, "HK", June,
             absences: new[] { (CallHome, 3.5m, Wednesday) },
             workTime: new[] { (Wednesday, Morning3Point9) }));
 
-        var rsp = await _host.SaveRawAsync(emp, "HK", June,
-            workTime: new[] { (Wednesday, Array.Empty<(string Start, string End)>()) });
+        // S148 TASK-14840-T: a clear, not an empty day (W-a refuses that); the date-naming 422 is Rule B's.
+        var rsp = await _host.SaveClearedAsync(emp, "HK", June, clearedWorkTime: new[] { Wednesday });
 
         await ChildSickHost.AssertRefusalAsync(rsp, WithoutWorkKind, CallHome, Wednesday, WithoutWorkMessage(Wednesday));
         Assert.Equal(new[] { (Wednesday, "08:00-11:54") }, await _host.ReadWorkTimeAsync(emp));

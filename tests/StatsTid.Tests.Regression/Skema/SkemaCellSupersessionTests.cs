@@ -293,8 +293,9 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     /// <summary>
     /// <b>S8 (four rows).</b> A Skema save carrying a cell at 0 h or -1 h, as an entry or as an absence,
     /// answers 400 and writes nothing: no new event, no new projection row, no balance movement. The stored
-    /// cell stays as it was. (Clearing a cell is out of S145, R24; a 0-hour current row would be counted by
-    /// the strand check, returned by the GETs and emit a 0-hour NORMAL_HOURS line.)
+    /// cell stays as it was. (A cell is emptied by the request's <c>cleared</c> member, never by posting 0: a
+    /// 0-hour current row would be counted by the strand check, returned by the GETs and emit a 0-hour
+    /// NORMAL_HOURS line, so a posted 0 or negative number is still refused; AC-CL-7 (1), S148 TASK-14840.)
     ///
     /// <para>Each row first saves a valid cell at 7.4 h (asserted 200) and snapshots the employee's outbox
     /// events, the projection's rows and, for the absence rows, the VACATION balance. The refused save
