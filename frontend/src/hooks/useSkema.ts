@@ -33,6 +33,12 @@ export interface DroppedSaveNotice {
   message: string
 }
 
+export interface SaveBatchCleared {
+  entries: { date: string; projectCode: string }[] | null
+  absences: { date: string; absenceType: string }[] | null
+  workTime: { date: string }[] | null
+}
+
 /** A fully classified save: what to POST, and for which month. Built when the edit is QUEUED. */
 export interface SaveBatch {
   year: number
@@ -40,6 +46,9 @@ export interface SaveBatch {
   entries: { date: string; projectCode: string; hours: number }[] | null
   absences: { date: string; absenceType: string; hours: number }[] | null
   workTime: WorkTimeDay[] | null
+  /** The removals of the save (an emptied cell or day), each kind null when it has none. Absent =
+      no removal. A cell or day is never both posted and cleared in one batch. */
+  cleared?: SaveBatchCleared | null
   /** Asked when the save FAILS: true when the page has meanwhile dropped this save's edits (the
       data it was sent under has been replaced), so the failure gets a persistent notice instead of
       the clearable slot. Absent = not dropped. */
@@ -211,6 +220,9 @@ function batchDates(batch: SaveBatch): string[] {
   for (const e of batch.entries ?? []) set.add(e.date)
   for (const a of batch.absences ?? []) set.add(a.date)
   for (const w of batch.workTime ?? []) set.add(w.date)
+  for (const e of batch.cleared?.entries ?? []) set.add(e.date)
+  for (const a of batch.cleared?.absences ?? []) set.add(a.date)
+  for (const w of batch.cleared?.workTime ?? []) set.add(w.date)
   return [...set].sort()
 }
 
@@ -414,6 +426,15 @@ export function useSkema(
       setAbsenceRuleError(null)
       setAbsenceCapError(null)
 
+      const c = batch.cleared
+      const cleared =
+        c && ((c.entries?.length ?? 0) > 0 || (c.absences?.length ?? 0) > 0 || (c.workTime?.length ?? 0) > 0)
+          ? {
+              entries: c.entries && c.entries.length > 0 ? c.entries : null,
+              absences: c.absences && c.absences.length > 0 ? c.absences : null,
+              workTime: c.workTime && c.workTime.length > 0 ? c.workTime : null,
+            }
+          : undefined
       const result = await apiClient.post('/api/skema/{employeeId}/save', {
         params: { path: { employeeId } },
         body: {
@@ -422,6 +443,7 @@ export function useSkema(
           entries: batch.entries && batch.entries.length > 0 ? batch.entries : null,
           absences: batch.absences && batch.absences.length > 0 ? batch.absences : null,
           workTime: batch.workTime && batch.workTime.length > 0 ? batch.workTime : null,
+          cleared,
         },
       })
       if (result.ok) {
@@ -497,15 +519,28 @@ export function useSkema(
       // their key sets and their order are byte-identical to the legacy build.
       const entries: { date: string; projectCode: string; hours: number }[] = []
       const absences: { date: string; absenceType: string; hours: number }[] = []
+      // An emptied or 0 cell is a removal (`cleared`), never dropped.
+      const clearedEntries: { date: string; projectCode: string }[] = []
+      const clearedAbsences: { date: string; absenceType: string }[] = []
       for (const c of cells) {
-        if (c.hours == null || c.hours === 0) continue
-        if (absenceTypeSet.has(c.rowKey)) {
+        const isAbsence = absenceTypeSet.has(c.rowKey)
+        if (c.hours == null || c.hours === 0) {
+          if (isAbsence) clearedAbsences.push({ date: c.date, absenceType: c.rowKey })
+          else clearedEntries.push({ date: c.date, projectCode: c.rowKey })
+        } else if (isAbsence) {
           absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
         } else {
           entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
         }
       }
-      return saveBatch({ year, month, entries, absences, workTime: workTime ?? null })
+      return saveBatch({
+        year,
+        month,
+        entries,
+        absences,
+        workTime: workTime ?? null,
+        cleared: { entries: clearedEntries, absences: clearedAbsences, workTime: null },
+      })
     },
     [saveBatch, year, month],
   )
@@ -620,6 +655,8 @@ export function useSkema(
 //
 // R16: useSkema is the single owner of the workTime payload builder. Every day
 // is clock time only — manual hours are retired (ADR-028, ADR-043 D10 / D-2.4).
+// A day with no interval is not a payload day: the server refuses it (400
+// skema_work_time_day_empty). An emptied day is sent as `cleared.workTime` by the page.
 // ════════════════════════════════════════════════════════════════════════════
 
 /**

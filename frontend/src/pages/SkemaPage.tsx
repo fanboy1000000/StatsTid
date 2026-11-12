@@ -459,6 +459,14 @@ export function SkemaPage() {
   const hydrationEpochRef = useRef(0)
 
   const workTimeDirtyRef = useRef<Set<string>>(new Set())
+  // Days whose period rows were all removed (and not re-entered since): posted as removals.
+  const workTimeRemovedRef = useRef<Set<string>>(new Set())
+
+  // The removal announcement: one polite live region (always mounted), spoken once per save that
+  // removed something really saved. The count changes the text's trailing character each time,
+  // so a second identical announcement is still a change a screen reader speaks.
+  const [removalAnnouncements, setRemovalAnnouncements] = useState(0)
+  const announceRemoval = useCallback(() => setRemovalAnnouncements((n) => n + 1), [])
   const workTimeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // S147 / QUAL-241 — rehydrate ALL editable local state (cells, work intervals) from the served data DURING RENDER ("adjust state while rendering": React
@@ -496,6 +504,7 @@ export function SkemaPage() {
     serverWorkIntervalsRef.current = new Map(workIntervalsFromData)
     pendingChangesRef.current = []
     workTimeDirtyRef.current = new Set()
+    workTimeRemovedRef.current = new Set()
     cellAdvancedSeqRef.current = new Map()
     workTimeAdvancedSeqRef.current = new Map()
     hydrationEpochRef.current += 1
@@ -602,15 +611,27 @@ export function SkemaPage() {
       (the local refs still hold the edits, so a retry rebuilds from live state); once it has
       left the screen the save is DROPPED (the hook's persistent, month-labelled alert tells the
       person) — it is never replayed. */
-  const sendWorkTime = useCallback((env: MonthEnv, payload: WorkTimeDay[]): Promise<boolean> => {
-    if (payload.length === 0) return Promise.resolve(true)
-    const dates = payload.map((r) => r.date)
+  const sendWorkTime = useCallback((env: MonthEnv, payload: WorkTimeDay[], clearedDates: string[] = []): Promise<boolean> => {
+    if (payload.length === 0 && clearedDates.length === 0) return Promise.resolve(true)
+    const dates = [...payload.map((r) => r.date), ...clearedDates]
     const epoch = hydrationEpochRef.current
     const seq = ++saveSeqRef.current
-    // What each date SENDS (the frozen rows), so a 422 revert can be overlap-guarded: revert a
-    // day ONLY when its CURRENT local work-time still equals what this save sent.
-    const sentByDate = new Map(payload.map((r) => [r.date, { intervals: r.intervals }]))
-    const save = saveSerial({ year: env.year, month: env.month, entries: null, absences: null, workTime: payload, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
+    // What each date SENDS (the frozen rows; a removed day sends none), so a 422 revert can be
+    // overlap-guarded: revert a day ONLY when its CURRENT local work-time still equals what this
+    // save sent.
+    const sentByDate = new Map<string, { intervals: WorkTimeDay['intervals'] }>([
+      ...payload.map((r): [string, { intervals: WorkTimeDay['intervals'] }] => [r.date, { intervals: r.intervals }]),
+      ...clearedDates.map((d): [string, { intervals: WorkTimeDay['intervals'] }] => [d, { intervals: [] }]),
+    ])
+    const save = saveSerial({
+      year: env.year,
+      month: env.month,
+      entries: null,
+      absences: null,
+      workTime: payload,
+      cleared: { entries: null, absences: null, workTime: clearedDates.map((date) => ({ date })) },
+      isDropped: () => epoch !== hydrationEpochRef.current,
+    }).then((result) => {
       const current = dataMonthRef.current
       const here =
         current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current
@@ -650,14 +671,18 @@ export function SkemaPage() {
         // reverts to the last KNOWN-GOOD server state, not the originally loaded one. Saves
         // settle strictly in send order (the serial queue); the per-day send-order number is a
         // belt-and-braces guard.
+        let removedSomething = false
         for (const d of dates) {
           const sent = sentByDate.get(d)!
+          // N-3: a removal is announced only when server truth held a value for the day.
+          if (clearedDates.includes(d) && (serverWorkIntervalsRef.current.get(d)?.length ?? 0) > 0) removedSomething = true
           if ((workTimeAdvancedSeqRef.current.get(d) ?? 0) > seq) continue
           workTimeAdvancedSeqRef.current.set(d, seq)
           if (sent.intervals.length > 0)
             serverWorkIntervalsRef.current.set(d, sent.intervals.map((iv) => ({ ...iv })))
           else serverWorkIntervalsRef.current.delete(d)
         }
+        if (removedSomething) announceRemoval()
         return true
       }
       // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty
@@ -670,14 +695,19 @@ export function SkemaPage() {
       workTimeSavesInFlightRef.current.delete(save)
     })
     return save
-  }, [saveSerial])
+  }, [saveSerial, announceRemoval])
 
   /** Fire a workTime save for the given dirty dates (the month on screen; the payload is built
-      from the live refs NOW). */
+      from the live refs NOW). A day with intervals is posted; a day whose period rows were all
+      removed (marked by `handleWorkIntervalsChange`) is posted as a removal; any other day with
+      no interval is posted as NOTHING — the server refuses an empty posted day (400
+      `skema_work_time_day_empty`), and a stale or half-typed day is not an intent to remove. */
   const fireWorkTimeSave = useCallback((dates: string[]): Promise<boolean> => {
     const env = dataMonthRef.current
     if (!env) return Promise.resolve(true)
-    return sendWorkTime(env, buildWorkTimePayload(dates, workIntervalsRef.current))
+    const posted = dates.filter((d) => (workIntervalsRef.current.get(d)?.length ?? 0) > 0)
+    const removed = dates.filter((d) => !posted.includes(d) && workTimeRemovedRef.current.has(d))
+    return sendWorkTime(env, buildWorkTimePayload(posted, workIntervalsRef.current), removed)
   }, [sendWorkTime])
 
   /** Bound a WHOLE flush (the in-flight saves it awaits AND the saves it fires itself). On timeout
@@ -749,9 +779,13 @@ export function SkemaPage() {
     }, 1000)
   }, [fireWorkTimeSave])
 
+  /** `intervals` is the day's valid set; an empty set is an explicit removal of the day (the
+      caller guarantees the day panel holds no period row at all). */
   const handleWorkIntervalsChange = useCallback(
     (date: string, intervals: WorkInterval[]) => {
       if (editLocked) return
+      if (intervals.length === 0) workTimeRemovedRef.current.add(date)
+      else workTimeRemovedRef.current.delete(date)
       setLocalWorkIntervals(prev => {
         const next = new Map(prev)
         if (intervals.length === 0) {
@@ -789,9 +823,12 @@ export function SkemaPage() {
         re-queue/retry posture (returns false). 401/403 are credential-shaped — a
         mid-edit session expiry must never discard typed cells. For the month still on
         screen the re-queue rebuilds FROM LIVE LOCAL STATE (Step-7a c2/c3), never the
-        stale captured delta, and never over a NEWER pending entry (a cleared cell, live
-        undefined, is not re-queued — the R17 inherited limitation). For any other month
+        stale captured delta, and never over a NEWER pending entry. An emptied cell (live
+        undefined) is re-queued as a removal, like any edit. For any other month
         (the person navigated on) the save is DROPPED and the hook's alert says so.
+
+      An emptied or 0 cell is posted under `cleared` (ADR-043 cell clearing), never dropped; on a
+      200 it is recorded absent, and a removal of a value server truth held is announced.
 
       A change set is split by month; each group is one POST under its own envelope, with
       the classification (absence vs project) fixed when the edit was queued. */
@@ -801,12 +838,17 @@ export function SkemaPage() {
     const seq = ++saveSeqRef.current
     const entries: NonNullable<SaveBatch['entries']> = []
     const absences: NonNullable<SaveBatch['absences']> = []
+    const clearedEntries: { date: string; projectCode: string }[] = []
+    const clearedAbsences: { date: string; absenceType: string }[] = []
     for (const c of changes) {
-      if (c.hours == null || c.hours === 0) continue
-      if (c.isAbsence) absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
+      if (c.hours == null || c.hours === 0) {
+        if (c.isAbsence) clearedAbsences.push({ date: c.date, absenceType: c.rowKey })
+        else clearedEntries.push({ date: c.date, projectCode: c.rowKey })
+      } else if (c.isAbsence) absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
       else entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
     }
-    const save = saveSerial({ year: env.year, month: env.month, entries, absences, workTime: null, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
+    const cleared = { entries: clearedEntries, absences: clearedAbsences, workTime: null }
+    const save = saveSerial({ year: env.year, month: env.month, entries, absences, workTime: null, cleared, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
       const current = dataMonthRef.current
       const here =
         current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current
@@ -820,14 +862,18 @@ export function SkemaPage() {
         // to the work-time fix), even when a newer local edit exists. Saves settle in send
         // order (the serial queue); the per-cell number is a belt-and-braces guard. A clear
         // (null/0) sets server truth to absent.
+        let removedSomething = false
         for (const c of changes) {
           const cellKey = `${c.rowKey}:${c.date}`
           const sent = c.hours === null || c.hours === 0 ? undefined : c.hours
+          // N-3: a removal is announced only when server truth held a value for the cell.
+          if (sent === undefined && serverCellsRef.current.has(cellKey)) removedSomething = true
           if ((cellAdvancedSeqRef.current.get(cellKey) ?? 0) > seq) continue
           cellAdvancedSeqRef.current.set(cellKey, seq)
           if (sent === undefined) serverCellsRef.current.delete(cellKey)
           else serverCellsRef.current.set(cellKey, sent)
         }
+        if (removedSomething) announceRemoval()
         return true
       }
       if (result.status === 'rejected') {
@@ -870,8 +916,7 @@ export function SkemaPage() {
         )
         if (hasNewer) continue
         const live = localCellsRef.current.get(`${c.rowKey}:${c.date}`)
-        if (live === undefined) continue
-        pendingChangesRef.current.push({ ...c, hours: live })
+        pendingChangesRef.current.push({ ...c, hours: live ?? null })
       }
       return false
     })
@@ -880,7 +925,7 @@ export function SkemaPage() {
       cellSavesInFlightRef.current.delete(save)
     })
     return save
-  }, [saveSerial])
+  }, [saveSerial, announceRemoval])
 
   const fireCellSave = useCallback((changes: PendingCell[]): Promise<boolean> => {
     const groups = new Map<string, PendingCell[]>()
@@ -1067,6 +1112,11 @@ export function SkemaPage() {
         const end = toHHmm(p.to)
         if (start !== null && end !== null) intervals.push({ start, end })
       }
+      // No valid period: either the day holds no typed row at all (the panel always shows one
+      // blank row, so "every period removed" is rows that are all blank) — an explicit removal —
+      // or some row holds half-typed text, which sends NOTHING: the stored day stands until a
+      // valid set or a removal. The server refuses an empty posted day.
+      if (intervals.length === 0 && periods.some((p) => p.from !== '' || p.to !== '')) return
       handleWorkIntervalsChange(date, intervals)
     },
     [handleWorkIntervalsChange, editLocked],
@@ -1358,6 +1408,11 @@ export function SkemaPage() {
               runs. It sits outside the aria-busy wrapper below, which assistive tech may mute. */}
           <span role="status" className={styles.monthLoading}>
             {loadPending ? 'Indlæser…' : busy ? 'Gemmer…' : ''}
+          </span>
+          {/* The removal announcement: its own always-mounted polite region, because the one above
+              speaks "Gemmer…" while a save runs and would overwrite it. */}
+          <span aria-live="polite" aria-atomic="true" data-testid="removal-announcement" className={styles.monthLoading}>
+            {removalAnnouncements === 0 ? '' : `Registreringen er fjernet${removalAnnouncements % 2 === 0 ? ' ' : ''}`}
           </span>
           <Button variant="ghost" size="sm" onClick={goToNextMonth}>
             Næste &rarr;

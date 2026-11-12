@@ -28,9 +28,8 @@
 //         data (no panel trigger), no prefill; when `rowPreferences` is absent the
 //         grid falls back to rendering ALL served rows (the approval surface's
 //         leader-sees-the-full-record contract).
-//   R17 — cell-clearing is a RECORDED inherited limitation: the save path drops
-//         null/0 cells, so the 0→null propagation semantics here are kept verbatim
-//         from the shipped grid (do NOT add delete semantics).
+//   Clearing — an emptied or 0 cell propagates null; the page posts it as a removal
+//         (`cleared`, ADR-043 cell clearing), so the grid itself adds no delete semantics.
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useCalendarToday } from '../contexts/CalendarContext'
 import type { SkemaRow, SkemaRowPreferences } from '../types'
@@ -433,10 +432,9 @@ export function SkemaGrid({
   )
 
   // Keeps the RAW typed text in the focused input (decimal comma survives
-  // mid-typing) while propagating the parsed value. Ordinary propagation semantics
-  // are verbatim from the shipped grid (R17): '' → null, 0 → null (the save path
-  // drops null/0 cells — clearing never persists; recorded inherited limitation),
-  // unparsable input → no call.
+  // mid-typing) while propagating the parsed value. Ordinary propagation: '' → null,
+  // 0 → null (the page posts null/0 as a removal under `cleared`, ADR-043 cell
+  // clearing), unparsable input → no call.
   //
   // S123/TASK-12303 — FULL-DAY-ONLY FILL-TO-NORM *ON INPUT* (mandatory, not blur):
   // for a `fullDayOnly` absence row, the moment a non-null/non-zero value is typed

@@ -295,7 +295,7 @@ describe('SkemaDayPanel — step 2: Fordel på projekter (R11 + R5)', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('clearing a project row propagates null (the save path drops null/0 — R17 recorded limitation)', () => {
+  it('clearing a project row propagates null (the page posts it as a removal)', () => {
     const allocations = new Map([['PRJ-A', 4]])
     const { props } = renderPanel({ periods: [per('p1', '08:00', '16:00')], allocations })
     fireEvent.change(screen.getByLabelText('Projekt Alfa'), { target: { value: '' } })

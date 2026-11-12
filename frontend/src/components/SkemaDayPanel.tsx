@@ -22,7 +22,7 @@
 //         (ADR-028, ADR-043 D10): the day total is the clock periods alone.
 //   S58 — the relocated validation mirrors (7202 deleted the old dialog): overlap
 //         flagging + the 24h day cap, ADVISORY only — the backend 422 stays
-//         authoritative (R5/R17: the save contract is frozen).
+//         authoritative (R5: the save contract is frozen).
 import { useMemo, useState } from 'react'
 import { Drawer } from './ui/Drawer'
 import { Alert } from './ui/Alert'
@@ -75,8 +75,8 @@ interface SkemaDayPanelProps {
   /** The served 0..2 boundary days (prev-month last / next-month first) — R6. */
   boundaryWorkTime?: readonly WorkTimeDay[]
   onPeriodsChange: (date: string, periods: DayPanelPeriod[]) => void
-  /** hours: parsed exact value; null = cleared (the save path drops null/0 —
-      recorded inherited limitation, R17). */
+  /** hours: parsed exact value; null = cleared (the page posts it as a removal under
+      `cleared`, ADR-043 cell clearing). */
   onAllocationChange: (date: string, projectKey: string, hours: number | null) => void
   onClose: () => void
   /** The step-2 header's "Administrer projekter" link (wired by 7205). */
