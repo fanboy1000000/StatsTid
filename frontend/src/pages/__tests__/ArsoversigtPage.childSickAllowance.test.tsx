@@ -1,7 +1,8 @@
 // S148 / TASK-14812 (QUAL-236) — AC-S0-2h part (2): the Årsoversigt's "Barns sygedag" tile
 // shows the allowance PER ILLNESS the server serves (whole days, plus the call-home day when the
 // server says it applies), never a yearly remainder ("saldo"). The server half is TASK-14811-T's
-// ChildSickAllowanceTileTests. Kind F (vitest).
+// ChildSickAllowanceTileTests. Kinds per case: F for the first three (each fails on the old page, which
+// showed "saldo"); R for the last (not opted in: the old page already omitted the tile).
 // Red conditions (on the page before the change, which read the yearly remainder the server no longer sends):
 //  - the OK26 and OK24 cases fail at "3 dage" / "2 dage" (the tile showed an em dash) and at
 //    the absence of "saldo" on the child tile (it carried that sub-line).
@@ -61,24 +62,24 @@ function childTile(): HTMLElement {
 beforeEach(() => mockUseYearOverview.mockReset())
 
 describe('ArsoversigtPage — Barns sygedag tile shows the allowance per illness', () => {
-  it('OK26 shape (3 days + call-home day): "3 dage" and the call-home sub-line, no "saldo"', () => {
+  // The whole tile text is pinned (anchored), so a tile kind that adds an hours figure
+  // ("22,2 t (3 dage)") or a "saldo" sub-line cannot pass.
+  it('F: OK26 shape (3 days + call-home day) reads exactly label, "3 dage", call-home sub-line', () => {
     renderTile({ eligible: true, days: 3, callHome: true })
-    const tile = childTile()
-    expect(tile).toHaveTextContent('3 dage')
-    expect(tile).toHaveTextContent('pr. sygdomsforløb + hjemkaldelsesdag')
-    expect(tile).not.toHaveTextContent('saldo')
+    expect(childTile().textContent).toMatch(/^Barns sygedag3 dagepr\. sygdomsforløb \+ hjemkaldelsesdag$/)
   })
 
-  it('OK24 shape (2 days, no call-home day): "2 dage" and "pr. sygdomsforløb" alone', () => {
+  it('F: OK24 shape (2 days, no call-home day) reads exactly label, "2 dage", "pr. sygdomsforløb"', () => {
     renderTile({ eligible: true, days: 2, callHome: false })
-    const tile = childTile()
-    expect(tile).toHaveTextContent('2 dage')
-    expect(tile).toHaveTextContent('pr. sygdomsforløb')
-    expect(tile).not.toHaveTextContent('hjemkaldelsesdag')
-    expect(tile).not.toHaveTextContent('saldo')
+    expect(childTile().textContent).toMatch(/^Barns sygedag2 dagepr\. sygdomsforløb$/)
   })
 
-  it('not opted in: no tile at all (owner OQ-1; also pinned in ArsoversigtPage.test.tsx)', () => {
+  it('F: opted in but no day configured today (null): the dash with "pr. sygdomsforløb"', () => {
+    renderTile({ eligible: true, days: null, callHome: false })
+    expect(childTile().textContent).toMatch(/^Barns sygedag–pr\. sygdomsforløb$/)
+  })
+
+  it('R: not opted in: no tile at all (owner OQ-1; also pinned in ArsoversigtPage.test.tsx)', () => {
     renderTile({ eligible: false, days: null, callHome: false })
     expect(screen.queryByText('Barns sygedag')).not.toBeInTheDocument()
   })
