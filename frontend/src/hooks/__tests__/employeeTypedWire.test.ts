@@ -336,9 +336,8 @@ describe('useSkema — THE GRADUATION: typed month GET + save POST', () => {
     expect(result.current.data?.absenceTypes[0].type).toBe('VACATION')
   })
 
-  // S148 TASK-14841: null/0 cells are no longer dropped — they go out under `cleared` (the key set
-  // gains `cleared`, present only when something is cleared); the empty→null collapsing and the
-  // posted rows' split/order are unchanged.
+  // S148 TASK-14841: null/0 cells go out under `cleared` (the body's last key, present only when
+  // something is cleared); empty lists collapse to null, and posted rows keep their split/order.
   it('save → POST /api/skema/{employeeId}/save, UNCONDITIONED; the body key set is year/month/entries/absences/workTime/cleared (empty→null), null/0 cells ride under cleared, and the row split/order is preserved', async () => {
     const calls = skemaCalls()
     const { result } = renderHook(() => useSkema('emp001', 2026, 3))

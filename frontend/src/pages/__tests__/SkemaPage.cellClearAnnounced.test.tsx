@@ -172,8 +172,26 @@ describe('SkemaPage — the removal is announced once (AC-CL-30, F)', () => {
     vi.useRealTimers()
     await waitFor(() => expect(spoken()).toBe(TEXT))
     expect(saveBodies).toHaveLength(1)
-    // One announcement = the text once, not doubled.
-    expect(announcement().textContent?.match(/Registreringen er fjernet/g)).toHaveLength(1)
+    // One announcement = the counter at 1 = the raw text with no trailing alternation character.
+    // (Mutation, not run: announceRemoval() inside the per-cell loop makes the counter 2, the text
+    // gains a trailing non-breaking space, and this assertion fails.)
+    expect(announcement().textContent).toBe(TEXT)
+  })
+
+  it('the region is visually hidden (screen-reader only) and empties when a new month hydrates', async () => {
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) =>
+      String(url).includes('/api/skema/emp001/month') && String(url).includes('month=4')
+        ? json(makeMonth({ month: 4, daysInMonth: 30, entries: [], absences: [], workTime: [], dailyNorm: [] }))
+        : base(url, init),
+    )
+    await renderLoaded()
+    expect(announcement()).toHaveClass('visually-hidden')
+    await editCell('Drift & support dag 5', '')
+    await waitFor(() => expect(spoken()).toBe(TEXT))
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await screen.findByText('April 2026')
+    await waitFor(() => expect(announcement().textContent).toBe(''))
   })
 
   it('removing a stored work-time day is announced', async () => {

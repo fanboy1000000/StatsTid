@@ -162,7 +162,12 @@ describe('SkemaPage — a refused clear restores the value (AC-CL-29 (1), F)', (
   it('a refused removal of a work-time day restores the stored period', async () => {
     saveAnswer = () => ({
       status: 422,
-      body: { error: 'child-sick-call-home-without-work', date: '2026-03-02', message: 'Arbejdet kan ikke fjernes fra en hjemsendelsesdag.' },
+      body: {
+        error: 'absence_type_not_eligible',
+        kind: 'child-sick-call-home-without-work',
+        date: '2026-03-02',
+        message: 'Arbejdet kan ikke fjernes fra en hjemsendelsesdag.',
+      },
     })
     await renderLoaded()
     const drawer = await openDay('2026-03-02')
@@ -173,9 +178,10 @@ describe('SkemaPage — a refused clear restores the value (AC-CL-29 (1), F)', (
     vi.useRealTimers()
     await waitFor(() => expect(saveBodies).toHaveLength(1))
     expect(saveBodies[0].cleared?.workTime).toEqual([{ date: '2026-03-02' }])
-    // Restored from server truth: closing and reopening the day shows the stored period again.
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Luk' }))
-    const reopened = await openDay('2026-03-02')
-    await waitFor(() => expect((within(reopened).getByLabelText('Fra') as HTMLInputElement).value).toBe('08:00'))
+    // The server's message is shown, and the OPEN panel shows the restored period at once
+    // (no closing and reopening).
+    expect(await screen.findByText(/Arbejdet kan ikke fjernes/)).toBeInTheDocument()
+    await waitFor(() => expect((within(drawer).getByLabelText('Fra') as HTMLInputElement).value).toBe('08:00'))
+    expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('16:00')
   })
 })

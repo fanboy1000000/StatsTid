@@ -461,6 +461,8 @@ export function SkemaPage() {
   const workTimeDirtyRef = useRef<Set<string>>(new Set())
   // Days whose period rows were all removed (and not re-entered since): posted as removals.
   const workTimeRemovedRef = useRef<Set<string>>(new Set())
+  // Re-seeds the open day panel's rows for reverted days (set once the panel state exists below).
+  const reseedPanelRef = useRef<(dates: string[]) => void>(() => {})
 
   // The removal announcement: one polite live region (always mounted), spoken once per save that
   // removed something really saved. The count changes the text's trailing character each time,
@@ -505,6 +507,7 @@ export function SkemaPage() {
     pendingChangesRef.current = []
     workTimeDirtyRef.current = new Set()
     workTimeRemovedRef.current = new Set()
+    setRemovalAnnouncements(0) // a removal is not news in the next month
     cellAdvancedSeqRef.current = new Map()
     workTimeAdvancedSeqRef.current = new Map()
     hydrationEpochRef.current += 1
@@ -663,6 +666,7 @@ export function SkemaPage() {
             }
             return next
           })
+          reseedPanelRef.current(revertDates)
         }
         return true // resolved: reverted to server truth.
       }
@@ -780,7 +784,7 @@ export function SkemaPage() {
   }, [fireWorkTimeSave])
 
   /** `intervals` is the day's valid set; an empty set is an explicit removal of the day (the
-      caller guarantees the day panel holds no period row at all). */
+      caller guarantees every row of the day panel is blank). */
   const handleWorkIntervalsChange = useCallback(
     (date: string, intervals: WorkInterval[]) => {
       if (editLocked) return
@@ -1027,8 +1031,8 @@ export function SkemaPage() {
       the refs as they are at this instant, each under the month on screen (its envelope and
       classification). Month navigation and unmount call it BEFORE the month changes: the
       debounce timers would otherwise fire after the next month hydrated, build the old day's
-      payload from refs that no longer hold it and send {intervals: []} — the
-      whole-day replace would wipe the stored times. (Unlike the flushes this does not first
+      payload from refs that no longer hold it — a day the refs no longer hold would be read as
+      removed or as nothing, never as the stored times. (Unlike the flushes this does not first
       await the in-flight POSTs: the awaits are what let the month change slip in before the
       read.) */
   const firePendingNow = useCallback(() => {
@@ -1080,6 +1084,15 @@ export function SkemaPage() {
   const [openDayDate, setOpenDayDate] = useState<string | null>(null)
   const [panelPeriods, setPanelPeriods] = useState<DayPanelPeriod[]>([])
   const panelIdRef = useRef(0)
+  // A work-time save the server refused reverts the day to server truth; the open panel's rows
+  // are separate state, so they are re-seeded from the restored intervals too.
+  useEffect(() => {
+    reseedPanelRef.current = (dates) => {
+      if (openDayDate === null || !dates.includes(openDayDate)) return
+      const truth = serverWorkIntervalsRef.current.get(openDayDate) ?? []
+      setPanelPeriods(truth.map((iv) => ({ id: `srv-${++panelIdRef.current}`, from: iv.start, to: iv.end })))
+    }
+  })
 
   const handleOpenDay = useCallback((date: string) => {
     // S147 / QUAL-241 — seed from the committed STATE (which the render-time hydration
@@ -1117,8 +1130,22 @@ export function SkemaPage() {
       // No valid period: either the day holds no typed row at all (the panel always shows one
       // blank row, so "every period removed" is rows that are all blank) — an explicit removal —
       // or some row holds half-typed text, which sends NOTHING: the stored day stands until a
-      // valid set or a removal. The server refuses an empty posted day.
-      if (intervals.length === 0 && periods.some((p) => p.from !== '' || p.to !== '')) return
+      // valid set or a removal. The server refuses an empty posted day. A removal still pending
+      // from an earlier blank state is withdrawn: the day goes back to server truth and is no
+      // longer dirty, so the timer posts nothing.
+      if (intervals.length === 0 && periods.some((p) => p.from !== '' || p.to !== '')) {
+        if (workTimeRemovedRef.current.delete(date)) {
+          workTimeDirtyRef.current.delete(date)
+          const truth = serverWorkIntervalsRef.current.get(date)
+          setLocalWorkIntervals((prev) => {
+            const next = new Map(prev)
+            if (truth && truth.length > 0) next.set(date, truth.map((iv) => ({ ...iv })))
+            else next.delete(date)
+            return next
+          })
+        }
+        return
+      }
       handleWorkIntervalsChange(date, intervals)
     },
     [handleWorkIntervalsChange, editLocked],
@@ -1413,7 +1440,7 @@ export function SkemaPage() {
           </span>
           {/* The removal announcement: its own always-mounted polite region, because the one above
               speaks "Gemmer…" while a save runs and would overwrite it. */}
-          <span aria-live="polite" aria-atomic="true" data-testid="removal-announcement" className={styles.monthLoading}>
+          <span aria-live="polite" aria-atomic="true" data-testid="removal-announcement" className="visually-hidden">
             {removalAnnouncements === 0 ? '' : `Registreringen er fjernet${removalAnnouncements % 2 === 0 ? ' ' : ''}`}
           </span>
           <Button variant="ghost" size="sm" onClick={goToNextMonth}>

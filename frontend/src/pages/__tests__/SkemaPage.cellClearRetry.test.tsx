@@ -6,7 +6,7 @@
 // (`saveBodies[0].cleared`) and the retried post (`saveBodies[1].cleared`) both fail; the old
 // re-queue also skipped a cell whose live value was undefined (the dropped clear).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, waitFor, fireEvent, act } from '@testing-library/react'
+import { screen, waitFor, fireEvent, act, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { renderWithCalendar } from '../../test/renderWithCalendar'
 import { SkemaPage } from '../SkemaPage'
@@ -157,5 +157,25 @@ describe('SkemaPage — a failed clear keeps the cell empty and retries (AC-CL-2
     await waitFor(() => expect(saveBodies).toHaveLength(2))
     expect(saveBodies[1].cleared?.entries).toEqual([{ date: '2026-03-05', projectCode: 'DRIFT' }])
     expect(saveBodies[1].entries).toBeNull()
+  })
+
+  it('a 5xx on a work-time day removal re-queues it as a removal (never as an empty day)', async () => {
+    saveAnswer = (n) => (n === 1 ? { status: 500, body: { error: 'boom' } } : { status: 200, body: {} })
+    await renderLoaded()
+    fireEvent.click(await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    const drawer = await screen.findByRole('dialog')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(saveBodies).toHaveLength(1))
+    expect(saveBodies[0].cleared?.workTime).toEqual([{ date: '2026-03-02' }])
+    await screen.findByRole('alert')
+
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await waitFor(() => expect(saveBodies).toHaveLength(2))
+    expect(saveBodies[1].cleared?.workTime).toEqual([{ date: '2026-03-02' }])
+    expect(saveBodies[1].workTime).toBeNull()
   })
 })

@@ -166,6 +166,20 @@ describe('SkemaPage — work-time removal vs half-typed day (AC-CL-28, F)', () =
     expect(saveBodies).toHaveLength(0)
   })
 
+  it('blank both times, then half-type within the debounce: the pending removal is withdrawn, nothing is posted', async () => {
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    vi.useRealTimers()
+    await settle()
+    expect(saveBodies).toHaveLength(0)
+  })
+
   it('month navigation before the autosave: a removed day posts cleared.workTime', async () => {
     await renderLoaded()
     const drawer = await openDay('2026-03-02')
