@@ -617,13 +617,15 @@ export function SkemaPage() {
     }
   }, [reportUnanswered])
 
-  /** Put days back in the grid: to what the newest unanswered save (other than `exceptSeq`) sent,
-      else to server truth. */
+  /** What a day's grid value should be: the newest unanswered save (other than `exceptSeq`) that is
+      not SUPERSEDED, else server truth. A save is superseded once a newer save for the day has
+      been acknowledged (200): it can only be older than what the server holds. */
   const restoreTarget = useCallback((d: string, exceptSeq?: number, newerThan = -1) => {
     let newest = -1
     let target: WorkTimeDay['intervals'] | undefined
+    const acknowledged = workTimeAdvancedSeqRef.current.get(d) ?? 0
     for (const [q, intervals] of workTimeInFlightRef.current.get(d) ?? []) {
-      if (q !== exceptSeq && q > newerThan && q > newest) {
+      if (q !== exceptSeq && q > newerThan && q > acknowledged && q > newest) {
         newest = q
         target = intervals
       }
@@ -634,6 +636,14 @@ export function SkemaPage() {
   /** `newerThan`: only a save sent AFTER that one counts (a settled save's own answer). */
   const restoreWorkTimeDays = useCallback((dates: string[], exceptSeq?: number, newerThan?: number) => {
     const targets = dates.map((d): [string, WorkTimeDay['intervals'] | undefined] => [d, restoreTarget(d, exceptSeq, newerThan)])
+    // The ref mirrors the grid one render late; patch it now so a decision made in the same tick
+    // reads the restored day.
+    const mirror = new Map(workIntervalsRef.current)
+    for (const [d, target] of targets) {
+      if (target && target.length > 0) mirror.set(d, target)
+      else mirror.delete(d)
+    }
+    workIntervalsRef.current = mirror
     setLocalWorkIntervals((prev) => {
       const next = new Map(prev)
       for (const [d, target] of targets) {
@@ -684,7 +694,8 @@ export function SkemaPage() {
         return result.status !== 'failed'
       }
       if (result.status === 'rejected') {
-        // 422 — REVERT each affected day's work-time to server truth (mirror of
+        // 422 — REVERT each affected day's work-time to the newest save still outstanding, else
+        // server truth (mirror of
         // fireCellSave). The alert is already surfaced by the hook; the revert
         // is what makes "422 resolved" honest (the rejected edit no longer lingers
         // for a later preference flush / refetch to silently discard). Counts
@@ -700,7 +711,7 @@ export function SkemaPage() {
           restoreWorkTimeDays(revertDates, seq)
           reseedPanelRef.current(revertDates, seq)
         }
-        return true // resolved: reverted to server truth.
+        return true // resolved: reverted to the newest outstanding save, else server truth.
       }
       if (result.status === 'ok') {
         // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL save, so a later 422
@@ -728,9 +739,11 @@ export function SkemaPage() {
       // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty dates (B2 retry;
       // the local refs still hold the edits), EXCEPT a day whose panel is half-typed: that day
       // sends nothing, and the grid goes back to what is in flight or stored.
+      // A SUPERSEDED save (a newer one for the day was acknowledged) is simply dropped: it can
+      // only hold older times than the server, so re-queueing it would overwrite them.
       const halfTyped = dates.filter((d) => halfTypedDaysRef.current.has(d))
       for (const d of dates) {
-        if (halfTyped.includes(d)) continue
+        if (halfTyped.includes(d) || (workTimeAdvancedSeqRef.current.get(d) ?? 0) > seq) continue
         workTimeDirtyRef.current.add(d)
         // A removal that failed while the grid shows the day empty is retried as a removal (a
         // half-typed withdrawal may have dropped its mark).
@@ -1195,8 +1208,8 @@ export function SkemaPage() {
       // blank row, so "every period removed" is rows that are all blank) — an explicit removal —
       // or some row holds half-typed text, which sends NOTHING: the stored day stands until a
       // valid set or a removal. The server refuses an empty posted day. A change still UNSENT
-      // (the day is dirty: a removal or a valid edit) is withdrawn: the day goes back to server
-      // truth and is no longer dirty, so the timer posts nothing. A change already sent is left
+      // (the day is dirty: a removal or a valid edit) is withdrawn: the day goes back to the newest
+      // save still outstanding, else server truth, and is no longer dirty, so the timer posts nothing. A change already sent is left
       // alone — its answer decides, and the grid must not show what the server just removed.
       if (intervals.length === 0 && periods.some((p) => p.from !== '' || p.to !== '')) {
         halfTypedDaysRef.current.add(date)

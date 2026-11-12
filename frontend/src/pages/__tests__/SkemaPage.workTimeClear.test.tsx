@@ -276,6 +276,34 @@ describe('SkemaPage — the grid follows the newest unanswered work-time save (A
     expect(saveBodies[1].workTime).toBeNull()
   })
 
+  // Kind F: a save older than the newest ACKNOWLEDGED one never wins. A, B, C are all held past the
+  // queue bound; C answers 200, then A answers 200, then B fails (5xx). The grid must stay at C,
+  // and B (superseded) must not be re-queued and re-posted at navigation.
+  it('a save older than the newest acknowledged one never wins: not in the grid, not re-posted after its own failure', async () => {
+    const held = holdSaves()
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    vi.useFakeTimers()
+    for (const from of ['09:00', '10:00', '11:00']) {
+      fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: from } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(35000) }) // past each save's queue bound
+    vi.useRealTimers()
+    await waitFor(() => expect(held).toHaveLength(3))
+    held[2](200) // C
+    await settle()
+    held[0](200) // A, older than C
+    await settle()
+    expect(times(await reopen('2026-03-02'))).toEqual(['11:00', '16:00'])
+    held[1](500) // B, superseded by C
+    await screen.findByRole('alert')
+    expect(times(await reopen('2026-03-02'))).toEqual(['11:00', '16:00'])
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await settle()
+    expect(saveBodies).toHaveLength(3)
+  })
+
   it('overlapping saves: the newer is refused (422) first, then the older answers 200: the grid ends at the older save', async () => {
     const held = holdSaves()
     await renderLoaded()
