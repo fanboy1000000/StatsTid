@@ -455,7 +455,7 @@ public sealed class VacationSettlementService
             await _balanceRepo.WriteCarryoverInAsync(
                 conn, tx, employeeId, entitlementType, entitlementYear + 1,
                 carryoverDays: partition.TransferDays, seedQuota: seedQuota,
-                seedResetMonth: snapshot.ResetMonth, seedAbsenceTypes: CarryoverSeedAbsenceTypes, ct);
+                seedResetMonth: snapshot.ResetMonth, seedAbsenceTypes: [SettledAbsenceType(entitlementType)], ct);
         }
 
         // Events on employee-{id} (ADR-018 D6) via the outbox + the ADR-026 audit_projection row
@@ -521,14 +521,19 @@ public sealed class VacationSettlementService
     }
 
     /// <summary>
-    /// QUAL-196 — the absence types whose recorded feriedage seed <c>used</c> of a next-year VACATION
-    /// row the carryover creates. The carryover is VACATION-only (OA-6), and VACATION's one absence
-    /// type is <see cref="AbsenceTypes.Vacation"/>: the Backend's <c>EntitlementMapping</c> sends no
-    /// other type to VACATION, and Infrastructure cannot reference that Backend.Api map. The
-    /// settlement's own recorded-absence read keys VACATION the same way (ReadRecordedFeriedageAsync).
+    /// The absence type whose recorded feriedage the settlement counts for an entitlement type: the
+    /// settled year's consumption read (<see cref="ReadRecordedFeriedageAsync"/>) and the <c>used</c>
+    /// seed of a next-year row the carryover creates (QUAL-196) both key on it, so the two agree.
+    /// SPECIAL_HOLIDAY is booked as <see cref="AbsenceTypes.SpecialHolidayAllowance"/>; VACATION,
+    /// CARE_DAY and SENIOR_DAY are booked under their own name (the Backend's <c>EntitlementMapping</c>,
+    /// which Infrastructure cannot reference, maps exactly these). No absence type maps to CHILD_SICK
+    /// (the child's sick days are counted per illness, QUAL-236), so its identity name matches no row.
     /// </summary>
-    // shortcut(pending): a second copy of EntitlementMapping's VACATION entry, which Infrastructure cannot reference; upgrade when another absence type maps to VACATION or the map moves to SharedKernel
-    private static readonly string[] CarryoverSeedAbsenceTypes = [AbsenceTypes.Vacation];
+    private static string SettledAbsenceType(string entitlementType) => entitlementType switch
+    {
+        SpecialHolidayType => AbsenceTypes.SpecialHolidayAllowance,
+        _ => entitlementType,
+    };
 
     /// <summary>
     /// QUAL-196 (owner Q4, 2026-11-11; cycle-3 ruling R1) — the <c>total_quota</c> a carryover gives
@@ -547,13 +552,18 @@ public sealed class VacationSettlementService
     /// the service already holds, so the service's constructor (and the R4 isolation pin on it) is
     /// unchanged.</para>
     ///
-    /// <para><b>OA-5 (ruled 2026-11-11).</b> When year N+1's key has no live config row, the chain
-    /// cannot run (the Skema save skips its quota work there; a carryover writes a legal transfer and
-    /// cannot skip), so the seed falls back to <paramref name="settledYearQuota"/> and the fallback is
-    /// logged. A legal transfer is never refused for its seed; a row created that way keeps the
-    /// settled year's total even if a next-year config row is added later (QUAL-196's OA-5
-    /// residual; unreachable from the seeds, where every agreement has an open VACATION row under
-    /// both OK versions).</para>
+    /// <para><b>A key with no open row.</b> The chain needs a live operand (the Skema save skips its
+    /// quota work without one), but a carryover writes a legal transfer and cannot skip. So when the
+    /// key's open row is gone (an admin closed it with no successor), the seed is the dated row in
+    /// force at year N+1's start under the same key, read directly: that is still the quota the
+    /// year began with.</para>
+    ///
+    /// <para><b>OA-5 (ruled 2026-11-11).</b> Only when year N+1's key has no row in force at the year
+    /// start at all (neither an open row nor a dated row at that date) does the seed fall back to
+    /// <paramref name="settledYearQuota"/>, and the fallback is logged. A legal transfer is never
+    /// refused for its seed; a row created that way keeps the settled year's total even if a
+    /// next-year config row is added later (QUAL-196's OA-5 residual; unreachable from the seeds,
+    /// where every agreement has an open VACATION row under both OK versions).</para>
     /// </summary>
     /// <param name="employeeId">The employee whose next-year row may be created.</param>
     /// <param name="entitlementType">The settled entitlement type (VACATION).</param>
@@ -575,10 +585,17 @@ public sealed class VacationSettlementService
             entitlementType, nextYearAgreement, nextYearOkVersion, ct);
         if (liveConfig is null)
         {
+            // No open row under year N+1's key: the row dated at the year start, same key (see the
+            // remarks); OA-5 only when that is missing too.
+            var yearStartRow = await _configRepo.GetByTypeAtAsync(
+                entitlementType, nextYearAgreement, nextYearOkVersion, nextYearStart, ct);
+            if (yearStartRow is not null)
+                return yearStartRow.AnnualQuota;
+
             _logger.LogWarning(
-                "Vacation carryover seed (OA-5): no live {Type} config under agreement {Agreement} / {OkVersion} " +
-                "at {NextYearStart} for {EmployeeId}; a next-year ({NextYear}) balance row created by this " +
-                "carryover is seeded with the settled year's quota {SettledYearQuota}.",
+                "Vacation carryover seed (OA-5): no {Type} config in force under agreement {Agreement} / {OkVersion} " +
+                "at {NextYearStart} (no open row, no dated row) for {EmployeeId}; a next-year ({NextYear}) balance " +
+                "row created by this carryover is seeded with the settled year's quota {SettledYearQuota}.",
                 entitlementType, nextYearAgreement, nextYearOkVersion, nextYearStart, employeeId,
                 nextEntitlementYear, settledYearQuota);
             return settledYearQuota;
@@ -1981,13 +1998,7 @@ public sealed class VacationSettlementService
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, string entitlementType, DateOnly start, DateOnly end, CancellationToken ct)
     {
-        // entitlementType → absence_type. Slice 1 settles VACATION (absence_type 'VACATION'); for
-        // forward-safety map the common types, defaulting to the identity (covers VACATION).
-        var absenceType = entitlementType switch
-        {
-            "SPECIAL_HOLIDAY" => AbsenceTypes.SpecialHolidayAllowance,
-            _ => entitlementType, // VACATION/CARE_DAY/SENIOR_DAY are identity; CHILD_SICK has 3 variants (not settled in 1a)
-        };
+        var absenceType = SettledAbsenceType(entitlementType);
 
         // S145 / TASK-14507 (R20) — CURRENT rows only: a re-saved Skema cell is counted once. This
         // sum is money (SPECIAL_HOLIDAY `used`, a TERMINATION's usedForSnapshot), so a replaced row

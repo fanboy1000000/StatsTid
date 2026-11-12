@@ -425,7 +425,8 @@ public static class VacationSettlementEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the in-lock re-reads, the carryover's balance seed among them, must see the lock winner's commit.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // S71 / TASK-7103 (SPRINT-71 R12) — ONE employee advisory lock across ALL settlement

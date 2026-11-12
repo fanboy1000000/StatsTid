@@ -384,7 +384,8 @@ public static class EmployeeProfileEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the post-lock reads, the revaluation's balance seed among them, must see the lock winner's commit.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // ── S66 / TASK-6604 (ADR-032 D4) — employee-scoped advisory lock FIRST ──
