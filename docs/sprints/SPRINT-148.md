@@ -940,3 +940,16 @@ TASK-14811-T dispatched on `162da27c`.
   - **Both notes fixed by the Orchestrator** (`72fa5c23`, tests only; the Regression project builds):
     - the race fact also pins the refused date;
     - two colliding fact labels are renumbered.
+- **Merged** (`26065e1a`): one octopus merge of the TASK-14811 stack (`72fa5c23`) and TASK-14812 (`28ac4e89`), so master's frontend never trails the regenerated contract.
+  - **Merge-checklist item 8 is done in the same commit.** The nine `shortcut(pending)` tags are registered, and `check_docs` reports 13 shortcuts, all registered. The registrations:
+    - **QUAL-249** (M): the call-home hours export under the provisional `SLS_0530`;
+    - **QUAL-250** (M): the other parent's days are not modelled;
+    - **QUAL-BF-004**: AC's OK26 rule is provisional;
+    - **QUAL-BF-005**: the call-home table lives in code;
+    - **QUAL-BF-006**: illnesses are told apart only by the code chosen and calendar adjacency. Its wording is broadened per Fable c2, and the code comment is reworded to match.
+  - **QUAL-251** (M) registers the `/summary` CHILD_SICK row that still serves a yearly quota (Codex: not harmless for API callers).
+- **GATE after the 14811 stack, on master `26065e1a`: green.**
+  - Build: 0 errors, 143 warnings, CA2100 113.
+  - Unit 1720, DemoSeed 170, Regression non-Docker 140.
+  - Frontend: tsc, lint, e2e typecheck and build green; vitest 87 files / 1096 tests.
+  - The Docker facts (the chain, Rules A and B, the race, payroll, the mapping, the tile) and M-8, M-22 and M-23 are CI-W2, CI-M2 and CI-M2b's.
