@@ -1382,3 +1382,45 @@ TASK-14842-T dispatched.
 - **Run time:** about 100 minutes in all (14:05 to 15:45 UTC).
 - **Status change:** wave 2's Docker facts move from "CI-pending" to "CI-verified" (run 43233683529). PR #57 is closed unmerged and `ci/s148-w2` deleted.
 - **Wave 3 dispatch is unblocked** (TASK-14813's prerequisite). No wave-3 merge happens before CI-M2 and CI-M2b are judged against their frozen lists (`PLAN:119`).
+
+**CI-M2 and CI-M2b: judged, both as frozen.** Each run deliberately broke production code, and was expected to end red on exactly the tests named in its frozen list, at the named assertion. Both did. They were read from the trx files of runs whose headSha matched the pushed tips. Both had a Regression trx.
+- **What this proves:** every wave-2 Docker pin that rested on a mutation can fail for the defect it exists for. Until now that was argued; now it is observed.
+
+**CI-M2** (run 43238030414, draft PR #58, at `d12c7a94` = mutations `0f1e9b85` + the evidence-only `ci.yml` commit).
+- **Jobs:** `build-and-test` red, as designed. Smoke, E2E, the frontend build, docs, lizard and gitleaks are green. Smoke and E2E staying green confirms the census: neither uses the call-home code.
+- **Unit:** 1719 passed, 2 failed, frozen rows 1 and 2:
+  - the entry count, `Expected: 12 Actual: 11` at `:81`;
+  - "CHILD_SICK_CALL_HOME has no classification" at `:132`.
+- **DemoSeed:** 170/170.
+- **Regression:** 2534 passed, 21 failed. These are exactly frozen rows 3 … 23, with no unlisted red and no listed fact green. Each pin failed at its "must trip" assertion:
+  - **M-8** (rows 3–13): every call-home fact was refused at the vocabulary gate. The response was 422 `absence_type_unknown` at the save, or `absence_type_unknown` in place of `absence_type_not_eligible`. This is the save step, as NR-P29 narrowed it: M-8's evidence is "the save refuses an unclassified code", not the credit or export halves. Those halves are CI-M2b's.
+  - **M-18:**
+    - AC-CL-34: `clearedFeriedage` expected 0.5, actual 1.0 (`SkemaCellClearRaceTests.cs:150`).
+    - AC-CL-35, the census correction: `used` expected 0.5, actual −0.5 (`:240`).
+  - **M-19:** AC-CL-24 `Assert.False(away)`: actual True (`TeamOverviewAggregateTests.cs:748`).
+  - **M-20:** AC-CL-33 (1) `(marker, outbox_id)` expected (40, 40), actual (−1, 39) (`ProjectionBackfillClearTests.cs:252`). The census facts AC-CL-3 (157 vs 156), AC-CL-22 (1)–(3) and AC-CL-33 (4) failed at their work-time tuples.
+  - **M-21:** AC-CL-38 `(intervals, outbox_id, marker)` expected ("09:00-13:00", 41, null), actual (…, 41, 40) (`:408`). The combined M-20 + M-21 reading held exactly: the marker is set, and `outbox_id` stays the re-registration's.
+
+**CI-M2b** (run 43238051149, draft PR #59, at `06ff9fee` = mutations `78f6a719` + the same `ci.yml` commit).
+- **Jobs:** `build-and-test` red, as designed; the other six jobs green.
+- **Unit:** 1720 passed, 1 failed, row 1: `Expected: Credit Actual: Neutral`.
+- **DemoSeed:** 170/170.
+- **Regression:** 2552 passed, 3 failed. These are exactly rows 2–4:
+  - **M-22, the credit fact:** the closing flex expected 1.0, actual −2.50 (`ChildSickCallHomePayrollTests.cs:78`), exactly the census value. The save answered 200 first.
+  - **M-23, the export fact:** `Assert.Single` found no call-home export line (`:99`).
+  - **M-23, the mapping fact:** "AC/OK26: expected exactly one open CHILD_SICK_CALL_HOME mapping, to SLS_0530; found []" (`ChildSickCallHomeMappingTests.cs:64`).
+- **Independence observed:**
+  - the export and mapping facts did not fail on M-22's credit change;
+  - the credit fact failed with M-22's arithmetic, not on the mapping;
+  - neither mutation changed what the save accepts.
+
+**What this settles:**
+- **Fable c5 N-1** (Step 0b, carried in the plan's M4 list): with M-8 narrowed to the save gate, the "exported under `SLS_0530`" half had no red evidence. It is **closed with evidence**: M-23 turned the export fact red, and M-22 the credit fact.
+- **The wave-2 mutation evidence is complete:**
+  - M-8 and M-18 … M-23 all observed red at their pins;
+  - M-17 was proved locally at 14840-T's gate;
+  - the Rule A and Rule B pins (M-A, M-B) stay argued, since their F facts' base red is their evidence.
+
+**Clean-up:** PRs #58 and #59 closed unmerged; `ci/s148-m2` and `ci/s148-m2b` deleted, remotely and locally; the builder's worktree removed.
+
+**The wave-2 gate (`PLAN:119`) is passed:** CI-W2, CI-M2 and CI-M2b. Wave-3 merges are unblocked once the stack clears its merge checklist.
