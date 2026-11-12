@@ -143,6 +143,55 @@ public sealed class ChildSickIllnessStartTests : IAsyncLifetime
         Assert.Equal(new[] { (Tuesday, Day1, 7.4m) }, await _host.ReadAbsencesAsync(emp));
     }
 
+    /// <summary>
+    /// Rule A (5), the 1st-sick-day pair. In ONE save: day 1 on Monday 8, day 2 on Tuesday 9 and day 1 on Wednesday 10 June.
+    /// The day before Wednesday holds a 2nd sick day, so Wednesday's day 1 is refused (any of the three day codes before it
+    /// counts), <c>kind = child-sick-illness-start</c>, naming Wednesday 10 June, <c>absenceType = CHILD_SICK_DAY</c>. No row is
+    /// written. (Monday's and Tuesday's rows are legal in themselves.)
+    ///
+    /// <para><b>Kind F.</b> Red on the base: no rule A, the save answers 200 and all three rows exist. Mutation X (the arm's
+    /// "day before holds day 1, 2 or 3" narrowed to "holds day 1") also turns it red: Tuesday holds day 2, so the narrowed rule
+    /// no longer refuses and the save answers 200.</para>
+    /// </summary>
+    [Fact]
+    public async Task DayOneAfterDayTwo_Refused()
+    {
+        var emp = await _host.SeedEmployeeAsync("HK");
+
+        var rsp = await _host.SaveAsync(emp, "HK", June,
+            (Day1, 7.4m, Monday), ("CHILD_SICK_DAY_2", 7.4m, Tuesday), (Day1, 7.4m, Wednesday));
+
+        await ChildSickHost.AssertRefusalAsync(rsp, StartKind, Day1, Wednesday, DayOneMessage(Day1, Wednesday));
+        Assert.Empty(await _host.ReadAbsencesAsync(emp));
+    }
+
+    /// <summary>
+    /// Rule A (6), the call-home pair. A call-home day on Monday 8 June (4,40 h, 08:00-11:00 worked) is saved (200). A second
+    /// save of a call-home day on Tuesday 9 June (4,40 h, 08:00-11:00 worked, so rule B is satisfied) is refused: the day
+    /// before holds a call-home day, and the call-home arm counts ALL four child codes. <c>kind = child-sick-illness-start</c>,
+    /// <c>absenceType = CHILD_SICK_CALL_HOME</c>, naming Tuesday 9 June. Tuesday's absence and work-time day are not written;
+    /// only Monday's remain.
+    ///
+    /// <para><b>Kind F.</b> Red on the base: no rule A, the Tuesday save answers 200. Mutation Y (the call-home arm narrowed to
+    /// the three day codes, so a call-home day before no longer counts) also turns it red.</para>
+    /// </summary>
+    [Fact]
+    public async Task CallHomeAfterCallHome_Refused()
+    {
+        var emp = await _host.SeedEmployeeAsync("HK");
+        await ChildSickHost.AssertOkAsync(await _host.SaveRawAsync(emp, "HK", June,
+            absences: new[] { (CallHome, 4.4m, Monday) },
+            workTime: new[] { (Monday, Morning3Hours) }));
+
+        var rsp = await _host.SaveRawAsync(emp, "HK", June,
+            absences: new[] { (CallHome, 4.4m, Tuesday) },
+            workTime: new[] { (Tuesday, Morning3Hours) });
+
+        await ChildSickHost.AssertRefusalAsync(rsp, StartKind, CallHome, Tuesday, DayOneMessage(CallHome, Tuesday));
+        Assert.Equal(new[] { (Monday, CallHome, 4.4m) }, await _host.ReadAbsencesAsync(emp));
+        Assert.Equal(new[] { (Monday, "08:00-11:00") }, await _host.ReadWorkTimeAsync(emp));
+    }
+
     // ── Rule B ──
 
     /// <summary>
