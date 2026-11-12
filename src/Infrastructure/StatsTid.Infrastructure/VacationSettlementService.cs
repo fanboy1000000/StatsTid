@@ -419,9 +419,10 @@ public sealed class VacationSettlementService
         }
 
         // §21 carryover (ADR-033 D5/D6) — DERIVED from transfer_days; idempotent (overwrite, not add).
-        // In slice 1 the next-year carryover total IS the §21 term (the §22 term is 0). seedQuota is
-        // next year's annual entitlement (the snapshot's dated annual_quota — VACATION quota is the
-        // same across the boundary; the next-year row, if it materializes here, seeds at that quota).
+        // In slice 1 the next-year carryover total IS the §21 term (the §22 term is 0). If the
+        // next-year row does not exist yet, it is created with next year's OWN year-start quota and
+        // with `used` = the Σ already booked into next year (QUAL-196; owner Q4; cycle-3 ruling R1):
+        // see ResolveCarryoverSeedQuotaAsync. An existing next-year row keeps its quota and used.
         //
         // WARNING 1 (Codex Step-5a) — SKIP the carryover write when transfer is zero. WriteCarryoverInAsync
         // OVERWRITES next-year carryover_in (SET, not +=); calling it with 0 would CLOBBER any
@@ -448,9 +449,13 @@ public sealed class VacationSettlementService
                 }
             }
 
+            var seedQuota = await ResolveCarryoverSeedQuotaAsync(
+                employeeId, entitlementType, entitlementYear + 1, snapshot.ResetMonth,
+                user.AgreementCode, settledYearQuota: snapshot.AnnualQuota, ct);
             await _balanceRepo.WriteCarryoverInAsync(
                 conn, tx, employeeId, entitlementType, entitlementYear + 1,
-                carryoverDays: partition.TransferDays, seedQuota: snapshot.AnnualQuota, ct);
+                carryoverDays: partition.TransferDays, seedQuota: seedQuota,
+                seedResetMonth: snapshot.ResetMonth, seedAbsenceTypes: CarryoverSeedAbsenceTypes, ct);
         }
 
         // Events on employee-{id} (ADR-018 D6) via the outbox + the ADR-026 audit_projection row
@@ -513,6 +518,75 @@ public sealed class VacationSettlementService
             partition.TransferDays, partition.PayoutDays, partition.ForfeitDays);
 
         return SettlementOutcome.Settled(persisted, partition);
+    }
+
+    /// <summary>
+    /// QUAL-196 — the absence types whose recorded feriedage seed <c>used</c> of a next-year VACATION
+    /// row the carryover creates. The carryover is VACATION-only (OA-6), and VACATION's one absence
+    /// type is <see cref="AbsenceTypes.Vacation"/>: the Backend's <c>EntitlementMapping</c> sends no
+    /// other type to VACATION, and Infrastructure cannot reference that Backend.Api map. The
+    /// settlement's own recorded-absence read keys VACATION the same way (ReadRecordedFeriedageAsync).
+    /// </summary>
+    private static readonly string[] CarryoverSeedAbsenceTypes = [AbsenceTypes.Vacation];
+
+    /// <summary>
+    /// QUAL-196 (owner Q4, 2026-11-11; cycle-3 ruling R1) — the <c>total_quota</c> a carryover gives
+    /// a next-year balance row it creates: the config in force on the first day of that NEXT year,
+    /// never the settled year's quota and never the live row's. Read through the Skema save's
+    /// resolver chain with year N+1's start as the operation date: the OK version at that date, the
+    /// agreement dated there (else <paramref name="liveAgreementCode"/>), that key's live (open) row
+    /// as the chain's live operand, then
+    /// <see cref="DatedEntitlementConfigResolver.ResolveDatedConfigAsync"/> at the year start
+    /// (ADR-021 D4, ADR-023 D3 graceful). No part-time fraction is applied: VACATION is a flat day
+    /// count by law (ADR-031; OA-6).
+    ///
+    /// <para><b>The graceful chain is confined to this seed.</b> The snapshot's own valuation reads
+    /// stay fail-closed (ADR-033 D10); this value only fills <c>total_quota</c> of a row that did not
+    /// exist, which the settlement never values. The factory is built here from the two repositories
+    /// the service already holds, so the service's constructor (and the R4 isolation pin on it) is
+    /// unchanged.</para>
+    ///
+    /// <para><b>OA-5 (ruled 2026-11-11).</b> When year N+1's key has no live config row, the chain
+    /// cannot run (the Skema save skips its quota work there; a carryover writes a legal transfer and
+    /// cannot skip), so the seed falls back to <paramref name="settledYearQuota"/> and the fallback is
+    /// logged. A legal transfer is never refused for its seed; a row created that way keeps the
+    /// settled year's total even if a next-year config row is added later (QUAL-196's OA-5
+    /// residual; unreachable from the seeds, where every agreement has an open VACATION row under
+    /// both OK versions).</para>
+    /// </summary>
+    /// <param name="employeeId">The employee whose next-year row may be created.</param>
+    /// <param name="entitlementType">The settled entitlement type (VACATION).</param>
+    /// <param name="nextEntitlementYear">The year the carryover lands in (settled year + 1).</param>
+    /// <param name="resetMonth">The type's <c>reset_month</c> (the settlement snapshot's).</param>
+    /// <param name="liveAgreementCode">The employee's live agreement code — the chain's fallback when
+    /// no dated agreement row covers year N+1's start (the Skema save passes the same operand).</param>
+    /// <param name="settledYearQuota">The settled year's quota — OA-5's fallback only.</param>
+    public async Task<decimal> ResolveCarryoverSeedQuotaAsync(
+        string employeeId, string entitlementType, int nextEntitlementYear, int resetMonth,
+        string liveAgreementCode, decimal settledYearQuota, CancellationToken ct = default)
+    {
+        var nextYearStart = EntitlementPeriodResolver
+            .ResolveForYear(entitlementType, resetMonth, nextEntitlementYear).AccrualStart;
+        var nextYearOkVersion = OkVersionResolver.ResolveVersion(nextYearStart);
+        var nextYearAgreement = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, nextYearStart, ct)
+            ?? liveAgreementCode;
+        var liveConfig = await _configRepo.GetCurrentOpenAsync(
+            entitlementType, nextYearAgreement, nextYearOkVersion, ct);
+        if (liveConfig is null)
+        {
+            _logger.LogWarning(
+                "Vacation carryover seed (OA-5): no live {Type} config under agreement {Agreement} / {OkVersion} " +
+                "at {NextYearStart} for {EmployeeId}; a next-year ({NextYear}) balance row created by this " +
+                "carryover is seeded with the settled year's quota {SettledYearQuota}.",
+                entitlementType, nextYearAgreement, nextYearOkVersion, nextYearStart, employeeId,
+                nextEntitlementYear, settledYearQuota);
+            return settledYearQuota;
+        }
+
+        var yearStartConfig = await new DatedEntitlementConfigResolverFactory(_configRepo, _agreementCodeRepo)
+            .Create(employeeId, nextYearOkVersion, liveAgreementCode, nextYearAgreement)
+            .ResolveDatedConfigAsync(entitlementType, nextYearStart, nextYearOkVersion, liveConfig, ct);
+        return yearStartConfig.AnnualQuota;
     }
 
     // ------------------------------------------------------------------
