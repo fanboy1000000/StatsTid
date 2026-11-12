@@ -96,7 +96,8 @@ public sealed class ChildSickIllnessStartRaceTests : SendConcurrencyTestBase
         Assert.Multiple(
             () => Assert.Equal("absence_type_not_eligible", body.GetProperty("error").GetString()),
             () => Assert.Equal("child-sick-illness-start", body.GetProperty("kind").GetString()),
-            () => Assert.Equal(Day1, body.GetProperty("absenceType").GetString()));
+            () => Assert.Equal(Day1, body.GetProperty("absenceType").GetString()),
+            () => Assert.Equal("2026-06-09", body.GetProperty("date").GetString()));
 
         // THE invariant: one 1st sick day, not two on consecutive days.
         Assert.Equal(1, await CountDayOneRowsAsync(emp));

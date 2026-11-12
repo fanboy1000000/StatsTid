@@ -144,7 +144,7 @@ public sealed class ChildSickIllnessStartTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Rule A (5), the 1st-sick-day pair. In ONE save: day 1 on Monday 8, day 2 on Tuesday 9 and day 1 on Wednesday 10 June.
+    /// Rule A (1b), the 1st-sick-day pair. In ONE save: day 1 on Monday 8, day 2 on Tuesday 9 and day 1 on Wednesday 10 June.
     /// The day before Wednesday holds a 2nd sick day, so Wednesday's day 1 is refused (any of the three day codes before it
     /// counts), <c>kind = child-sick-illness-start</c>, naming Wednesday 10 June, <c>absenceType = CHILD_SICK_DAY</c>. No row is
     /// written. (Monday's and Tuesday's rows are legal in themselves.)
@@ -166,7 +166,7 @@ public sealed class ChildSickIllnessStartTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Rule A (6), the call-home pair. A call-home day on Monday 8 June (4,40 h, 08:00-11:00 worked) is saved (200). A second
+    /// Rule A (3b), the call-home pair. A call-home day on Monday 8 June (4,40 h, 08:00-11:00 worked) is saved (200). A second
     /// save of a call-home day on Tuesday 9 June (4,40 h, 08:00-11:00 worked, so rule B is satisfied) is refused: the day
     /// before holds a call-home day, and the call-home arm counts ALL four child codes. <c>kind = child-sick-illness-start</c>,
     /// <c>absenceType = CHILD_SICK_CALL_HOME</c>, naming Tuesday 9 June. Tuesday's absence and work-time day are not written;
@@ -252,7 +252,7 @@ public sealed class ChildSickIllnessStartTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Rule B (8). A stored call-home day with work (the shape of fact 5: 3,50 h, 08:00-11:54). A later save posts that date's
+    /// Rule B (8). A stored call-home day with work (the shape of `CallHomeWithIntervals_Accepted`: 3,50 h, 08:00-11:54). A later save posts that date's
     /// work-time day with an EMPTY <c>intervals</c> array and no project hours, which would bring the day's worked hours to 0:
     /// refused, <c>kind = child-sick-call-home-without-work</c>, naming Wednesday 10 June. The stored work-time day is
     /// unchanged (still 08:00-11:54) and the call-home row is still stored.
