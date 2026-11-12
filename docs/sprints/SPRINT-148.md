@@ -1324,3 +1324,41 @@ TASK-14842-T dispatched.
   - **Under M-23:** the credit fact, the `wage_type_mappings` count, idempotency and schema facts, the DemoSeed, smoke and e2e.
   - **Independence:** neither mutation turns red a fact on the other's list.
 - **Next:** push both branches as draft PRs and watch them. Each is judged against its list by the plan's rules (`PLAN-s148.md:576-585`): a pin counts only when its trx message is the listed assertion.
+
+**Wave-3 dispatch briefs: adjudicated.**
+- **Who did what:**
+  - the `planner` (Opus 5.5) drafted TASK-14813, 14813-T and 14814; its report is `.claude/reviews/S148-wave3-briefs-planner-report.md`;
+  - the `adjudicator` (Fable 5.2) ruled on them, verdict RULED (`.claude/reviews/S148-wave3-briefs-adjudication.md`);
+  - the planner then applied the rulings: plan "final + 7" and all three briefs at draft 2.
+- **What wave 3 changes, in plain terms:**
+  - **Today:** the server's 11-hour rest check (the one a manager sees) only reads clock times on project hours. Skema stores none there, so every Skema day shows "Hviletid ikke kontrolleret" and no real short rest is ever reported. Meanwhile the screen's instant warning flags a false 0,02-hour rest when someone types a night shift as 22:00–23:59 plus 00:00–06:00.
+  - **After wave 3:** the server reads the clock periods typed in Skema and joins the two night halves into one shift. A night until 06:00, then work from 16:00, is reported as a 10-hour rest.
+  - **Shared rule:** the screen runs the same algorithm, and one shared table of twelve scenarios, read by both test runners, proves the two always agree.
+  - **The "not checked" notice** stays, but only for days whose hours are not all on the clock. It turns blue (informational) instead of amber, on Skema and Teamoversigt alike.
+  - **Screen reader:** Skema's warnings panel is announced once when it changes.
+  - **Pay** does not change.
+- **The rulings that change what gets built:**
+  - **A short rest across a month boundary is now reported**, once, in the month where the rest ends, dated the day the earlier shift began.
+    - Today a 9-hour rest from 31 March to 1 April appears in neither month: March's read stops at month end, and April's check drops a shift that lies wholly in March.
+    - New: the Docker fact AC-S0-3f and the mutation M-26.
+  - **The voluntary unsocial-hours exemption is kept, decided per day.** A day counts as voluntary only when every time entry on it carries the flag. The product spec still requires the exemption. Nothing can set the flag until stage 2 (a registered shortcut), so nothing observable changes now.
+  - **The screen follows the engine's model of shifts**, rather than its own "first start, last end per day" rule. Two table rows pin the cases where the two used to disagree: a continuation day with no other work, and a chain over two midnights.
+  - **Two pins become kind N:** AC-S0-3b and the C# half of AC-S0-4a. Both name an input the task creates, so they cannot compile on today's code. They are proved red by three local mutations at 14813-T's own gate: M-24 (no midnight join), M-25 (any clock period counts as checked) and M-26 (the old month-edge filter). Wave 3 has no CI mutation run.
+- **Four things the owner should know** (no decision needed):
+  1. A short rest across a month boundary is now reported, in the month where it ends, dated the earlier day.
+  2. The voluntary exemption is kept at day level, and nothing can set the flag until stage 2.
+  3. The "not checked" notice is blue on Teamoversigt too.
+  4. The narrowed notice stays (R-22, as O-9 already says).
+- **Settled by the Orchestrator at application:**
+  - The `:315` ledger row says the re-pins span four existing test files, not one (14813-T BC-1).
+  - TASK-14813's cross-domain label is widened to name `ComplianceCheckResult.cs :11-37` (comment only) and `RestPeriodNotCheckedTests.cs :122-138` (deletion only), on 14809's precedent.
+- **Counts:** 117 AC ids (50 stage 0, 67 config stage, AC-S0-3f added), 85 owned by a paired pass; checked by a count script calibrated on "final + 6".
+- **Owed at close:**
+  - a live-region line in `docs/FRONTEND.md`;
+  - ADR-039 and ADR-043 D10 notes;
+  - register rows:
+    - the now-unread `SourceStintId` link;
+    - the third private parse copy;
+    - Teamoversigt's per-line live regions;
+    - the two month-edge limits: a chain starting before the read window is dated at the first day read; April's notice does not name an unclocked 31 March.
+- **Dispatch** waits for CI-W2 green (TASK-14813's prerequisite) and for CI-M2 and CI-M2b to match their frozen lists.
