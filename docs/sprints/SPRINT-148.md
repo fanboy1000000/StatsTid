@@ -1589,3 +1589,6 @@ The comments set a direction:
 - general reporting is wanted.
 
 A planner is drafting the roadmap translation as a proposal for the owner (`.claude/plans/tender-review-roadmap-draft.md`). Nothing enters `ROADMAP.md` before the owner agrees.
+
+**Wave 3 merged** (`40d3e694`, `--no-ff` of the stack tip `31a956b4`; paperwork in the merge: SEC-059 and QUAL-253 registered, two `shortcut(SEC-059)` tags, three Docker facts relabelled R, comments true-now, plan re-pointed). Step 5a cycle 2 on the fix-ups: Codex APPROVED-WITH-WARNINGS (`S148-WAVE3-5a-codex-c2.raw.md`), Fable APPROVED-WITH-WARNINGS (`S148-WAVE3-5a-reviewer-c2.md`); 5alpha PASS (`S148-TASK-14813-14814-5alpha.md`). Two small items go to wave 3b, which rewrites the same screen code: a rest typed with seconds can show 0.1 higher on screen than on the server (the screen rounds twice); the parity test keys the expected side through the display helper.
+- **GATE on `40d3e694`: green.** Build 0 errors / 143 warnings / CA2100 113; Unit 1746; DemoSeed 170; Regression non-Docker 140; frontend tsc, lint, e2e typecheck, build, vitest 99 files / 1169 tests. **Next:** CI-W3.
