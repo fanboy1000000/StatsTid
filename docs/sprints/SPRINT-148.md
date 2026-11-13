@@ -1424,3 +1424,58 @@ TASK-14842-T dispatched.
 **Clean-up:** PRs #58 and #59 closed unmerged; `ci/s148-m2` and `ci/s148-m2b` deleted, remotely and locally; the builder's worktree removed.
 
 **The wave-2 gate (`PLAN:119`) is passed:** CI-W2, CI-M2 and CI-M2b. Wave-3 merges are unblocked once the stack clears its merge checklist.
+
+**Wave 3: the stack built.** Each task was dispatched in its own worktree; the reports are saved in `.claude/reviews/`.
+- **TASK-14813** (`rule-engine`; `ea77c138` on `ff529b10`): the server's 11-hour rest check reads the clock intervals typed in Skema.
+  - **The request:** `CheckComplianceRequest.WorkIntervals`, a list of `ComplianceWorkInterval(Date, Start, End)`. The Backend fills it from current (not cleared) work-time days over `[monthStart−1, monthEnd]`, after the access, month and employment-window gates.
+  - **The engine:**
+    - joins a 00:00 start to the previous day's 23:59-or-later end, repeating over several midnights;
+    - groups stints by start day and pairs consecutive groups;
+    - judges a rest in the month where it ends;
+    - lists a day as not checked when its clock hours are below its project hours.
+  - `EvaluateDailyRest` and `EvaluateWeeklyRest` are retired.
+  - **Scope and local gate:** exactly the six authorized files. Build 0 errors / 143 warnings / CA2100 113. Ten Unit facts went red as predicted (the -T re-pins them). DemoSeed 170 and Regression non-Docker 140 stay green.
+- **TASK-14813-T** (`test-qa`; `f86aacaf`): nine test files.
+  - **Re-pins:** the ten red facts, plus four that had gone vacuous.
+  - **New Unit facts:** AC-S0-3b (kind N), the parity C# fact over a twelve-row shared table (`tests/StatsTid.Tests.Unit/TestData/rest-parity-scenarios.json`, N), and the voluntary-day R fact.
+  - **New Docker facts:** AC-S0-3a, -3c and -3f, F (CI), on a real-engine harness.
+  - **Mutations observed locally:** M-24 (no midnight join), M-25 (any interval counts as checked) and M-26 (the old month-edge filter) each turned exactly their named facts red.
+  - **Local gate:** Unit 1735, DemoSeed 170, Regression non-Docker 140.
+- **TASK-14814** (`ux`; `846789a1`): eleven frontend files.
+  - **The screen's rest warning** runs the engine's algorithm, so the false "0,0 timers hvile" at midnight is gone.
+  - **The parity vitest** reads the same table (`import.meta.glob` reached it; no `node:fs` exception).
+  - **The warnings panel** is one always-mounted live region.
+  - **The "not checked" notice** is blue on Skema and Teamoversigt.
+  - **Local gate:** tsc, lint, e2e typecheck and build green; vitest 98 files / 1161 tests.
+- **Step 5a cycle 1 on 14813 + 14813-T** (`ff529b10..f86aacaf`): both lenses APPROVED-WITH-WARNINGS.
+  - **Codex** (`S148-TASK-14813-5a-codex.raw.md`): 2 W / 1 N.
+  - **Fable** (`S148-TASK-14813-5a-reviewer.md`): 2 W / 6 N.
+  - **Both recomputed all twelve parity rows by hand:** every row is correct as ruled.
+- **Adjudication** (`S148-TASK-14813-5a-adjudication-c1.md`, Fable 5.2, RULED-WITH-QUESTIONS):
+  1. **A manager must not see a rest finding built from an unsent month (Fable W-1). Fixed now; not an owner question.**
+     - **The problem:** a manager reading a sent April could get a finding dated 31 March, built from March's clock times while March was unsent. That breaks RES-002, the rule that a manager sees nothing of an unsent month.
+     - **A sibling hole, open since S72:** the Skema month view served the neighbouring months' edge days to a manager, whatever their status.
+     - **The design keeps both rules:**
+       - A manager's read uses a neighbouring day only once that day's month is submitted.
+       - Until then the month's first day is listed as "not checked", so nothing looks falsely fine. It is listed only when the day before is an employed day and the first day has clock times.
+       - Once both months are sent, the finding appears.
+     - Registered as SEC-059 (fixed, with a residual) at merge.
+  2. **The rest model misses real breaches (Codex W-2, Fable N-1, N-2).** It measures the rest between working days, never inside one: a day shift plus a same-day night shift, or one shift over 13 hours, gives no finding.
+     - **Research ordered:** what "11 consecutive hours within each 24-hour period" means. The repo's sources did not settle it.
+     - **Owner Q1 (2026-11-13): "No, register only".** No interim "not checked" marker for days over 13 hours. QUAL-253 is registered at merge and carries the gap until the full fix.
+     - **Q2** (build the full check in S148 or schedule it) is asked when the research is verified.
+  3. **A chain cut at the read edge could wrongly count as voluntary (Codex W-1). Fixed now:** a stint starting at 00:00 before the period is never voluntary. Latent today: the voluntary flag has no writer until stage 2.
+  4. **The engine's period-edge guard had no test that could fail (Fable W-2, Codex N-1).** Two Unit pins with mutations M-27 and M-28.
+  5. **Smaller items:**
+     - three kind labels corrected (N-4);
+     - ADR-039, ADR-043 D10, `docs/SECURITY.md` and RES-002 owed at close (N-5);
+     - N-3 and N-6 declined with reasons.
+- **Fix-ups dispatched on the stack tip `846789a1`:**
+  - 14813 fix-up 1 (`rule-engine`): the two manager-visibility reads, the read-edge voluntary rule, and comments. Newly authorized: `SkemaEndpoints.cs:491-506`, the boundary read only.
+  - 14813-T fix-up 1 follows on its tip: M-27, M-28, the read-edge fact, the manager-read Docker facts on compliance and on Skema, and the labels.
+  - TASK-14814 gets no fix-up.
+  - A security consult on the fix-up diff joins the merge checklist.
+- **Step 5a cycle 1 on TASK-14814** (`f86aacaf..846789a1`): dispatched on both lenses.
+- **The rest-definition research**, step 1 of 3 (`general-purpose`, Opus 5.5, web).
+  - **Pass 1 (unverified):** the 24-hour period is a rolling window looking back from working time, not the calendar day and not 24 hours from the start of the working day. A continuous shift over 13 hours is a breach in itself. The state agreement § 12 allows a cut to 8 hours under limits.
+  - **Step 2, an independent verification** that re-reads every source, is running. Step 3 is a Fable adjudication of the consequences, and then owner Q2.
