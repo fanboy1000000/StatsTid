@@ -1523,3 +1523,69 @@ The consult's output is input to the cycle-2 review, so it runs first. AC ids st
 - `formatDanishNumber` rounds some halves down wherever hours are shown; no disagreement with a server figure was found outside the rest warning.
 - The engine formats its finding messages in the host's culture (unproven whether that is ever Danish).
 - A clean month is still to be looked at in a browser.
+
+**The 11-hour rest rule: verified research and owner Q2.**
+- **The research** (`.claude/reviews/S148-RESEARCH-rest-24h-*.md`, three steps):
+  - pass 1, by `general-purpose` (Opus 5.5, web);
+  - an independent verification (Opus 5.5) that re-downloaded every decisive source. All five verdicts stand, with 19 corrections;
+  - a Fable 5.2 adjudication of what it means for StatsTid (RR-1 … RR-8).
+- **What the law means.**
+  - The daily rest is judged on the 24 hours before each work end. It is not the calendar day, and since 29 December 1996 it is not 24 hours from the start of the working day.
+  - In practice no work may end more than 13 hours after the last full 11-hour rest.
+  - Under that test the following are breaches:
+    - one shift over 13 hours;
+    - a day shift followed by a same-day night shift;
+    - a split day over 13 hours from first start to last end (for example 08–12 plus 17–22).
+  - "13 hours on, 11 hours off" is lawful.
+  - The state agreement's § 12 allows a cut to 8 hours, once per 7 days and with compensatory rest.
+  - Staff who set their own hours, and managers, can be exempt person by person (BEK 606 § 6).
+  - The weekly rest day is 35 unbroken hours, and on-call never counts toward it.
+  - The sources are silent on five questions; they go to the expert hand-off package.
+- **Owner Q2 (2026-11-13): "S148, after wave 3 (Recommended)."**
+  - Wave 3 merges as reviewed. Its plumbing all survives: the clock-time read, the midnight join, the "not checked" list, the manager-visibility rule and the screen's live region.
+  - The corrected check follows as **wave 3b**, three tasks:
+    - TASK-14843 (`rule-engine`): the 24-hour look-back, the 8-hour floor under the derogation flag, and the read from `monthStart − 2`;
+    - TASK-14843-T (`test-qa`): the table recomputed, the new rows, and every moved value re-pinned by name;
+    - TASK-14844 (`ux`): the screen on the same rule.
+  - Wave 3b merges before the T14b stack (TASK-14826).
+  - The answer also approves the spec wording update for the rest rule (`SYSTEM_TARGET.md:272-284`).
+- **Registered later, pending expert answers:**
+  - QUAL-254: how often a cut is allowed, compensatory rest, postponement;
+  - QUAL-255: the per-person exemption;
+  - QUAL-256: the weekly rest-day check.
+
+  QUAL-253 is corrected to the verified rule.
+- **Docs owed at close:**
+  - the dossier `docs/references/rest-period-24h-research.md`, with a CLAUDE.md row;
+  - ADR-044 for the rest model, plus pointers from ADR-039 and ADR-043;
+  - `danish-agreements.md`;
+  - the phase-B hand-off questions.
+- **Under way:** the wave-3b briefs and plan "final + 10" are being drafted (`planner`), and go to brief adjudication like every wave.
+
+**Wave-3 fix-ups so far:**
+- TASK-14813 fix-up 1 (`6d2b43b0`): the manager-visibility rule at both surfaces, and the read-edge voluntary rule.
+- Fix-up 2 (`3f1e5242`): half-up rounding.
+- Fix-up 2b (`b5e87247`): the Skema boundary read moved after the month gate. This was the security consult's cheap fix, so no wasted reads for a refused manager.
+- **The security consult** (`S148-TASK-14813-security-consult.md`) is CLEAN-WITH-RESIDUALS.
+  - No remaining leader-tier path, and the marker leaks nothing about the unsent month.
+  - Two SEC-059 notes at merge: the employed-day bit, and the weekly and voluntary direction on a withheld read.
+  - A one-line note for future screens, because no leader surface reads `boundaryWorkTime` (`SkemaPage` is routed only to the signed-in user, `App.tsx:91`, `SkemaPage.tsx:289`).
+- **TASK-14813-T fix-up 1** (`2fcb5486`): the facts from both adjudications and the consult's negative tests 3–12.
+  - M-27 … M-30 each observed red at its named fact.
+  - The table is at sixteen rows.
+  - Gate: Unit 1746, DemoSeed 170, Regression non-Docker 140.
+- **TASK-14814 fix-up 1** (`ux`) is in flight. Step 5a cycle 2 follows on the whole stack.
+
+**The tender review.** The owner finished reviewing the 215 tender requirements on the review page. The decisions are recorded in `docs/references/tender-requirements-analysis.md` § "Owner review (2026-11-13)" (`837ecb29`):
+- 128 should be met;
+- 85 are not relevant;
+- 2 are open.
+
+The comments set a direction:
+- SLP replaces SLS / HR-Løn and FRAV;
+- Statens SSO;
+- identity and roles come from outside StatsTid;
+- shift planning is in scope;
+- general reporting is wanted.
+
+A planner is drafting the roadmap translation as a proposal for the owner (`.claude/plans/tender-review-roadmap-draft.md`). Nothing enters `ROADMAP.md` before the owner agrees.
