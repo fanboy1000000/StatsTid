@@ -30,9 +30,19 @@ public sealed class ComplianceCheckResult
     /// </para>
     ///
     /// <para>
+    /// <b>A manager's read can also list the month's first day</b> (<c>ComplianceEndpoints</c>).
+    /// A manager sees nothing of a month the employee has not submitted (RES-002), so when the
+    /// previous month is not submitted the manager's check does not read the day before the
+    /// month, and a rest ending on the 1st is not measured for them. The 1st is then listed when
+    /// the day before was an employed day and the 1st has a clock interval.
+    /// </para>
+    ///
+    /// <para>
     /// <b>Stays (owner ruling R-22).</b> The send check refuses a month unless every day's interval
-    /// hours equal its project hours, so the list can be non-empty only for a month still being
-    /// edited. Payroll never evaluates compliance, so no pay figure or replay marker depends on it.
+    /// hours equal its project hours, so for the employee and HR the list can be non-empty only for
+    /// a month still being edited; a manager can also see the 1st listed in a submitted month, until
+    /// the previous month is submitted. Payroll never evaluates compliance, so no pay figure or
+    /// replay marker depends on it.
     /// </para>
     /// </summary>
     public IReadOnlyList<DateOnly> RestNotCheckedDays { get; init; } = Array.Empty<DateOnly>();

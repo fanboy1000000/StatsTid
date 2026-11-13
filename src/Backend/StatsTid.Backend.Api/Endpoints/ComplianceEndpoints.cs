@@ -125,8 +125,10 @@ public static class ComplianceEndpoints
             // exempt, decided by the shared ApprovalReadTier; R5 NARROW-ONLY — the population
             // admitted above (self / org-scope / the S88-8801 B2 designated edge) is untouched, the
             // gate only SUBTRACTS within it; R6 = 403 via the shared Skema-shape construction site.
-            // Fail-closed: no period row ⇒ withheld.
-            if (await ApprovalReadTier.IsLeaderTierReadAsync(scopeValidator, actor, employeeId, ct))
+            // Fail-closed: no period row ⇒ withheld. The tier is kept: the work-interval read below
+            // applies the same rule to the day before the month.
+            var leaderTierRead = await ApprovalReadTier.IsLeaderTierReadAsync(scopeValidator, actor, employeeId, ct);
+            if (leaderTierRead)
             {
                 var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
                 if (!ApprovalVisibility.IsSubmittedToManager(period?.Status))
@@ -168,7 +170,8 @@ public static class ComplianceEndpoints
 
             // Fetch time entries from projection (sync-in-tx with the POST that wrote them — read-your-write per ADR-018 D12).
             // ADR-039 D5b (GAP-B, no dropped hours at a period edge): both reads below — the time
-            // entries and the work intervals — start one day before the month, [monthStart-1 .. monthEnd].
+            // entries and the work intervals — start one day before the month, [monthStart-1 .. monthEnd],
+            // except the work intervals for a leader when the previous month is not submitted (below).
             // For the hours checks: a midnight-crossing entry filed on the LAST day of the PREVIOUS
             // month (e.g. 31-Mar 23:00→02:00) carries post-midnight hours that belong (by wall clock
             // + ADR-003) to THIS month's first day; the read fetches it, the normalizer splits it into
@@ -178,6 +181,7 @@ public static class ComplianceEndpoints
             // For the rest checks: the day before the month supplies the work before a rest that
             // ends on the 1st, which this month judges (a rest is judged in the month it ends).
             var readStart = monthStart.AddDays(-1);
+            // shortcut(pending): a leader's time-entry read starts the day before the month even when the previous month is not submitted (RES-002), harmless while no entry carries clock times or the voluntary flag; upgrade when either gains a writer
             var timeEntryRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, readStart, monthEnd, ct);
             var timeEntries = timeEntryRows
                 .Select(r => new TimeEntry
@@ -210,14 +214,28 @@ public static class ComplianceEndpoints
             var normalizedEntries = MidnightCrossingNormalizer.Normalize(timeEntries);
 
             // The rest checks' input (ADR-043 D10, QUAL-234): the clock intervals the employee typed
-            // in Skema, current days only, over the same widened dates as the entries. Read after
+            // in Skema, current days only, over the entries' dates (the leader exception below). Read after
             // the access, month and employment-window gates above, so a refused or windowless
             // request reads none. Each interval is kept by Skema's own positive-duration rule —
             // both ends parse as a clock time and the end is after the start, the rule the Skema
             // save applies — and is sent on the date it was entered on (ADR-039's per-day rule);
             // the rule engine joins a night shift's two halves at midnight itself.
-            var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, readStart, monthEnd, ct);
+            //
+            // A manager sees nothing of a month the employee has not submitted (RES-002), and the
+            // day before the month belongs to the previous month. So for a leader-tier read the
+            // intervals start at monthStart unless the previous month is submitted, decided by the
+            // month gate's own predicate. A rest ending on the 1st is then not judged for the
+            // leader; once the previous month is sent, the same read judges it (nothing is stored).
+            // Meanwhile the answer lists monthStart as not checked (below).
+            var previousMonthWithheld = leaderTierRead
+                && !ApprovalVisibility.IsSubmittedToManager(
+                    (await approvalRepo.GetByEmployeeAndPeriodAsync(
+                        employeeId, monthStart.AddMonths(-1), readStart, ct))?.Status);
+            // shortcut(pending): on a leader's withheld read a night shift begun the day before the month starts at monthStart 00:00, so it can add a worked day to the weekly check and its voluntary status rests on the month's days alone (monthStart is listed as not checked); upgrade when the voluntary flag gains a writer
+            var intervalReadStart = previousMonthWithheld ? monthStart : readStart;
+            var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, intervalReadStart, monthEnd, ct);
             var workIntervals = new List<object>();
+            var monthStartHasKeptInterval = false;
             foreach (var row in workTimeRows)
             {
                 foreach (var iv in row.Intervals)
@@ -232,9 +250,21 @@ public static class ComplianceEndpoints
                             start = new TimeOnly(startSec * TimeSpan.TicksPerSecond),
                             end = new TimeOnly(endSec * TimeSpan.TicksPerSecond),
                         });
+                        if (row.Date == monthStart)
+                            monthStartHasKeptInterval = true;
                     }
                 }
             }
+
+            // The marker for the withheld day: the leader's answer must not look compliant for a
+            // rest it could not measure (the fail-open class owner ruling R-22 keeps the list
+            // against). monthStart is listed when the day before was withheld, that day was an
+            // employed day (else a new hire's first month would carry the notice for good), and
+            // monthStart has at least one kept interval. It never depends on whether the day
+            // before has intervals, so it reveals nothing of the unsubmitted month.
+            var listMonthStartAsNotChecked = previousMonthWithheld
+                && monthStartHasKeptInterval
+                && await windowResolver.GetStatusAsync(employeeId, readStart, ct) == EmploymentWindowStatus.EMPLOYED;
 
             // Call Rule Engine via HTTP (PAT-005).
             // S73 / TASK-7300 (R1): the NAMED rule-engine client — BaseAddress +
@@ -364,6 +394,22 @@ public static class ComplianceEndpoints
             // null-deserialization idiom) makes the declared 200 STRUCTURALLY the full result.
             if (result is null)
                 return Results.Json(new { error = "Invalid compliance check response" }, statusCode: 502);
+
+            if (listMonthStartAsNotChecked)
+            {
+                // Merged into the engine's list, distinct and ascending as that list is; reported
+                // only, so Success and the findings are the engine's.
+                result = new ComplianceCheckResult
+                {
+                    RuleId = result.RuleId,
+                    EmployeeId = result.EmployeeId,
+                    Success = result.Success,
+                    Violations = result.Violations,
+                    Warnings = result.Warnings,
+                    RestNotCheckedDays = result.RestNotCheckedDays
+                        .Append(monthStart).Distinct().Order().ToList(),
+                };
+            }
 
             return Results.Ok(result);
         }).RequireAuthorization("EmployeeOrAbove")

@@ -93,7 +93,7 @@ public static class RestPeriodRule
 
         // 2 + 3. The rest checks measure between work periods built from the intervals alone
         //    (ADR-043 D10); each check then decides which of them the period owns.
-        var stints = ReconstructStints(intervals, VoluntaryDays(entries, config));
+        var stints = ReconstructStints(intervals, VoluntaryDays(entries, config), periodStart);
         CheckDailyRest(stints, periodStart, periodEnd, config, violations, warnings);
         CheckWeeklyRest(stints, periodStart, periodEnd, config, violations, warnings);
 
@@ -326,7 +326,10 @@ public static class RestPeriodRule
             // the compliance read supplies the day before (ADR-039 D5b).
             // Recorded limit: that read starts at periodStart − 1, so a chain of night shifts that
             // began earlier arrives cut at that day. The rest after it is still measured right,
-            // but the finding is dated periodStart − 1, not the day the chain began.
+            // but the finding is dated periodStart − 1, not the day the chain began. Such a cut
+            // stint, one starting at exactly 00:00 before periodStart, is never voluntary
+            // (BuildStint): its earlier days are unseen, so the exemption cannot be judged, and
+            // the check errs toward reporting the rest.
             if (next.Date < periodStart || next.Date > periodEnd)
                 continue;
 
@@ -505,10 +508,15 @@ public static class RestPeriodRule
     /// stints, which the daily check then clusters as one working day. A stint starts at its first
     /// interval's start, ends at its last interval's end, and its start day is its first
     /// interval's date. It is all-voluntary only when every date it touches is in
-    /// <paramref name="voluntaryDays"/>.
+    /// <paramref name="voluntaryDays"/> and it does not start at exactly 00:00 on a date before
+    /// <paramref name="periodStart"/>: the compliance read begins the day before the period, so such
+    /// a stint may continue work from a day the read cut off, and its beginning is unknown. The
+    /// rule errs toward reporting the rest, never toward hiding it.
     /// </summary>
     private static List<WorkStint> ReconstructStints(
-        IReadOnlyList<ComplianceWorkInterval> intervals, IReadOnlySet<DateOnly> voluntaryDays)
+        IReadOnlyList<ComplianceWorkInterval> intervals,
+        IReadOnlySet<DateOnly> voluntaryDays,
+        DateOnly periodStart)
     {
         var groups = new List<List<ComplianceWorkInterval>>();
         // Day D → the stint whose interval on D runs to 23:59 or later, which a 00:00 start on
@@ -530,22 +538,27 @@ public static class RestPeriodRule
                 runsToMidnight[iv.Date] = group;
         }
 
-        return groups.Select(g => BuildStint(g, voluntaryDays)).ToList();
+        return groups.Select(g => BuildStint(g, voluntaryDays, periodStart)).ToList();
     }
 
     /// <summary>
     /// One stint's absolute span from its intervals, which arrive in time order: from the first
-    /// interval's start instant to the latest end instant.
+    /// interval's start instant to the latest end instant. A stint cut at the read edge (first
+    /// interval at exactly 00:00 on a date before <paramref name="periodStart"/>) is never
+    /// voluntary; see <see cref="ReconstructStints"/>.
     /// </summary>
     private static WorkStint BuildStint(
-        IReadOnlyList<ComplianceWorkInterval> group, IReadOnlySet<DateOnly> voluntaryDays)
+        IReadOnlyList<ComplianceWorkInterval> group,
+        IReadOnlySet<DateOnly> voluntaryDays,
+        DateOnly periodStart)
     {
         var first = group[0];
+        var cutAtReadEdge = first.Start == TimeOnly.MinValue && first.Date < periodStart;
         return new WorkStint(
             AbsStart: first.Date.ToDateTime(first.Start),
             AbsEnd: group.Max(iv => iv.Date.ToDateTime(iv.End)),
             StartDate: first.Date,
-            AllVoluntary: group.All(iv => voluntaryDays.Contains(iv.Date)));
+            AllVoluntary: !cutAtReadEdge && group.All(iv => voluntaryDays.Contains(iv.Date)));
     }
 
     /// <summary>
