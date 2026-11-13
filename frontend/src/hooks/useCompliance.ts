@@ -95,6 +95,7 @@ export function useCompliance(employeeId: string, year: number, month: number): 
     if (res.ok) {
       setResult(res.data)
     } else {
+      setResult(null) // never leave the previous month's warnings under this month's title
       setError(res.error)
     }
     setLoading(false)

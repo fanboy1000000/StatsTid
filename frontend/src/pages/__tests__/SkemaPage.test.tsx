@@ -946,7 +946,8 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     expect(screen.queryByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })).toBeNull()
     // …and the lock is announced (quietly): aria-busy on the page region + an "Indlæser…" status.
     expect(document.querySelector('[aria-busy="true"]')).not.toBeNull()
-    expect(screen.getByRole('status')).toHaveTextContent('Indlæser…')
+    // S148 14a (R): the panel is now a second always-mounted status region; query the page's own.
+    expect(screen.getAllByRole('status').find((el) => el.classList.contains('monthLoading'))).toHaveTextContent('Indlæser…')
 
     await act(async () => { release(); await gate })
     const trigger = await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
@@ -1305,11 +1306,13 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     // Red condition: against ed884d6f the status element was inserted already filled and sat
     // INSIDE the aria-busy region.
     await renderLoaded()
-    const status = screen.getByRole('status')
+    // S148 14a (R): the page's own region (the panel is a second status region).
+    const monthStatus = () => screen.getAllByRole('status').find((el) => el.classList.contains('monthLoading'))!
+    const status = monthStatus()
     expect(status).toHaveTextContent('')
     const release = holdAprilFetch()
     fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
-    expect(screen.getByRole('status')).toBe(status) // same element, text set
+    expect(monthStatus()).toBe(status) // same element, text set
     expect(status).toHaveTextContent('Indlæser…')
     const busy = document.querySelector('[aria-busy="true"]')
     expect(busy).not.toBeNull()

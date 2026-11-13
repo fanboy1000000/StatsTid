@@ -1,3 +1,4 @@
+using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.RuleEngine.Api.Rules;
@@ -7,18 +8,25 @@ namespace StatsTid.RuleEngine.Api.Rules;
 /// and Danish Arbejdstidsloven. Checks daily rest (11h), weekly rest, max daily hours,
 /// and 48h/week ceiling. No I/O, fully deterministic, version-aware via AgreementRuleConfig.
 ///
-/// S20 / TASK-2006: this rule decomposes into four separately-registered classifications
-/// — <see cref="MaxDailyRuleId"/>, <see cref="DailyRestRuleId"/>,
-/// <see cref="WeeklyRestRuleId"/>, <see cref="Weekly48HCeilingRuleId"/>. The legacy
-/// <see cref="RuleId"/> entry point (<see cref="Evaluate"/>) is preserved verbatim so
-/// existing callers (Program.cs <c>/api/rules/check-compliance</c>, the existing
-/// regression suite, and the Sprint 16 unit tests) continue to work without
-/// modification — it runs all four checks and unions the findings under the legacy id.
+/// The four checks carry separately registered classifications (ADR-016 D2) —
+/// <see cref="MaxDailyRuleId"/>, <see cref="DailyRestRuleId"/>, <see cref="WeeklyRestRuleId"/>,
+/// <see cref="Weekly48HCeilingRuleId"/>. <see cref="Evaluate"/> (the
+/// <c>/api/rules/check-compliance</c> route) is the one entry point that runs the rest checks: it
+/// runs all four checks and unions the findings under <see cref="RuleId"/>.
+/// <see cref="EvaluateMaxDailyHours"/> and <see cref="Evaluate48HCeiling"/> each run one hours check.
 ///
 /// <para>
-/// <strong>ADR-039 segmentation note.</strong> The rest checks reconstruct one continuous stint
-/// across midnight (and, via the GAP-B widen, across a period edge). This is safe with respect to
-/// OK-version segmentation for a simple reason: these rest checks run ONLY on the unsegmented
+/// <strong>Two inputs, one per kind of check (ADR-043 D10, QUAL-234).</strong> The hours checks
+/// (max daily, 48h ceiling) sum the project entries' <see cref="TimeEntry.Hours"/>. The rest checks
+/// (daily rest, weekly rest) measure between the clock intervals the employee typed in Skema
+/// (<see cref="ComplianceWorkInterval"/>); they never read a time entry's clock times.
+/// </para>
+///
+/// <para>
+/// <strong>ADR-039 segmentation note.</strong> The rest checks join a night shift into one
+/// continuous stint across midnight, and judge a rest that ends on the period's first day against
+/// work on the day before (the compliance read's one-day widen, ADR-039 D5b). This is safe with
+/// respect to OK-version segmentation for a simple reason: these rest checks run ONLY on the unsegmented
 /// monthly compliance path (<c>/api/rules/check-compliance</c> → <see cref="Evaluate"/>).
 /// PeriodCalculationService's per-segment payroll evaluation never invokes them — it evaluates only
 /// NORM_CHECK / SUPPLEMENT / OVERTIME / ON_CALL (+ absence / flex). So a stint is never split across
@@ -43,44 +51,59 @@ public static class RestPeriodRule
     public const string Weekly48HCeilingRuleId = "REST_PERIOD_48H_CEILING";
 
     /// <summary>
-    /// Evaluates all compliance checks for the given period.
-    /// Pure function, deterministic, no I/O. Result is tagged with the legacy
-    /// <see cref="RuleId"/>; callers needing per-check classification should call the
-    /// individual <see cref="EvaluateMaxDailyHours"/>, <see cref="EvaluateDailyRest"/>,
-    /// <see cref="EvaluateWeeklyRest"/>, or <see cref="Evaluate48HCeiling"/> entry points.
+    /// Evaluates all four compliance checks for the given period, tagged with <see cref="RuleId"/>;
+    /// the one entry point for the rest checks. Pure function, deterministic, no I/O.
     /// </summary>
+    /// <param name="entries">
+    /// The project entries, which the compliance read takes from the day before
+    /// <paramref name="periodStart"/> (ADR-039 D5b). The hours checks sum their hours inside the
+    /// period; the rest checks read only their voluntary-unsocial-hours flag, per day.
+    /// </param>
+    /// <param name="workIntervals">
+    /// The clock intervals typed in Skema over the same dates, each on the date it was entered on.
+    /// The rest checks build their work periods from these alone. Absent means no interval: no
+    /// rest is measured, and every day of the period with project hours is listed in
+    /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/>.
+    /// </param>
     public static ComplianceCheckResult Evaluate(
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,
         DateOnly periodEnd,
-        AgreementRuleConfig config)
+        AgreementRuleConfig config,
+        IReadOnlyList<ComplianceWorkInterval>? workIntervals = null)
     {
         var violations = new List<ComplianceViolation>();
         var warnings = new List<ComplianceViolation>();
 
         var periodEntries = NormalizeEntries(entries, periodStart, periodEnd);
 
+        // Skema's positive-duration rule, applied to the engine's own input too: an interval whose
+        // end is not after its start is ignored. It forms no stint, so a raw caller cannot
+        // manufacture a midnight crossing, and it adds no clock hours, so its day is more likely
+        // to be listed below (the safe direction).
+        var intervals = (workIntervals ?? Array.Empty<ComplianceWorkInterval>())
+            .Where(iv => iv.End > iv.Start)
+            .ToList();
+
         // 1. Max daily hours check (works for all entries, including hours-only). Hours-summing
         //    checks consume the PERIOD-FILTERED per-day rows so out-of-period hours never leak
         //    into period totals (ADR-039 BLOCKER-2).
         CheckMaxDailyHours(periodEntries, config, violations, warnings);
 
-        // 2. Daily rest check. Reconstructs stints from the RAW (un-period-filtered) entries so a
-        //    boundary crossing's out-of-window pre-half still rejoins its in-window post-half
-        //    (ADR-039 BLOCKER-2); period relevance is then applied to whole STINTS, not rows.
-        CheckDailyRest(entries, periodStart, periodEnd, config, violations, warnings);
-
-        // 3. Weekly rest check — same raw-then-relevance stint reconstruction (BLOCKER-2).
-        CheckWeeklyRest(entries, periodStart, periodEnd, config, violations, warnings);
+        // 2 + 3. The rest checks measure between work periods built from the intervals alone
+        //    (ADR-043 D10); each check then decides which of them the period owns.
+        var stints = ReconstructStints(intervals, VoluntaryDays(entries, config), periodStart);
+        CheckDailyRest(stints, periodStart, periodEnd, config, violations, warnings);
+        CheckWeeklyRest(stints, periodStart, periodEnd, config, violations, warnings);
 
         // 4. 48h/week ceiling (works for all entries) — period-filtered per-day rows.
         CheckWeeklyMaxHours(periodEntries, periodStart, periodEnd, config, violations, warnings);
 
-        // 5. S147 / QUAL-234 interim (OQ-4 = (b)) — name the days checks 2 and 3 could not analyse
-        //    (hours registered, no clock times), so the result never looks compliant for a day
-        //    nobody checked. Reported only; it adds no violation and does not change Success.
-        var restNotCheckedDays = FindRestNotCheckedDays(periodEntries);
+        // 5. The days whose project hours are not all on the clock (QUAL-234; owner ruling R-22
+        //    keeps the list), so the result never looks compliant for a day the rest checks could
+        //    not fully measure. Reported only; it adds no violation and does not change Success.
+        var restNotCheckedDays = FindRestNotCheckedDays(periodEntries, intervals);
 
         return new ComplianceCheckResult
         {
@@ -113,47 +136,6 @@ public static class RestPeriodRule
     }
 
     /// <summary>
-    /// S20 — single-check entry point for daily rest (<see cref="DailyRestRuleId"/>).
-    /// Reuses the existing <see cref="CheckDailyRest"/> helper; logic is bit-identical
-    /// to the corresponding branch of <see cref="Evaluate"/>, including (S147 / QUAL-234
-    /// interim) the days it could not analyse in
-    /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/>.
-    /// </summary>
-    public static ComplianceCheckResult EvaluateDailyRest(
-        EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        DateOnly periodStart,
-        DateOnly periodEnd,
-        AgreementRuleConfig config)
-    {
-        var violations = new List<ComplianceViolation>();
-        var warnings = new List<ComplianceViolation>();
-        // Raw entries + bounds — stint reconstruction happens before period relevance (BLOCKER-2).
-        CheckDailyRest(entries, periodStart, periodEnd, config, violations, warnings);
-        var restNotCheckedDays = FindRestNotCheckedDays(NormalizeEntries(entries, periodStart, periodEnd));
-        return BuildResult(DailyRestRuleId, profile, violations, warnings, restNotCheckedDays);
-    }
-
-    /// <summary>
-    /// S20 — single-check entry point for weekly rest (<see cref="WeeklyRestRuleId"/>).
-    /// Reuses the existing <see cref="CheckWeeklyRest"/> helper; logic is bit-identical
-    /// to the corresponding branch of <see cref="Evaluate"/>.
-    /// </summary>
-    public static ComplianceCheckResult EvaluateWeeklyRest(
-        EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        DateOnly periodStart,
-        DateOnly periodEnd,
-        AgreementRuleConfig config)
-    {
-        var violations = new List<ComplianceViolation>();
-        var warnings = new List<ComplianceViolation>();
-        // Raw entries + bounds — stint reconstruction happens before period relevance (BLOCKER-2).
-        CheckWeeklyRest(entries, periodStart, periodEnd, config, violations, warnings);
-        return BuildResult(WeeklyRestRuleId, profile, violations, warnings);
-    }
-
-    /// <summary>
     /// S20 — single-check entry point for the 48h/week ceiling
     /// (<see cref="Weekly48HCeilingRuleId"/>). Reuses the existing
     /// <see cref="CheckWeeklyMaxHours"/> helper; logic is bit-identical to the
@@ -176,9 +158,9 @@ public static class RestPeriodRule
     /// <summary>
     /// Keeps the entries dated from <paramref name="periodStart"/> to <paramref name="periodEnd"/>
     /// (both inclusive), sorted by date then start time. It does NOT split an entry that crosses
-    /// midnight. The Backend splits those before the call (<c>MidnightCrossingNormalizer</c>,
-    /// <c>ComplianceEndpoints.cs:208</c>), so a caller passing raw entries would see an overnight
-    /// shift only on its start date.
+    /// midnight. The Backend splits those before the call (<c>MidnightCrossingNormalizer</c>, in
+    /// <c>ComplianceEndpoints</c>' compliance read), so a caller passing raw entries would see an
+    /// overnight shift only on its start date.
     /// </summary>
     private static IReadOnlyList<TimeEntry> NormalizeEntries(
         IReadOnlyList<TimeEntry> entries,
@@ -194,50 +176,73 @@ public static class RestPeriodRule
         string ruleId,
         EmploymentProfile profile,
         List<ComplianceViolation> violations,
-        List<ComplianceViolation> warnings,
-        IReadOnlyList<DateOnly>? restNotCheckedDays = null) =>
+        List<ComplianceViolation> warnings) =>
         new()
         {
             RuleId = ruleId,
             EmployeeId = profile.EmployeeId,
             Success = violations.Count == 0,
             Violations = violations,
-            Warnings = warnings,
-            RestNotCheckedDays = restNotCheckedDays ?? Array.Empty<DateOnly>()
+            Warnings = warnings
         };
 
     /// <summary>
-    /// True when an entry carries both clock times, i.e. it can bound a rest gap. This ONE predicate
-    /// decides both which entries the rest checks analyse (<see cref="ReconstructStints"/>) and which
-    /// days are reported as not analysed (<see cref="FindRestNotCheckedDays"/>), so the two can never
-    /// drift apart.
-    /// </summary>
-    private static bool IsTimed(TimeEntry e) => e.StartTime.HasValue && e.EndTime.HasValue;
-
-    /// <summary>
-    /// S147 / QUAL-234 interim (owner ruling OQ-4 = (b); refinement T7) — the days the rest checks
-    /// could not analyse: each date of <paramref name="periodEntries"/> (already filtered to the
-    /// period) with at least one entry whose hours are above zero and no timed entry
-    /// (<see cref="IsTimed"/>). Distinct dates, ascending.
+    /// The days the rest checks cannot vouch for (QUAL-234; owner ruling R-22 keeps the list): each
+    /// date of the period whose project hours are above zero and whose clock hours fall short of
+    /// them. Project hours are the day's entries' <see cref="TimeEntry.Hours"/> summed, every
+    /// activity type (the entries the max-daily check sums); clock hours are the day's kept
+    /// intervals, end minus start, summed. Both are rounded to hundredths before they are compared
+    /// (<c>Math.Round(x, 2)</c>, the <c>AllocationBalance</c> convention the send check uses), so a
+    /// day counts as analysed exactly when every one of its hours is on the clock. Distinct dates,
+    /// ascending.
     ///
     /// <para>
-    /// The input is the same per-day view the hours checks read, after the compliance read's
-    /// midnight normalization (ADR-039): a crossing shift's post-midnight half is a timed row on
-    /// its own date, so that date counts as checked. Any activity type counts, as it does for the
-    /// stint reconstruction, and the voluntary-unsocial-hours flag is not consulted: a voluntary day
-    /// without clock times was not analysed either, whatever an analysis would have exempted. A day
-    /// mixing a timed entry with hours-only entries counts as checked —
-    /// the timed entry bounds the day's rest gap, though the untimed hours are not placed on the
-    /// clock; the full fix (decide-track D-2, S148) reads Skema's work intervals and retires this.
+    /// A listed day's intervals still form stints, so a real short rest on a partly clocked day is
+    /// still reported. A day with intervals and no project hours is not listed: nothing on it is
+    /// off the clock. The list covers the period's own days only, so a short rest reported against
+    /// the day before the period does not say whether that day was fully clocked; the previous
+    /// period's list does.
     /// </para>
     /// </summary>
-    private static IReadOnlyList<DateOnly> FindRestNotCheckedDays(IReadOnlyList<TimeEntry> periodEntries) =>
-        periodEntries
+    private static IReadOnlyList<DateOnly> FindRestNotCheckedDays(
+        IReadOnlyList<TimeEntry> periodEntries, IReadOnlyList<ComplianceWorkInterval> intervals)
+    {
+        var clockTicksByDay = intervals
+            .GroupBy(iv => iv.Date)
+            .ToDictionary(day => day.Key, day => day.Sum(iv => (iv.End - iv.Start).Ticks));
+
+        return periodEntries
             .GroupBy(e => e.Date)
-            .Where(day => day.Any(e => e.Hours > 0m) && !day.Any(IsTimed))
-            .Select(day => day.Key)
+            .Select(day => (Date: day.Key, ProjectHours: day.Sum(e => e.Hours)))
+            .Where(day =>
+            {
+                if (day.ProjectHours <= 0m)
+                    return false;
+                var clockHours = (decimal)clockTicksByDay.GetValueOrDefault(day.Date) / TimeSpan.TicksPerHour;
+                return Math.Round(clockHours, 2) < Math.Round(day.ProjectHours, 2);
+            })
+            .Select(day => day.Date)
             .OrderBy(date => date)
             .ToList();
+    }
+
+    /// <summary>
+    /// The days whose work is voluntary unsocial hours, exempt from the rest checks
+    /// (SYSTEM_TARGET "Voluntary Unsocial Hours"): the agreement allows it
+    /// (<see cref="AgreementRuleConfig.VoluntaryUnsocialHoursAllowed"/>), the day has at least one
+    /// project entry, and every entry of that day carries
+    /// <see cref="TimeEntry.VoluntaryUnsocialHours"/>. Intervals carry no such flag, so the day's
+    /// entries decide for the day's intervals.
+    /// </summary>
+    private static IReadOnlySet<DateOnly> VoluntaryDays(
+        IReadOnlyList<TimeEntry> entries, AgreementRuleConfig config) =>
+        config.VoluntaryUnsocialHoursAllowed
+            ? entries
+                .GroupBy(e => e.Date)
+                .Where(day => day.All(e => e.VoluntaryUnsocialHours))
+                .Select(day => day.Key)
+                .ToHashSet()
+            : new HashSet<DateOnly>();
 
     /// <summary>
     /// Check 1: Max daily hours. Sum hours per day, flag if exceeding MaxDailyHours.
@@ -271,44 +276,32 @@ public static class RestPeriodRule
 
     /// <summary>
     /// Check 2: Daily rest (11h minimum between the end of one working day and the start of the
-    /// next). Only entries with both StartTime and EndTime can be analyzed; since S147 (QUAL-234
-    /// interim) the days this leaves unanalysed are reported in
-    /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/> rather than passing silently. Voluntary
-    /// unsocial hours skip this check (but not 48h ceiling). Derogation-allowed agreements get
-    /// WARNING instead of VIOLATION.
+    /// next). The rest is measured between stints built from the Skema clock intervals
+    /// (<see cref="ReconstructStints"/>); a day whose project hours are not all on the clock is
+    /// also listed in <see cref="ComplianceCheckResult.RestNotCheckedDays"/>. Voluntary unsocial
+    /// hours skip this check (but not 48h ceiling). Derogation-allowed agreements get WARNING
+    /// instead of VIOLATION.
     ///
     /// <para>
-    /// ADR-039 (S132 TASK-1a + 1b-3) — the gap is computed from ABSOLUTE INSTANTS of reconstructed
-    /// work stints, NOT from per-day clock fields. This fixes two related defects: (1) QUAL-001 —
-    /// a midnight-crossing shift filed as one row (23:00→02:00) previously made the rest look like
-    /// ~29h (its 02:00 end was read as day-N's end, then a full day added) when the true rest to a
-    /// 07:00 start is 5h; (2) the normalized-halves case, where reading day D's end as 00:00 and
-    /// day D+1's start as 00:00 manufactured a false 0-hour gap at midnight. Both are now correct
-    /// because the two halves (ADR-039 D4 continuity link) reconstruct into ONE continuous stint
-    /// whose absolute end is the real end instant.
+    /// ADR-039 D5 — the gap is computed from the ABSOLUTE INSTANTS of continuous stints, never from
+    /// a per-day view: a night shift typed as 22:00–23:59 plus 00:00–06:00 is one stint, so its
+    /// midnight is no one-minute rest, and the rest after it runs from 06:00 on the second day.
     /// </para>
     /// </summary>
     private static void CheckDailyRest(
-        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<WorkStint> stints,
         DateOnly periodStart,
         DateOnly periodEnd,
         AgreementRuleConfig config,
         List<ComplianceViolation> violations,
         List<ComplianceViolation> warnings)
     {
-        // Reconstruct from the RAW entries (BLOCKER-2) so a boundary crossing's out-of-window
-        // pre-half rejoins its in-window post-half; THEN keep only stints overlapping the period.
-        var stints = ReconstructStints(entries, config)
-            .Where(s => IsPeriodRelevant(s, periodStart, periodEnd))
-            .ToList();
-
-        // Collapse stints into day-clusters keyed by the calendar day of the absolute START.
-        // This preserves the pre-fix "a working day is one unit" semantics — a lunch-split day
-        // (09:00–12:00 + 13:00–17:00) stays ONE cluster, so an intra-day break is never mistaken
-        // for a rest-period breach — while using absolute instants so a midnight crossing no
-        // longer produces a false 0-hour gap or a bogus ~29h rest. A crossing stint clusters
-        // under its START day, so its post-midnight portion does not open a spurious next-day
-        // working period.
+        // Collapse stints into day-clusters keyed by the calendar day of the absolute START, so a
+        // working day is one unit: a lunch-split day (09:00–12:00 + 13:00–17:00) stays ONE
+        // cluster and an intra-day break is never mistaken for a rest-period breach. A night shift
+        // clusters under its START day, so its post-midnight portion does not open a spurious
+        // next-day working period. Every stint takes part, including those wholly before the
+        // period: the pair selection below decides which rests this period owns.
         var clusters = stints
             .GroupBy(s => s.StartDate)
             .Select(g => new
@@ -326,8 +319,22 @@ public static class RestPeriodRule
             var current = clusters[i];
             var next = clusters[i + 1];
 
-            // Voluntary unsocial hours skip the rest check (unchanged policy): if either side is
-            // wholly voluntary-and-allowed, no daily-rest breach is raised across that pair.
+            // A rest is judged in the period in which it ENDS, i.e. where the next working day
+            // starts, so across consecutive periods each rest is judged exactly once: a rest from
+            // 31 March 22:00 to 1 April 07:00 is April's, dated 31 March, and a rest ending after
+            // periodEnd is the next period's. The earlier side may lie wholly before the period;
+            // the compliance read supplies the day before (ADR-039 D5b).
+            // Recorded limit: that read starts at periodStart − 1, so a chain of night shifts that
+            // began earlier arrives cut at that day. The rest after it is still measured right,
+            // but the finding is dated periodStart − 1, not the day the chain began. Such a cut
+            // stint, one starting at exactly 00:00 before periodStart, is never voluntary
+            // (BuildStint): its earlier days are unseen, so the exemption cannot be judged, and
+            // the check errs toward reporting the rest.
+            if (next.Date < periodStart || next.Date > periodEnd)
+                continue;
+
+            // Voluntary unsocial hours skip the rest check: if either side is wholly
+            // voluntary-and-allowed, no daily-rest breach is raised across that pair.
             if (current.AllVoluntary || next.AllVoluntary)
                 continue;
 
@@ -340,16 +347,18 @@ public static class RestPeriodRule
                     ? ComplianceSeverity.WARNING
                     : ComplianceSeverity.VIOLATION;
 
-                // NOTE(b): overlapping stints (possible via /time, which has no overlap validation)
-                // drive restHours negative — keep the VIOLATION (comparison uses the true value)
-                // but clamp the DISPLAYED value to 0 so the message never reads an ugly "-1.0t".
+                // NOTE(b): overlapping stints (the Skema save refuses overlapping intervals, but a
+                // direct caller of this rule can send them) drive restHours negative — keep the
+                // VIOLATION (comparison uses the true value) but clamp the DISPLAYED value to 0 so
+                // the message never reads an ugly "-1.0t".
                 var displayRest = Math.Max(0m, restHours);
 
                 var finding = new ComplianceViolation
                 {
                     ViolationType = ComplianceViolationType.DAILY_REST,
                     Date = current.Date,
-                    ActualValue = Math.Round(displayRest, 1),
+                    // One decimal, halves up: the same rounding as the message's F1, so the two agree.
+                    ActualValue = Math.Round(displayRest, 1, MidpointRounding.AwayFromZero),
                     ThresholdValue = config.MinimumRestHours,
                     Severity = severity,
                     Message = $"Hvileperiode mellem {current.Date:yyyy-MM-dd} og {next.Date:yyyy-MM-dd} er {displayRest:F1}t — minimum er {config.MinimumRestHours:F1}t"
@@ -376,19 +385,19 @@ public static class RestPeriodRule
     /// </para>
     /// </summary>
     private static void CheckWeeklyRest(
-        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<WorkStint> stints,
         DateOnly periodStart,
         DateOnly periodEnd,
         AgreementRuleConfig config,
         List<ComplianceViolation> violations,
         List<ComplianceViolation> warnings)
     {
-        // Worked days = the START day of each reconstructed non-voluntary stint (crossing halves
-        // collapse into one stint, counted under its start day only — no false extra worked-day).
-        // BLOCKER-2: reconstruct from RAW entries and keep only stints overlapping the period, so a
-        // boundary crossing on periodStart-1 counts under periodStart-1 (outside every window here)
-        // and does NOT falsely mark periodStart as worked via its in-window post-half.
-        var workDays = ReconstructStints(entries, config)
+        // Worked days = the START day of each non-voluntary stint (a night shift's two halves are
+        // one stint, counted under its start day only — no false extra worked-day). Only stints
+        // overlapping the period count, so a night shift starting on periodStart-1 counts under
+        // periodStart-1 (outside every window here) and does NOT mark periodStart as worked via
+        // its post-midnight part.
+        var workDays = stints
             .Where(s => IsPeriodRelevant(s, periodStart, periodEnd))
             .Where(s => !s.AllVoluntary)
             .Select(s => s.StartDate)
@@ -462,7 +471,8 @@ public static class RestPeriodRule
             {
                 ViolationType = ComplianceViolationType.WEEKLY_MAX_HOURS,
                 Date = periodStart,
-                ActualValue = Math.Round(avgWeeklyHours, 1),
+                // One decimal, halves up: the same rounding as the message's F1, so the two agree.
+                ActualValue = Math.Round(avgWeeklyHours, 1, MidpointRounding.AwayFromZero),
                 ThresholdValue = 48.0m,
                 Severity = ComplianceSeverity.VIOLATION,
                 Message = $"Gennemsnitlig ugentlig arbejdstid {avgWeeklyHours:F1}t overstiger EU-loftet paa 48t/uge over referenceperioden"
@@ -471,7 +481,8 @@ public static class RestPeriodRule
     }
 
     // -------------------------------------------------------------------
-    // ADR-039 (S132 TASK-1a + 1b-3) — continuous-stint reconstruction for the rest checks.
+    // ADR-039 D4/D5 — the continuous stints the rest checks measure, built from the Skema
+    // clock intervals (ADR-043 D10).
     // -------------------------------------------------------------------
 
     /// <summary>
@@ -484,93 +495,82 @@ public static class RestPeriodRule
         DateTime AbsStart, DateTime AbsEnd, DateOnly StartDate, bool AllVoluntary);
 
     /// <summary>
-    /// Reconstructs continuous work stints from the RAW (un-period-filtered) entries. Callers apply
-    /// period relevance to the returned stints (see <see cref="IsPeriodRelevant"/>), NOT to the rows
-    /// beforehand — otherwise a boundary crossing's out-of-window half would be dropped before its
-    /// sibling could rejoin it (ADR-039 BLOCKER-2).
-    ///
-    /// <para>
-    /// Rows sharing a non-null <see cref="TimeEntry.SourceStintId"/> are the two halves of one
-    /// midnight-crossing stint (ADR-039 D4); a null-id row is its own stint. Within a stint, a row
-    /// whose <c>EndTime ≤ StartTime</c> crosses midnight — either a RAW crossing entry that reached
-    /// the rule un-normalized (the QUAL-001 case), OR the pre-half's <c>00:00</c> end-of-day
-    /// sentinel — so its end instant is on the following calendar day. Only timed entries (both
-    /// StartTime and EndTime present, <see cref="IsTimed"/>) participate; hours-only entries have no
-    /// clock and cannot bound a rest gap (unchanged from the pre-fix checks — S147 reports the days
-    /// this leaves out, <see cref="FindRestNotCheckedDays"/>).
-    /// </para>
+    /// The last minute of a day. Skema accepts hours 0–23 only, so a shift that runs to midnight
+    /// is typed as ending at 23:59; an interval ending here or later continues into a 00:00 start
+    /// on the next day.
+    /// </summary>
+    private static readonly TimeOnly LastMinuteOfDay = new(23, 59);
+
+    /// <summary>
+    /// Builds the stints the rest checks measure between, from the kept intervals (end after
+    /// start) alone: one stint per interval, except across midnight. <b>Midnight continuity:</b> an
+    /// interval ending at 23:59 or later on day D and an interval starting at exactly 00:00 on
+    /// D+1 are one stint, and the join repeats, so a chain over several midnights is one stint.
+    /// Nothing else joins: two intervals touching inside a day (12:00 end, 12:00 start) are two
+    /// stints, which the daily check then clusters as one working day. A stint starts at its first
+    /// interval's start, ends at its last interval's end, and its start day is its first
+    /// interval's date. It is all-voluntary only when every date it touches is in
+    /// <paramref name="voluntaryDays"/> and it does not start at exactly 00:00 on a date before
+    /// <paramref name="periodStart"/>: the compliance read begins the day before the period, so such
+    /// a stint may continue work from a day the read cut off, and its beginning is unknown. The
+    /// rule errs toward reporting the rest, never toward hiding it.
     /// </summary>
     private static List<WorkStint> ReconstructStints(
-        IReadOnlyList<TimeEntry> entries, AgreementRuleConfig config)
+        IReadOnlyList<ComplianceWorkInterval> intervals,
+        IReadOnlySet<DateOnly> voluntaryDays,
+        DateOnly periodStart)
     {
-        var byStint = new Dictionary<Guid, List<TimeEntry>>();
-        var singletons = new List<TimeEntry>();
+        var groups = new List<List<ComplianceWorkInterval>>();
+        // Day D → the stint whose interval on D runs to 23:59 or later, which a 00:00 start on
+        // D+1 continues.
+        var runsToMidnight = new Dictionary<DateOnly, List<ComplianceWorkInterval>>();
 
-        foreach (var e in entries)
+        var inTimeOrder = intervals.OrderBy(i => i.Date).ThenBy(i => i.Start).ThenBy(i => i.End);
+        foreach (var iv in inTimeOrder)
         {
-            if (!IsTimed(e))
-                continue;
+            if (iv.Start != TimeOnly.MinValue
+                || !runsToMidnight.TryGetValue(iv.Date.AddDays(-1), out var group))
+            {
+                group = new List<ComplianceWorkInterval>();
+                groups.Add(group);
+            }
+            group.Add(iv);
 
-            if (e.SourceStintId is Guid id)
-            {
-                if (!byStint.TryGetValue(id, out var list))
-                {
-                    list = new List<TimeEntry>(2);
-                    byStint[id] = list;
-                }
-                list.Add(e);
-            }
-            else
-            {
-                singletons.Add(e);
-            }
+            if (iv.End >= LastMinuteOfDay)
+                runsToMidnight[iv.Date] = group;
         }
 
-        var stints = new List<WorkStint>(byStint.Count + singletons.Count);
-        foreach (var grp in byStint.Values)
-            stints.Add(BuildStint(grp, config));
-        foreach (var e in singletons)
-            stints.Add(BuildStint(new[] { e }, config));
-
-        return stints;
+        return groups.Select(g => BuildStint(g, voluntaryDays, periodStart)).ToList();
     }
 
     /// <summary>
-    /// Builds one stint's absolute interval from its constituent rows. The stint start is the
-    /// earliest row-start instant; the stint end is the latest row-end instant, where a row that
-    /// crosses midnight (<c>EndTime ≤ StartTime</c>) has its end instant advanced to the next day.
-    /// The stint is "all voluntary" only if every constituent row is voluntary-and-allowed.
+    /// One stint's absolute span from its intervals, which arrive in time order: from the first
+    /// interval's start instant to the latest end instant. A stint cut at the read edge (first
+    /// interval at exactly 00:00 on a date before <paramref name="periodStart"/>) is never
+    /// voluntary; see <see cref="ReconstructStints"/>.
     /// </summary>
-    private static WorkStint BuildStint(IReadOnlyList<TimeEntry> rows, AgreementRuleConfig config)
+    private static WorkStint BuildStint(
+        IReadOnlyList<ComplianceWorkInterval> group,
+        IReadOnlySet<DateOnly> voluntaryDays,
+        DateOnly periodStart)
     {
-        var absStart = DateTime.MaxValue;
-        var absEnd = DateTime.MinValue;
-        var allVoluntary = true;
-
-        foreach (var r in rows)
-        {
-            var start = r.Date.ToDateTime(r.StartTime!.Value);
-            var end = r.Date.ToDateTime(r.EndTime!.Value);
-            if (r.EndTime!.Value <= r.StartTime!.Value)
-                end = end.AddDays(1); // crosses midnight → end instant is on the following day
-
-            if (start < absStart) absStart = start;
-            if (end > absEnd) absEnd = end;
-            allVoluntary &= r.VoluntaryUnsocialHours && config.VoluntaryUnsocialHoursAllowed;
-        }
-
-        return new WorkStint(absStart, absEnd, DateOnly.FromDateTime(absStart), allVoluntary);
+        var first = group[0];
+        var cutAtReadEdge = first.Start == TimeOnly.MinValue && first.Date < periodStart;
+        return new WorkStint(
+            AbsStart: first.Date.ToDateTime(first.Start),
+            AbsEnd: group.Max(iv => iv.Date.ToDateTime(iv.End)),
+            StartDate: first.Date,
+            AllVoluntary: !cutAtReadEdge && group.All(iv => voluntaryDays.Contains(iv.Date)));
     }
 
     /// <summary>
     /// True when a stint overlaps the (closed) calendar period <c>[periodStart, periodEnd]</c> in
-    /// absolute terms. Stints are reconstructed from the RAW (un-period-filtered) entries so a
-    /// boundary crossing joins correctly (BLOCKER-2); relevance is then applied to whole stints:
-    /// a crossing on <c>periodStart-1</c> (fetched via the ADR-039 GAP-B one-day widen) overlaps the
-    /// period (its post-midnight portion is in-window) and is kept — under its true start day
-    /// <c>periodStart-1</c>, so it never falsely marks <c>periodStart</c> as worked. A fully
-    /// out-of-period entry (e.g. a non-crossing <c>periodStart-1</c> shift, or anything after
-    /// <c>periodEnd</c>) does not overlap and is dropped.
+    /// absolute terms. The weekly-rest check counts only these: a night shift starting on
+    /// <c>periodStart-1</c> (supplied by the compliance read's one-day widen, ADR-039 D5b) overlaps
+    /// the period through its post-midnight part and is kept — under its true start day
+    /// <c>periodStart-1</c>, so it never marks <c>periodStart</c> as worked. A stint wholly before
+    /// or after the period is dropped. The daily-rest check does not use this filter: it selects
+    /// rests by the day they end (<see cref="CheckDailyRest"/>).
     /// </summary>
     private static bool IsPeriodRelevant(WorkStint stint, DateOnly periodStart, DateOnly periodEnd)
     {

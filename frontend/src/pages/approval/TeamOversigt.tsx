@@ -329,7 +329,7 @@ function TeamRowDetail({
           ))
         )}
         {!compError && !compLoading && restNotice && (
-          <div className={`${styles.detailAlert} ${styles.detailAlertWarn}`} role="status">
+          <div className={`${styles.detailAlert} ${styles.detailAlertInfo}`} role="status">
             {restNotice}
           </div>
         )}

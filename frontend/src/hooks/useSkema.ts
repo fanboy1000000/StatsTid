@@ -768,13 +768,13 @@ export function overlappingPeriodIndices(periods: readonly ClockPeriod[]): Set<n
   return out
 }
 
-/** One §J adjacent-day rest violation (R6 trigger ii). */
+/** One rest the 11-hour rule judged too short (R6 trigger ii). */
 export interface RestPeriodWarning {
   /** The exact rest gap in hours (2-decimal). */
   gapHours: number
-  /** The earlier day — whose LAST interval end starts the rest gap ("YYYY-MM-DD"). */
+  /** The earlier group's day: the day the shift whose end starts the rest began ("YYYY-MM-DD"). */
   fromDate: string
-  /** The later day — whose FIRST interval start ends the rest gap ("YYYY-MM-DD"). */
+  /** The later group's day: the day whose first start ends the rest ("YYYY-MM-DD"). */
   toDate: string
 }
 
@@ -787,35 +787,72 @@ function addDays(date: string, delta: number): string {
   return `${y}-${m}-${dd}`
 }
 
-/** First interval start / last interval end (minutes) over a day's VALID intervals. */
-function dayClockBounds(wt: WorkTimeDay | undefined): { firstStart: number; lastEnd: number } | null {
-  if (!wt) return null
-  let firstStart = Infinity
-  let lastEnd = -Infinity
-  for (const iv of wt.intervals ?? []) {
-    const s = parseClockTime(iv.start)
-    const e = parseClockTime(iv.end)
-    if (s !== null && e !== null && e > s) {
-      if (s < firstStart) firstStart = s
-      if (e > lastEnd) lastEnd = e
+/** Whole days since the epoch for a "YYYY-MM-DD" date (UTC, so DST never shifts it). */
+function dayNumber(date: string): number {
+  return Math.round(Date.parse(date + 'T00:00:00Z') / 86_400_000)
+}
+
+/** One shift: valid intervals joined across midnight, on a continuous minute clock. */
+interface RestShift {
+  startDate: string
+  startMin: number
+  endDate: string
+  endMin: number
+}
+
+const LAST_CLOCK_MINUTE = 23 * 60 + 59
+
+/**
+ * Joins every day's VALID intervals (both ends parse, end after start) into shifts, as the engine
+ * does: an interval ending at 23:59 or later on day D and one starting at exactly 00:00 on D + 1
+ * are one shift, and the join repeats, so a chain over several midnights is one shift. Nothing
+ * else joins.
+ */
+function joinShifts(byDate: ReadonlyMap<string, WorkTimeDay>): RestShift[] {
+  const intervals: Array<{ date: string; s: number; e: number }> = []
+  for (const [date, wt] of byDate) {
+    for (const iv of wt.intervals ?? []) {
+      const s = parseClockTime(iv.start)
+      const e = parseClockTime(iv.end)
+      if (s !== null && e !== null && e > s) intervals.push({ date, s, e })
     }
   }
-  return firstStart === Infinity ? null : { firstStart, lastEnd }
+  intervals.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.s - b.s || a.e - b.e))
+
+  const shifts: RestShift[] = []
+  // date -> the shift whose latest interval ends on that date at 23:59 or later
+  const reachesMidnight = new Map<string, RestShift>()
+  for (const { date, s, e } of intervals) {
+    const base = dayNumber(date) * 1440
+    const joined = s === 0 ? reachesMidnight.get(addDays(date, -1)) : undefined
+    const shift: RestShift = joined ?? { startDate: date, startMin: base + s, endDate: date, endMin: base + e }
+    shift.endDate = date
+    shift.endMin = base + e
+    if (!joined) shifts.push(shift)
+    if (e >= LAST_CLOCK_MINUTE) reachesMidnight.set(date, shift)
+  }
+  return shifts
 }
 
 /**
- * R6 (trigger ii) — the SYSTEM_TARGET §J adjacent-day 11-hour rest analysis,
- * client-side and WARNING-ONLY (the rule engine stays definitive; the in-context
- * VoluntaryUnsocialHours choice is a recorded follow-up, deliberately absent).
+ * R6 (trigger ii) — the SYSTEM_TARGET §J 11-hour rest analysis, client-side and WARNING-ONLY: it
+ * gives the instant warning on unsaved edits while the rule engine stays the authority and runs the
+ * same algorithm, which the shared scenario table (`rest-parity-scenarios.json`, `restParity.test.ts`
+ * and the engine's `RestParityTableTests`) keeps honest.
  *
- * Checks the gap between the PREVIOUS calendar day's last interval end and the
- * given day's first interval start, and symmetrically toward the NEXT day. At
- * month edges the adjacent day resolves from the served `boundaryWorkTime`
- * (prev-month last day / next-month first day — month entries win on duplicate
- * dates). Days with no interval data impose no constraint; a day with no own
- * intervals returns null (nothing to anchor).
+ * Shifts are joined at midnight (Skema cannot type 24:00, so a night shift is 22:00–23:59 plus
+ * 00:00–06:00), grouped by the day they START, and each group is compared with the next: the rest
+ * runs from the earlier group's latest end to the later group's earliest start. `fromDate` is the
+ * earlier group's day and `toDate` the later group's. At month edges the adjacent day resolves from
+ * the served `boundaryWorkTime` (month entries win on duplicate dates). The minimum is the fixed
+ * `REST_MINIMUM_HOURS`; the served one is a later task's. The screen does not apply the engine's
+ * voluntary-unsocial-hours exemption or its derogation severity, and uses the fixed minimum; the
+ * table proves the rest computation only. An overlap never shows a negative rest: the shown gap is
+ * clamped at 0 while the comparison stays on the true value.
  *
- * Returns the violations (1–2 entries, previous-gap first) or null when none.
+ * For the open `date`, returns each too-short rest for which `date` is the later group's day, the
+ * earlier group's day, or a day the earlier group's shift runs on past its start day (earlier rest
+ * first), or null when there is none.
  */
 export function analyzeRestPeriods(
   monthWorkTime: readonly WorkTimeDay[],
@@ -825,32 +862,39 @@ export function analyzeRestPeriods(
   const byDate = new Map<string, WorkTimeDay>()
   for (const wt of boundaryWorkTime ?? []) byDate.set(wt.date, wt)
   for (const wt of monthWorkTime) byDate.set(wt.date, wt) // month entries win
-  const today = dayClockBounds(byDate.get(date))
-  if (!today) return null
+
+  const groups = new Map<string, { startMin: number; endMin: number; runsOn: Set<string> }>()
+  for (const shift of joinShifts(byDate)) {
+    let g = groups.get(shift.startDate)
+    if (!g) {
+      g = { startMin: shift.startMin, endMin: shift.endMin, runsOn: new Set() }
+      groups.set(shift.startDate, g)
+    }
+    g.startMin = Math.min(g.startMin, shift.startMin)
+    g.endMin = Math.max(g.endMin, shift.endMin)
+    for (let d = addDays(shift.startDate, 1); d <= shift.endDate; d = addDays(d, 1)) g.runsOn.add(d)
+  }
+  const ordered = [...groups.entries()].sort((a, b) => a[1].startMin - b[1].startMin)
 
   const warnings: RestPeriodWarning[] = []
-  const minutesInDay = 24 * 60
-  const restMinimumMinutes = REST_MINIMUM_HOURS * 60
-
-  const prevDate = addDays(date, -1)
-  const prev = dayClockBounds(byDate.get(prevDate))
-  if (prev) {
-    const gapMin = minutesInDay - prev.lastEnd + today.firstStart
-    if (gapMin < restMinimumMinutes) {
-      warnings.push({ gapHours: round2(gapMin / 60), fromDate: prevDate, toDate: date })
+  for (let i = 0; i + 1 < ordered.length; i++) {
+    const [fromDate, earlier] = ordered[i]
+    const [toDate, later] = ordered[i + 1]
+    const gapMin = later.startMin - earlier.endMin
+    if (gapMin >= REST_MINIMUM_HOURS * 60) continue
+    if (date === toDate || date === fromDate || earlier.runsOn.has(date)) {
+      warnings.push({ gapHours: round2(Math.max(0, gapMin) / 60), fromDate, toDate })
     }
   }
-
-  const nextDate = addDays(date, 1)
-  const next = dayClockBounds(byDate.get(nextDate))
-  if (next) {
-    const gapMin = minutesInDay - today.lastEnd + next.firstStart
-    if (gapMin < restMinimumMinutes) {
-      warnings.push({ gapHours: round2(gapMin / 60), fromDate: date, toDate: nextDate })
-    }
-  }
-
   return warnings.length > 0 ? warnings : null
+}
+
+/**
+ * A rest as shown: one decimal, halves rounded up, as the server's value and message round it.
+ * (`toFixed` works on the binary value and shows 8,45 as 8,4.) Works on the 2-decimal `gapHours`.
+ */
+export function restGapDisplayHours(gapHours: number): number {
+  return Math.round(Math.round(gapHours * 100) / 10) / 10
 }
 
 // ════════════════════════════════════════════════════════════════════════════

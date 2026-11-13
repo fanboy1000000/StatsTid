@@ -488,23 +488,6 @@ public static class SkemaEndpoints
                     .Select(c => new SkemaAbsenceTypeRow(c.Type, c.Label, c.FullDayOnly))
                     .ToList());
 
-            // ── S72 / TASK-7201 — boundary-day workTime (SPRINT-72 R6 input) ──
-            // EXACTLY two extra days — the last day of the previous month and the first day
-            // of the next month — so the client-side §J 11-hour rest analysis has the
-            // adjacent registrations at month edges. Same row shape as `workTime`; days
-            // without a registration serve no row (consistent with the month array).
-            var prevBoundaryDay = monthStart.AddDays(-1);
-            var nextBoundaryDay = monthEnd.AddDays(1);
-            var prevBoundaryRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                employeeId, prevBoundaryDay, prevBoundaryDay, ct);
-            var nextBoundaryRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                employeeId, nextBoundaryDay, nextBoundaryDay, ct);
-            var boundaryWorkTime = prevBoundaryRows.Concat(nextBoundaryRows)
-                .Select(w => new SkemaWorkTimeDayRow(
-                    Date: w.Date,
-                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList()))
-                .ToList();
-
             // ── S72 / TASK-7201 — R10 fullDayNormAtMonthEnd scalar ──
             // The employee's WEEKDAY full-day norm (WeeklyNorm × fraction / 5, 2 decimals)
             // resolved via the dated profile + config at the viewed month's LAST day,
@@ -567,6 +550,38 @@ public static class SkemaEndpoints
                     return ApprovalReadTier.MonthNotSubmittedForbidden();
                 }
             }
+
+            // ── S72 / TASK-7201 — boundary-day workTime (SPRINT-72 R6 input) ──
+            // EXACTLY two extra days — the last day of the previous month and the first day
+            // of the next month — so the client-side §J 11-hour rest analysis has the
+            // adjacent registrations at month edges. Same row shape as `workTime`; days
+            // without a registration serve no row (consistent with the month array).
+            // Each boundary day belongs to its own month, and a manager sees nothing of a month
+            // the employee has not submitted (RES-002): for a leader-tier read a boundary row is
+            // served only when its month is submitted, by the month gate's own predicate
+            // (ApprovalVisibility.IsSubmittedToManager, above). The employee and HR-or-above get both.
+            // Read after the month gate above, so a leader refused there costs none of these reads.
+            var prevBoundaryDay = monthStart.AddDays(-1);
+            var nextBoundaryDay = monthEnd.AddDays(1);
+            var servePrevBoundary = !leaderTierRead || ApprovalVisibility.IsSubmittedToManager(
+                (await approvalRepo.GetByEmployeeAndPeriodAsync(
+                    employeeId, monthStart.AddMonths(-1), prevBoundaryDay, ct))?.Status);
+            var serveNextBoundary = !leaderTierRead || ApprovalVisibility.IsSubmittedToManager(
+                (await approvalRepo.GetByEmployeeAndPeriodAsync(
+                    employeeId, nextBoundaryDay, nextBoundaryDay.AddMonths(1).AddDays(-1), ct))?.Status);
+            var prevBoundaryRows = servePrevBoundary
+                ? await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, prevBoundaryDay, prevBoundaryDay, ct)
+                : Array.Empty<WorkTimeProjectionRow>();
+            var nextBoundaryRows = serveNextBoundary
+                ? await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, nextBoundaryDay, nextBoundaryDay, ct)
+                : Array.Empty<WorkTimeProjectionRow>();
+            var boundaryWorkTime = prevBoundaryRows.Concat(nextBoundaryRows)
+                .Select(w => new SkemaWorkTimeDayRow(
+                    Date: w.Date,
+                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList()))
+                .ToList();
 
             SkemaApprovalInfo? approval = period is not null
                 ? new SkemaApprovalInfo(
@@ -1028,7 +1043,7 @@ public static class SkemaEndpoints
                     // input and no test reaches today: TryParseTimeToSeconds accepts hours 0-23
                     // only and check (2) refuses overlaps first, so a day's intervals top out at
                     // 86 399 s, which rounds to 24,00. It guards the 24-hour rule in case the
-                    // interval parser changes (TASK-14814's work across midnight).
+                    // interval parser changes.
                     var intervalSeconds = parsedIntervals.Sum(p => p.End - p.Start);
                     var totalHours = Math.Round(intervalSeconds / 3600m, 2);
                     if (totalHours > 24m)

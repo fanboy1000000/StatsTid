@@ -1,3 +1,7 @@
+.region:empty {
+  position: absolute;
+}
+
 .container {
   margin-bottom: var(--space-400);
   border: 1px solid var(--color-border);
@@ -31,6 +35,11 @@
 .warning {
   border-color: var(--color-warning);
   background: color-mix(in srgb, var(--color-warning) 5%, transparent);
+}
+
+.info {
+  border-color: var(--color-info);
+  background: color-mix(in srgb, var(--color-info) 5%, transparent);
 }
 
 .itemHeader {
