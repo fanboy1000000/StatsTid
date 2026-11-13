@@ -1479,3 +1479,47 @@ TASK-14842-T dispatched.
 - **The rest-definition research**, step 1 of 3 (`general-purpose`, Opus 5.5, web).
   - **Pass 1 (unverified):** the 24-hour period is a rolling window looking back from working time, not the calendar day and not 24 hours from the start of the working day. A continuous shift over 13 hours is a breach in itself. The state agreement § 12 allows a cut to 8 hours under limits.
   - **Step 2, an independent verification** that re-reads every source, is running. Step 3 is a Fable adjudication of the consequences, and then owner Q2.
+
+**Plan "final + 8"** (`61fd7991`) carries the TASK-14813 Step 5a adjudication and owner Q1:
+- the manager-visibility rule on 14813's row, with `SkemaEndpoints.cs:491-506` authorized;
+- the read-edge voluntary rule;
+- M-27 and M-28;
+- a security consult on the fix-up diff.
+
+The consult's output is input to the cycle-2 review, so it runs first. AC ids stay at 117.
+
+**Step 5a cycle 1 on TASK-14814** (`f86aacaf..846789a1`): both lenses APPROVED-WITH-WARNINGS.
+- **Codex** (`S148-TASK-14814-5a-codex.raw.md`): 2 W / 5 N.
+- **Fable** (`S148-TASK-14814-5a-reviewer.md`): 5 W / 4 N.
+- **Both found** that on saveable input the screen and the server agree on which rests are short and how they are dated.
+
+**Adjudication** (`S148-TASK-14814-5a-adjudication-c1.md`, Fable 5.2, RULED, no owner question): every finding fixed now.
+- **Rounding:** a rest is shown to one decimal with halves rounded up, everywhere.
+  - The server's value used banker's rounding while its own message rounded half up.
+  - The screen's `toFixed` rounded some halves down, because it works on the binary value.
+  - So an 8 h 27 min rest would have read 8.5 on the server and 8,4 on the screen.
+  - No pinned value moves: every pinned rest value is whole.
+- **The midnight-join boundary** (23:59 or later, then exactly 00:00) is pinned on both sides by two near-miss rows, with mutations M-29 and M-30.
+- **The screen never shows a negative rest:** "kun -1 timers hvile" was possible while overlapping, unsaved periods were being typed.
+- **A clean month** no longer gets an extra 16 px gap. The empty live region is taken out of the layout, with `position: absolute` while empty, as the page's two other live regions do.
+- **The vitest** fails if the table and its own id list differ, so a row cannot run on one side only. It also names the pairs it expects to drop.
+- **The remark** says what the screen does not apply: the voluntary exemption and the derogation severity.
+- **A failed compliance call** clears last month's warnings instead of showing them under the new month.
+  - Side effect: a failed call now shows nothing at all.
+  - Saying "could not be checked" needs copy, so that part is registered as a QUAL row at merge.
+- **The shared table grows from twelve to sixteen rows.**
+
+**Plan "final + 9"** carries this ruling. The fix-up order is:
+1. 14813 fix-up 1 (in flight: manager visibility, read-edge voluntary rule);
+2. 14813 fix-up 2 (server rounding);
+3. 14813-T fix-up 1 (both adjudications' facts, M-27 … M-30, four table rows);
+4. 14814 fix-up 1 (clamp, rounding helper, region class, the stale clear, tests).
+
+**For the owner** (no decision):
+- rest hours now round halves up on both screens and the server;
+- a failed compliance check now shows nothing rather than last month's warnings.
+
+**Notes below the QUAL floor:**
+- `formatDanishNumber` rounds some halves down wherever hours are shown; no disagreement with a server figure was found outside the rest warning.
+- The engine formats its finding messages in the host's culture (unproven whether that is ever Danish).
+- A clean month is still to be looked at in a browser.
