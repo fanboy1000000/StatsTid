@@ -560,7 +560,7 @@ public static class OvertimeEndpoints
             // ── S147 / SEC-056 — SEGREGATION OF DUTIES (self-decision guard) ──────────────────────────
             // Nobody pays out or converts their OWN overtime. At the top of the handler, BEFORE the
             // scope check and every validation, so a self-request is refused (403) whatever its body.
-            // Defence in depth until S148 retires this route (ADR-043 F-3): no production write feeds
+            // Defence in depth until the overtime ledger replaces this route (ADR-043 D8, stage 2): no production write feeds
             // the balance today, so compensate cannot reach its update — the guard closes the path
             // before anything can. WARNING log, no audit row; date-free reason.
             if (ApprovalSelfGuard.IsSelf(actor, employeeId))
@@ -593,11 +593,14 @@ public static class OvertimeEndpoints
                 return Results.BadRequest(new { error = $"Insufficient remaining hours. Available: {balance.Remaining}" });
 
             // Atomic in-tx balance adjustment + outbox enqueue (ADR-018 D3, Pattern C — no
-            // audit row). Replaces the prior post-commit eventStore.AppendAsync shape so a
-            // process crash between the balance UPDATE and event emission can no longer leave
-            // an updated balance row without its corresponding OvertimeCompensationApplied
-            // event. The OutboxPublisher drains outbox_events to the canonical event store
-            // under its own ReadCommitted transaction (ADR-018 D4) at-least-once.
+            // audit row): the event is enqueued only when the guarded UPDATE changed the row, in
+            // the same transaction, so the balance and OvertimeCompensationApplied commit or roll
+            // back together. The UPDATE's WHERE refuses when the remaining hours no longer cover
+            // the request — a concurrent compensation committed after the pre-check above (READ
+            // COMMITTED re-checks the WHERE against the committed row). Then the handler rolls back
+            // and answers 409, recording no event for hours that were not settled (QUAL-239).
+            // The OutboxPublisher drains outbox_events to the canonical event store under its
+            // own ReadCommitted transaction (ADR-018 D4) at-least-once.
             var evt = new OvertimeCompensationApplied
             {
                 EmployeeId = employeeId,
@@ -616,15 +619,22 @@ public static class OvertimeEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
+                    bool updated;
                     if (request.CompensationType == "PAYOUT")
                     {
-                        await overtimeBalanceRepo.AdjustPaidOutAsync(
-                            conn, tx, employeeId, request.PeriodYear, request.Hours, ct);
+                        updated = (await overtimeBalanceRepo.AdjustPaidOutAsync(
+                            conn, tx, employeeId, request.PeriodYear, request.Hours, ct)).Success;
                     }
                     else
                     {
-                        await overtimeBalanceRepo.AdjustAfspadseringAsync(
-                            conn, tx, employeeId, request.PeriodYear, request.Hours, ct);
+                        updated = (await overtimeBalanceRepo.AdjustAfspadseringAsync(
+                            conn, tx, employeeId, request.PeriodYear, request.Hours, ct)).Success;
+                    }
+
+                    if (!updated)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Conflict(new { error = "Insufficient remaining hours: the overtime balance changed while this request was processed; nothing was applied" });
                     }
 
                     await outbox.EnqueueAsync(

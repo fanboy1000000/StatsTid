@@ -233,13 +233,6 @@
   outline-offset: var(--focus-outline-offset);
 }
 
-/* D-B — read-only legacy manual-hours line (no entry UI) */
-.manualLine {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  margin: 0;
-}
-
 .workTotal {
   display: flex;
   align-items: baseline;

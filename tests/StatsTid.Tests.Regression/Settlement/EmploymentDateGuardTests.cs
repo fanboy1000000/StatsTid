@@ -579,9 +579,9 @@ public sealed class EmploymentDateGuardTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO work_time_projection
-                (employee_id, date, intervals, manual_hours, occurred_at, outbox_id)
+                (employee_id, date, intervals, occurred_at, outbox_id)
             VALUES
-                (@emp, @date, '[]'::jsonb, 7.4, NOW(), @outbox)
+                (@emp, @date, '[{"start":"08:00","end":"15:24"}]'::jsonb, NOW(), @outbox)
             """, conn);
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("date", date);

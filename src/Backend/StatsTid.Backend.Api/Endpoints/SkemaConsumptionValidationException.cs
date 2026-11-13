@@ -1,24 +1,40 @@
 namespace StatsTid.Backend.Api.Endpoints;
 
 /// <summary>
-/// S66 / TASK-6603 FIX-FORWARD — internal signal raised INSIDE the locked Skema POST transaction
-/// (<c>POST /api/skema/{employeeId}/save</c>) when an in-lock consumption re-check fails against the
-/// AUTHORITATIVE per-row <c>fullDayHours</c> re-derived under the advisory lock (ADR-032 D2/D3).
+/// Internal signal raised INSIDE the locked Skema POST transaction
+/// (<c>POST /api/skema/{employeeId}/save</c>) when one of its in-lock, authoritative validation
+/// re-checks fails, before any write (ADR-032 D2/D3; ADR-043 D2).
 ///
 /// <para>
-/// Two failure modes, both arising only when a profile change RACED between the pre-tx fast guard and
-/// the in-lock authoritative recompute (the pre-tx guards stay the cheap common path; this is the
-/// race loser's clean validation error, never a 500):
+/// Each re-check mirrors a pre-tx guard, which stays the cheap common path; this is the race loser's
+/// clean validation error, never a 500. The failure modes:
 /// <list type="bullet">
 ///   <item><description><b>profile-missing (B1)</b>: an entitlement-consuming row whose date has no
 ///     covering dated profile under the in-lock read ⇒ <c>fullDayHours</c> null ⇒ unvalued
 ///     consumption. Surfaces as the SAME <c>employment_profile_missing</c> 422 the pre-tx anchor
 ///     guard returns (D3 no-profile rule — fail-closed, never persist a null-valued consuming
-///     row).</description></item>
+///     row). Arises when a profile change raced the save.</description></item>
 ///   <item><description><b>norm-cap (B2)</b>: a date's all-types absence-hour total exceeds the
 ///     in-lock authoritative <c>fullDayHours</c> (a racing PUT lowered the norm) ⇒ a per-row
 ///     <c>dayEquivalent &gt; 1.0</c> would persist. Surfaces as the SAME
 ///     <c>"Total absence hours exceed norm day"</c> 422 the pre-tx D3 cap returns.</description></item>
+///   <item><description><b>full-day-only (B3)</b>: a care or senior day whose hours no longer equal
+///     the in-lock basis (a racing PUT changed it). Surfaces as the SAME <c>absence_full_day_only</c>
+///     422 the pre-tx full-day guard returns.</description></item>
+///   <item><description><b>paid-absence day bound</b>: a touched date whose credit-class paid
+///     absence, as the day will stand after the save, exceeds max(0, planned − worked) on the state
+///     committed while the lock is held. Arises mostly when another save of the same employee
+///     committed while this one waited for the lock (two saves that each saw the day without the
+///     other), or a racing PUT lowered the basis. Surfaces as the SAME 422 the pre-tx bound check
+///     returns (<c>kind = "paid-absence-day-bound"</c>).</description></item>
+///   <item><description><b>child's-sick judge</b> (QUAL-236), on the rows as committed while the
+///     lock is held: the illness chain (a child's 2nd or 3rd sick day whose earlier days of the same
+///     illness are missing, a day with no planned hours needing none, or which the OK version of the
+///     illness's first day does not give; <c>kind = "child-sick-chain"</c>); rule A (a 1st sick day
+///     or call-home day directly after a child's sick day; <c>kind = "child-sick-illness-start"</c>);
+///     rule B (a call-home day with no work above 0 that day;
+///     <c>kind = "child-sick-call-home-without-work"</c>). Surfaces as the SAME 422 the pre-tx
+///     judge returns.</description></item>
 /// </list>
 /// </para>
 ///

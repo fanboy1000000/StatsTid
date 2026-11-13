@@ -73,14 +73,6 @@ export function ManagerSkemaGrid({ employeeId, year, month }: ManagerSkemaGridPr
     return map
   }, [data])
 
-  const manualHours = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const wt of data?.workTime ?? []) {
-      if (wt.manualHours && wt.manualHours !== 0) map.set(wt.date, wt.manualHours)
-    }
-    return map
-  }, [data])
-
   const dailyNorm = useMemo(() => {
     const map = new Map<string, number | null>()
     for (const dn of data?.dailyNorm ?? []) map.set(dn.date, dn.hours)
@@ -111,7 +103,6 @@ export function ManagerSkemaGrid({ employeeId, year, month }: ManagerSkemaGridPr
             readOnly
             onCellChange={NO_EDITS}
             workIntervals={workIntervals}
-            manualHours={manualHours}
             dailyNorm={dailyNorm}
             // The Arbejdstid row must show HOURS WORKED, not the allocation glyph. Without this a
             // correctly-allocated month renders `✓` on every day and the registered work time is

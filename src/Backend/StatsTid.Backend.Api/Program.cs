@@ -190,7 +190,8 @@ builder.Services.AddSingleton<HrBackdateWorklistRepository>();
 builder.Services.AddSingleton<HrFollowUpSettlementReadRepository>(); // TASK-14003 — HRP-005/005b/007/010; stateless over the connection factory + the settlement service's read-only valuation entry point ⇒ singleton-safe
 builder.Services.AddSingleton<HrFollowUpApprovalReadRepository>();  // TASK-14004 — HRP-011/012/013/014/015/022
 // S141 / TASK-14113 (refinement C2) — the employment-history range reads. Read-only, no clock, no
-// state beyond the connection factory (the HrFollowUpApprovalReadRepository shape) ⇒ singleton-safe.
+// state beyond the connection factory ⇒ singleton-safe. (HrFollowUpApprovalReadRepository above also
+// holds the singleton ReportingLineRepository for the HRP-013 walk, never its clock: still singleton-safe.)
 //
 // NOT optional bookkeeping, and the sprint plan was WRONG to frame it as such. Minimal APIs infer an
 // unregistered complex parameter as a BODY parameter, and an inferred body on a MapGet throws at
@@ -247,6 +248,14 @@ builder.Services.AddSingleton<IAuditProjectionMapper<PeriodEmployeeApproved>, Pe
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodEmployeeApproved), nameof(PeriodEmployeeApproved)));
 builder.Services.AddSingleton<IAuditProjectionMapper<PeriodReopened>, PeriodReopenedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(PeriodReopened), nameof(PeriodReopened)));
+// S148 / TASK-14840 (addendum A1 D-5, NR-A5) — the three Skema cell clears: one audit row each, written
+// by the Skema save in its own transaction; the startup audit backfill picks them up from the event store.
+builder.Services.AddSingleton<IAuditProjectionMapper<TimeEntryCleared>, TimeEntryClearedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(TimeEntryCleared), nameof(TimeEntryCleared)));
+builder.Services.AddSingleton<IAuditProjectionMapper<AbsenceCleared>, AbsenceClearedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(AbsenceCleared), nameof(AbsenceCleared)));
+builder.Services.AddSingleton<IAuditProjectionMapper<WorkTimeCleared>, WorkTimeClearedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(WorkTimeCleared), nameof(WorkTimeCleared)));
 // Overtime family (3)
 builder.Services.AddSingleton<IAuditProjectionMapper<OvertimePreApprovalCreated>, OvertimePreApprovalCreatedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(OvertimePreApprovalCreated), nameof(OvertimePreApprovalCreated)));

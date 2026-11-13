@@ -8,11 +8,11 @@ namespace StatsTid.Tests.Regression.Security;
 
 /// <summary>
 /// S147 / TASK-14703-T (AC-230-5, the LocalHR self-service bullet; R-30, R-32) — a departed person who is
-/// HR-tier reaches their OWN month through the SELF-SERVICE screens (Skema save, time entry, send,
-/// reopen), and through the leader arm of reopen. All four routes ask the shared organisation-scope
+/// HR-tier reaches their OWN month through the SELF-SERVICE screens (Skema save, send,
+/// reopen), and through the leader arm of reopen. These routes ask the shared organisation-scope
 /// check "may this actor act on this employee?" through its EMPLOYEE overloads
-/// (<c>SkemaEndpoints.cs:658</c>, <c>TimeEndpoints.cs:87</c>, <c>ApprovalEndpoints.cs:1986</c>,
-/// <c>:1658</c>), so the clause inside the validator closes them with no handler change.
+/// (<c>SkemaEndpoints.cs:658</c>, <c>ApprovalEndpoints.cs:1986</c>,
+/// <c>:1658</c>; the time-entry route that was a fourth is retired, S148 R-20), so the clause inside the validator closes them with no handler change.
 ///
 /// <para><b>Plain language.</b> Mette used to be HR. She left on her last day (13 March 2026) but her
 /// account is still active (the grace) and her token is still valid. She must not be able to save, register
@@ -20,7 +20,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// for any other employee in scope.</para>
 ///
 /// <para><b>Kind F</b> for every refused leg (today the HR self is admitted by the validator, so each of the
-/// four calls succeeds); the "other employee" legs are <b>B</b> (boundary pin, holds today). Each refusal
+/// calls succeeds); the "other employee" legs are <b>B</b> (boundary pin, holds today). Each refusal
 /// asserts the date-free <see cref="DepartedSubject.DenyReason"/> (the CLAUSE), not the HR gate's or the
 /// SEC-009 guard's reason. <i>The refinement's R-32 had the reopen fact RED by mutation, because the clause
 /// and the grace were one task; split, it is a plain F here.</i></para>
@@ -47,14 +47,15 @@ public sealed class DepartedSelfServiceElevatedTests : SendCommandMatrixTestBase
     }
 
     /// <summary>
-    /// Kind F (three legs) + B (three "other employee" legs). Mette as LocalHR, her own March: Skema save,
-    /// time entry and send each answer 403 with the clause's reason and write nothing; the SAME token for
-    /// another employee in scope answers 200 / 201 / 200. Red conditions (today): the Skema save answers 200
-    /// <c>{saved:1}</c>, the time entry 201 and the send 200 EMPLOYEE_APPROVED, because the validator's
-    /// employee overloads admit an HR self; each <c>Assert 403</c> fails.
+    /// Kind F (two legs) + B (two "other employee" legs). Mette as LocalHR, her own March: Skema save
+    /// and send each answer 403 with the clause's reason and write nothing; the SAME token for
+    /// another employee in scope answers 200 / 200. Red conditions (today): the Skema save answers 200
+    /// <c>{saved:1}</c> and the send 200 EMPLOYEE_APPROVED, because the validator's
+    /// employee overloads admit an HR self; each <c>Assert 403</c> fails. S148 R-20: the time-entry legs
+    /// went with the retired <c>POST /api/time-entries</c>; the same clause on the Skema save is the leg above.
     /// </summary>
     [Fact]
-    public async Task LocalHr_OwnSkemaSave_TimeEntry_Send_403_OtherEmployee_200()
+    public async Task LocalHr_OwnSkemaSave_Send_403_OtherEmployee_200()
     {
         const string mette = "ds_svc_mette";
         const string otherAc = "ds_svc_other_ac";
@@ -77,16 +78,6 @@ public sealed class DepartedSelfServiceElevatedTests : SendCommandMatrixTestBase
         Assert.Equal(0L, await ScalarLongAsync(
             "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id=@e", ("e", mette)));
 
-        // her own time entry
-        var entry = await client.PostAsJsonAsync("/api/time-entries", new
-        {
-            employeeId = mette, date = new DateOnly(2026, 3, 10), hours = 7.4m,
-            taskId = (string?)null, activityType = "NORMAL", agreementCode = "HK",
-        });
-        await AssertClauseRefusalAsync(entry);
-        Assert.Equal(0L, await ScalarLongAsync(
-            "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id=@e", ("e", mette)));
-
         // her own send
         var send = await PostSendAsync(client, mette);
         await AssertClauseRefusalAsync(send);
@@ -100,13 +91,6 @@ public sealed class DepartedSelfServiceElevatedTests : SendCommandMatrixTestBase
             entries = new[] { new { date = new DateOnly(2026, 3, 10), projectCode = "PROJ-S147", hours = 7.4m } },
         });
         Assert.Equal(HttpStatusCode.OK, skemaOther.StatusCode);
-
-        var entryOther = await client.PostAsJsonAsync("/api/time-entries", new
-        {
-            employeeId = otherAc, date = new DateOnly(2026, 3, 11), hours = 7.4m,
-            taskId = (string?)null, activityType = "NORMAL", agreementCode = "AC",
-        });
-        Assert.Equal(HttpStatusCode.Created, entryOther.StatusCode);
 
         var sendOther = await PostSendAsync(client, otherHk);
         await AssertOkEmployeeApprovedAsync(sendOther);

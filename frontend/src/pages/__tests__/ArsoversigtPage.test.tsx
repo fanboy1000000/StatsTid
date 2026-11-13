@@ -75,7 +75,9 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
       careDayRemaining: 1,
       seniorDayRemaining: 3,
       sickDaysYtd: 4,
-      childSickRemaining: 1,
+      // S148 S0-2 (QUAL-236): the per-illness allowance replaces the yearly remainder.
+      childSickDaysPerIllness: 3,
+      childSickCallHomeDay: true,
       childSickEligible: true,
       seniorDayEligible: true,
     },
@@ -190,9 +192,10 @@ describe('ArsoversigtPage — header + tiles', () => {
     // No 7th tile — Særlige feriedage appears ONLY as a matrix group header.
     expect(screen.getAllByText('Særlige feriedage')).toHaveLength(1)
     // rest → saldo EVERYWHERE: no 'rest' remains; 'saldo' subs on Ferie +
-    // Omsorgsdage + Seniordage + Barns sygedag = 4.
+    // Omsorgsdage + Seniordage = 3.
+    // S148 S0-2 (QUAL-236): Barns sygedag is a per-illness allowance, no longer a saldo (4 → 3).
     expect(screen.queryByText('rest')).not.toBeInTheDocument()
-    expect(screen.getAllByText('saldo')).toHaveLength(4)
+    expect(screen.getAllByText('saldo')).toHaveLength(3)
   })
 
   it('OMITS the Seniordage + Barns-sygedag tiles (and the Seniordage grid group) entirely for an ineligible employee', () => {
@@ -206,7 +209,9 @@ describe('ArsoversigtPage — header + tiles', () => {
       seniorDayEligible: false,
       seniorDayRemaining: null,
       childSickEligible: false,
-      childSickRemaining: null,
+      // S148 S0-2 (QUAL-236)
+      childSickDaysPerIllness: null,
+      childSickCallHomeDay: false,
     }
     mockUseYearOverview.mockReturnValue(overviewHook(ineligible))
     renderPage()

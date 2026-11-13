@@ -133,9 +133,17 @@ Review the requirements refinement at <path> against:
 5. Risks — hidden coupling, in-flux interfaces, regression vectors, migration concerns missing?
 6. Architectural fit — conflicts with KB / ADRs / ROADMAP / the invariant model?
 
-Return BLOCKER / WARNING / NOTE findings with file:line citations where applicable. If clean, say "Clean — no findings."
+Return BLOCKER / WARNING / NOTE findings with file:line citations where applicable. No concrete case, no
+BLOCKER or WARNING: the case is the refinement sentence and the scenario it produces. A concern you cannot
+yet show that way is a NOTE marked "(unproven)" that states what evidence would prove it. Each finding:
+In plain words / Invariant or trade-off / Location / Concrete case / Fix / If we skip it.
+If clean, say "Clean — no findings."
 Be terse.
 ```
+
+(The one-line recording block in step 4 above is unchanged: it summarises the lenses' seven-field findings
+for the user. `(unproven)` NOTEs raised here are carried into the sprint log's Plan Review section, because
+`.claude/refinements/` is gitignored — `docs/AGENTS.md` § Reviewer Agent, "Role and Boundaries".)
 
 **Cycle cap**
 

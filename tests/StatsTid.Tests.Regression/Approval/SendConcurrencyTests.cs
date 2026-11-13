@@ -175,17 +175,11 @@ public abstract class SendConcurrencyTestBase
     protected static Task<HttpResponseMessage> PostEmployeeApproveAsync(HttpClient client, Guid periodId)
         => client.PostAsync($"/api/approval/{periodId}/employee-approve", content: null);
 
-    protected static Task<HttpResponseMessage> PostTimeEntryAsync(
-        HttpClient client, string employeeId, DateOnly date, decimal hours,
-        string activityType = "NORMAL", string? taskId = null, string agreementCode = "HK")
-        => client.PostAsJsonAsync("/api/time-entries",
-            new { employeeId, date, hours, taskId, activityType, agreementCode });
-
     protected static Task<HttpResponseMessage> PostSkemaWorkTimeSaveAsync(
         HttpClient client, string employeeId, DateOnly date, string start, string end,
         int year = MarchYear, int month = MarchMonth)
         => client.PostAsJsonAsync($"/api/skema/{employeeId}/save",
-            new { year, month, workTime = new[] { new { date, intervals = new[] { new { start, end } }, manualHours = 0m } } });
+            new { year, month, workTime = new[] { new { date, intervals = new[] { new { start, end } } } } });
 
     // ── Clients / tokens ──────────────────────────────────────────────────────────────────────────
 
@@ -552,7 +546,11 @@ public sealed class SendConcurrencyTests : SendConcurrencyTestBase
         var emp = UniqueEmp("7d");
         await SeedEmployeeAsync(emp);
         await CoverMarchWithAbsencesAsync(emp);
-        var saveDay = new DateOnly(2026, 3, 10); // a March weekday
+        // S148 S0-7: Saturday 14 March 2026, a day CoverMarchWithAbsencesAsync leaves without paid absence
+        // (it covers weekdays only). A weekday here holds Vacation 7,4, so the paid-absence day bound
+        // (ADR-043 D2) would refuse the 7,4 h work save in its advisory check before it ever queued on the
+        // lock, and the race this fact pins (send vs save on the month lock) would never happen.
+        var saveDay = new DateOnly(2026, 3, 14);
         var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
 
         await using var blockerConn = Fx.Db.Create();
@@ -586,128 +584,6 @@ public sealed class SendConcurrencyTests : SendConcurrencyTestBase
 
         // THE invariant: no save committed into the sent month.
         Assert.Equal(0L, await CountWorkTimeRowsAsync(emp, saveDay));
-
-        var periodId = await FindPeriodIdAsync(emp, MarchStart, MarchEnd);
-        Assert.NotNull(periodId);
-        Assert.Equal("EMPLOYEE_APPROVED", (await ReadRowAsync(periodId!.Value))!.Value.Status);
-    }
-
-    // ── AC-7(e) — send vs POST /api/time-entries ──────────────────────────────────────────────────
-    //
-    // A holder simulates the send's critical section (it holds the SAME advisory key the send holds).
-    // FAILS IF: the time-entry request does NOT enrol in the lock — then it would not block, so no
-    // waiter would ever appear (WaitForWaitersAsync would time out) AND a time_entries_projection row
-    // would be observable WHILE the lock is held (the mid-window assertion below would see 1, not 0).
-    [Fact]
-    public async Task AC7e_SendVsTimeEntry_TimeEntryWaitsOnLock_NoRowCommitsInsideTheWindow()
-    {
-        var emp = UniqueEmp("7e");
-        await SeedEmployeeAsync(emp);
-        var entryDay = new DateOnly(2026, 3, 12);
-        var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
-
-        // Hold the send's advisory lock (the "send window").
-        await using var blockerConn = Fx.Db.Create();
-        await blockerConn.OpenAsync();
-        await using var blockerTx = await blockerConn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-        await EmployeeConsumptionLock.AcquireAsync(blockerConn, blockerTx, emp);
-
-        // Fire the real time-entry POST — it must WAIT on the advisory lock.
-        var teClient = EmployeeClient(emp);
-        var timeEntry = Task.Run(() => PostTimeEntryAsync(teClient, emp, entryDay, 7.4m));
-
-        // Prove it WAITS: it appears as a waiter on OUR key.
-        await WaitForWaitersAsync(classId, objId, expected: 1);
-
-        // Inside the send's window (lock still held): NO projection row has committed.
-        Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, entryDay));
-
-        // Release the window → the time entry proceeds and commits exactly one row.
-        await blockerTx.CommitAsync();
-
-        var teRsp = await timeEntry;
-        Assert.Equal(HttpStatusCode.Created, teRsp.StatusCode);
-        Assert.Equal(1L, await CountTimeEntryRowsAsync(emp, entryDay));
-    }
-
-    // ── S128 / TASK-12803 — send WINS, then POST /api/time-entries must observe it in-lock ─────────
-    //
-    // AC-7e above proves the POST ENROLS in the lock (it waits, and nothing commits inside the
-    // window) — but in AC-7e no send ever commits, so the POST still 201s. THIS test is the other
-    // half, the exact race the POST's in-transaction period read exists for (the AC-7d shape, with
-    // the time-entry POST in the save's seat): the blocker forces BOTH the real /send and the real
-    // POST to queue, send FIRST (Postgres grants an exclusive advisory lock FIFO), so the send
-    // commits EMPLOYEE_APPROVED WHILE the POST is still blocked. The POST then acquires, re-reads
-    // the period INSIDE the lock — a read that is only fresh because the tx pins READ COMMITTED
-    // (PAT-015) and uses the (conn, tx) repository overload — and must 409 via the shared
-    // ApprovalPeriodSaveLock construction site.
-    //
-    // FAILS IF: the POST commits its projection row into the now-sent month (its in-lock read
-    // missed the send — e.g. the check was moved before the lock, read on a private connection, or
-    // the tx regressed to REPEATABLE READ), i.e. a time_entries_projection row exists for the day,
-    // or the POST returns anything but the status-naming 409.
-    [Fact]
-    public async Task S128_SendWinsThenTimeEntry_PostObservesNewStatusInLock_And409s()
-    {
-        var emp = UniqueEmp("s128");
-        await SeedEmployeeAsync(emp);
-        await CoverMarchWithAbsencesAsync(emp); // the send must pass workday coverage to win
-        var entryDay = new DateOnly(2026, 3, 12);
-        var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
-
-        // S128 Step-7a (Codex WARNING absorption): TOTAL-count snapshots, taken after all seeding
-        // and before either racer launches — the same unfiltered form the plain
-        // TimeEntryPeriodLockTests use. The send's own events land on approval/period streams, NOT
-        // the employee-{id} outbox stream the time-entry POST writes, so BOTH totals must come out
-        // of the race unchanged: any delta is a side effect this arm previously could not see.
-        var projRowsBefore = await ScalarLongAsync(
-            "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id=@e", ("e", emp));
-        var employeeStreamOutboxBefore = await ScalarLongAsync(
-            "SELECT COUNT(*) FROM outbox_events WHERE stream_id=@s", ("s", $"employee-{emp}"));
-
-        await using var blockerConn = Fx.Db.Create();
-        await blockerConn.OpenAsync();
-        await using var blockerTx = await blockerConn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-        await EmployeeConsumptionLock.AcquireAsync(blockerConn, blockerTx, emp);
-
-        // Send enqueues FIRST → head of the lock's FIFO wait queue.
-        var sendClient = EmployeeClient(emp);
-        var send = Task.Run(() => PostSendAsync(sendClient, emp));
-        await WaitForWaitersAsync(classId, objId, expected: 1);
-
-        // Time-entry POST enqueues SECOND → behind the send. Its pre-lock state saw NO period row.
-        var teClient = EmployeeClient(emp);
-        var timeEntry = Task.Run(() => PostTimeEntryAsync(teClient, emp, entryDay, 7.4m));
-        await WaitForWaitersAsync(classId, objId, expected: 2);
-
-        await blockerTx.CommitAsync(); // send acquires first, commits EMPLOYEE_APPROVED, then the POST runs
-
-        var sendRsp = await send;
-        var teRsp = await timeEntry;
-
-        // Send won.
-        Assert.Equal(HttpStatusCode.OK, sendRsp.StatusCode);
-        Assert.Equal("EMPLOYEE_APPROVED",
-            JsonDocument.Parse(await BodyAsync(sendRsp)).RootElement.GetProperty("status").GetString());
-
-        // POST refused, NAMING the sent status — proof its in-lock read saw the send's committed
-        // row (the shared 409 shape; the pre-lock world had no period row to name).
-        var teBody = await BodyAsync(teRsp);
-        Assert.True(teRsp.StatusCode == HttpStatusCode.Conflict,
-            $"expected 409, got {(int)teRsp.StatusCode}: {teBody}");
-        Assert.Contains("EMPLOYEE_APPROVED", teBody);
-
-        // THE invariant: no time entry committed into the sent month.
-        Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, entryDay));
-
-        // S128 Step-7a absorption — the TOTAL forms (unfiltered by date/type): the refused POST
-        // left the employee's projection AND employee-stream outbox exactly as seeded. The send's
-        // commit does not touch either (its events ride the approval streams), so ANY delta here
-        // is a leak the day-scoped count above would have missed.
-        Assert.Equal(projRowsBefore, await ScalarLongAsync(
-            "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id=@e", ("e", emp)));
-        Assert.Equal(employeeStreamOutboxBefore, await ScalarLongAsync(
-            "SELECT COUNT(*) FROM outbox_events WHERE stream_id=@s", ("s", $"employee-{emp}")));
 
         var periodId = await FindPeriodIdAsync(emp, MarchStart, MarchEnd);
         Assert.NotNull(periodId);

@@ -2,7 +2,7 @@
 // solA.jsx DayPanel) rendered inside the kit Drawer. The panel is fully CONTROLLED
 // (SPRINT-72 R16): all data arrives via props and every mutation leaves via a
 // callback — NO fetching, NO save plumbing (the page owns day-state + the debounced
-// save; the useSkema module owns the payload builder and the R7 manualHours pin).
+// save; the useSkema module owns the payload builder).
 //
 // Pinned rules implemented here:
 //   R5  — the "Alt fordelt ✓" Resterende mirror uses the backend allocation gate's
@@ -18,24 +18,24 @@
 //         on invalid/reversed/overlapping periods; NO absence section, NO
 //         clock-in/out; the step-2 header carries the "Administrer projekter" link
 //         (exposed as onOpenManager — wired by 7205).
-//   D-B — the manual lump-hours ENTRY UI is dropped; an existing manualHours value
-//         renders read-only ("Manuelt registreret: X t") and keeps counting in the
-//         day's worked total.
+//   D-B — the manual lump-hours entry UI and the manual-hours value are retired
+//         (ADR-028, ADR-043 D10): the day total is the clock periods alone.
 //   S58 — the relocated validation mirrors (7202 deleted the old dialog): overlap
 //         flagging + the 24h day cap, ADVISORY only — the backend 422 stays
-//         authoritative (R5/R17: the save contract is frozen).
-import { useMemo, useState } from 'react'
+//         authoritative (R5: the save contract is frozen).
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Drawer } from './ui/Drawer'
 import { Alert } from './ui/Alert'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
 import {
   analyzeRestPeriods,
-  dayWorkedHours,
   overlappingPeriodIndices,
   periodHours,
+  periodsTotalHours,
   LONG_DAY_WARNING_HOURS,
   MAX_DAY_HOURS,
+  restGapDisplayHours,
   type ClockPeriod,
 } from '../hooks/useSkema'
 import { classifyAllocation, unallocated } from '../lib/allocation'
@@ -62,8 +62,6 @@ interface SkemaDayPanelProps {
   date: string
   /** The day's clock periods (step 1), raw text. Empty → one blank row renders. */
   periods: DayPanelPeriod[]
-  /** The day's EXISTING manual hours (D-B: read-only line, no entry UI). */
-  manualHours: number
   /** The VISIBLE project rows (R4 preference order) — step 2 renders one FIXED
       row per entry (no add/remove; membership is the manager modal's job). */
   projectRows: DayPanelProjectRow[]
@@ -78,8 +76,8 @@ interface SkemaDayPanelProps {
   /** The served 0..2 boundary days (prev-month last / next-month first) — R6. */
   boundaryWorkTime?: readonly WorkTimeDay[]
   onPeriodsChange: (date: string, periods: DayPanelPeriod[]) => void
-  /** hours: parsed exact value; null = cleared (the save path drops null/0 —
-      recorded inherited limitation, R17). */
+  /** hours: parsed exact value; null = cleared (the page posts it as a removal under
+      `cleared`, ADR-043 cell clearing). */
   onAllocationChange: (date: string, projectKey: string, hours: number | null) => void
   onClose: () => void
   /** The step-2 header's "Administrer projekter" link (wired by 7205). */
@@ -134,7 +132,6 @@ export function SkemaDayPanel({
   open,
   date,
   periods,
-  manualHours,
   projectRows,
   allocations,
   dailyNorm,
@@ -164,7 +161,7 @@ export function SkemaDayPanel({
     onPeriodsChange(date, list.filter((_, i) => i !== index))
 
   // ── Derived (exact 2-decimal arithmetic; display rounds to 0,1 — R5) ──
-  const worked = dayWorkedHours(list, manualHours)
+  const worked = periodsTotalHours(list)
   const overlapping = overlappingPeriodIndices(list)
 
   // Allocated = Σ over ALL served allocations for the day (R3 — includes
@@ -185,11 +182,10 @@ export function SkemaDayPanel({
     const overlayDay: WorkTimeDay = {
       date,
       intervals: list.map((p) => ({ start: p.from, end: p.to })),
-      manualHours,
     }
     const overlay = [...monthWorkTime.filter((wt) => wt.date !== date), overlayDay]
     return analyzeRestPeriods(overlay, boundaryWorkTime, date)
-  }, [monthWorkTime, boundaryWorkTime, date, list, manualHours])
+  }, [monthWorkTime, boundaryWorkTime, date, list])
 
   // S58 advisory mirrors (backend 422 authoritative).
   const hasOverlap = overlapping.size > 0
@@ -200,6 +196,30 @@ export function SkemaDayPanel({
   // ── Step-2 raw-text editing overlay (decimal comma survives mid-typing;
   // committed values live in the page's state via onAllocationChange) ──
   const [editingAlloc, setEditingAlloc] = useState<{ key: string; raw: string } | null>(null)
+
+  // The overlay must not outlive a value the PAGE changed under it (a refused removal restores the
+  // stored allocation while the input is still focused): when the focused allocation changes to
+  // something other than what the typing itself propagated, reset the overlay to the page's value.
+  // Only the overlay of the PROPAGATED edit is reset: text typed since (a "," or "-" that is never
+  // propagated) survives.
+  const propagatedAllocRef = useRef<{ key: string; raw: string } | null>(null)
+  const lastAllocSeenRef = useRef<{ key: string; value: number | undefined } | null>(null)
+  useEffect(() => {
+    if (!editingAlloc) {
+      lastAllocSeenRef.current = null
+      return
+    }
+    const value = allocations.get(editingAlloc.key)
+    const seen = lastAllocSeenRef.current
+    lastAllocSeenRef.current = { key: editingAlloc.key, value }
+    if (!seen || seen.key !== editingAlloc.key || seen.value === value) return
+    const n = editingAlloc.raw === '' ? NaN : parseDanishNumber(editingAlloc.raw)
+    const typed = Number.isNaN(n) || n === 0 ? undefined : n
+    if (typed === value) return
+    const propagated = propagatedAllocRef.current
+    if (!propagated || propagated.key !== editingAlloc.key || propagated.raw !== editingAlloc.raw) return
+    setEditingAlloc({ key: editingAlloc.key, raw: value != null && value !== 0 ? formatDanishNumber(value, 1) : '' })
+  }, [allocations, editingAlloc])
 
   const allocDisplay = (key: string): string => {
     if (editingAlloc && editingAlloc.key === key) return editingAlloc.raw
@@ -220,6 +240,7 @@ export function SkemaDayPanel({
     }
     setNegativeAlloc((cur) => (cur === key ? null : cur))
     if (num !== null && isNaN(num)) return
+    propagatedAllocRef.current = { key, raw }
     onAllocationChange(date, key, num === 0 ? null : num)
   }
 
@@ -265,7 +286,7 @@ export function SkemaDayPanel({
             )}
             {restWarnings?.map((w) => (
               <Alert key={`${w.fromDate}-${w.toDate}`} variant="warning">
-                Denne registrering giver kun {formatDanishNumber(w.gapHours, 1)} timers hvile
+                Denne registrering giver kun {formatDanishNumber(restGapDisplayHours(w.gapHours), 1)} timers hvile
                 mellem {formatLongDanishDate(w.fromDate)} og {formatLongDanishDate(w.toDate)}.
                 Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din
                 leder og kan udløse kompenserende hvile.
@@ -328,11 +349,6 @@ export function SkemaDayPanel({
             <button type="button" className={styles.addRow} onClick={addPeriod}>
               + Tilføj periode
             </button>
-            {manualHours > 0 && (
-              <p className={styles.manualLine}>
-                Manuelt registreret: {formatDanishNumber(manualHours, 1)} t
-              </p>
-            )}
             <div className={styles.workTotal}>
               <span>Arbejdstid i alt</span>
               <span className={styles.strong}>{formatDanishNumber(worked, 1)} t</span>
@@ -372,7 +388,11 @@ export function SkemaDayPanel({
                   placeholder="0"
                   inputMode="decimal"
                   disabled={stepTwoDisabled}
-                  onFocus={() => setEditingAlloc({ key: p.key, raw: allocDisplay(p.key) })}
+                  onFocus={() => {
+                    // The seeded text counts as this input's remembered value (see the reset above).
+                    propagatedAllocRef.current = { key: p.key, raw: allocDisplay(p.key) }
+                    setEditingAlloc({ key: p.key, raw: allocDisplay(p.key) })
+                  }}
                   onChange={(e) => handleAllocInput(p.key, e.target.value)}
                   onBlur={() => {
                     setEditingAlloc(null)

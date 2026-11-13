@@ -31,8 +31,9 @@ namespace StatsTid.Tests.Regression.Skema;
 /// Skema save is "this is now the cell's value" (refinement A0, constraint 6). These pins define that
 /// meaning for every surface an employee or HR sees. They speak HTTP and SQL only, so they compile against
 /// today's code, and they fail today for the right reason: a server total shows 15.4 where the spec says 8.0.
-/// The additive <c>POST /api/time-entries</c> registrations are a DIFFERENT meaning (several rows for one
-/// day and task are real, and all count); two guards below keep that untouched.</para>
+/// The additive <c>POST /api/time-entries</c> registrations were a DIFFERENT meaning (several rows for one
+/// day and task were real, and all counted); that route is retired (S148 R-20), so stored <c>TIME_POST</c>
+/// rows keep their additive meaning only through the rebuild, pinned in <c>ProjectionBackfillTests</c>.</para>
 ///
 /// <para><b>Expected values come from the spec</b> (SYSTEM_TARGET.md section A; refinement A0 and criteria
 /// <c>:557-580</c>; ADR-028 D1/D4), never from what the code returns today. Where a fact "fails today", that
@@ -42,7 +43,7 @@ namespace StatsTid.Tests.Regression.Skema;
 /// C-S1: every <c>Resave_Entry_*</c> fact (and S7, S11-S13) saves and re-saves ONE entry cell and no absence
 /// cell; <c>Resave_Absence_*</c> saves and re-saves ONE absence cell and no entry cell.
 /// C-S2: S7 counts the cell's current rows by SQL, not through a GET.
-/// C-S3: S11 and S13 use Skema saves only, no <c>POST /api/time-entries</c>.
+/// C-S3: S11 and S13 use Skema saves only (the time-entry route is retired, S148 R-20).
 /// C-S4: S9 asserts the reason, <c>error == "absence_full_day_only"</c>, so a quota 422 cannot stand in.
 /// Criterion (i): 8.0 h of work time is recorded for the day first (the send gate and the allocation
 /// readers compare it with the allocated hours). Absences sit on a WEEKDAY, nudged by
@@ -292,15 +293,16 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     /// <summary>
     /// <b>S8 (four rows).</b> A Skema save carrying a cell at 0 h or -1 h, as an entry or as an absence,
     /// answers 400 and writes nothing: no new event, no new projection row, no balance movement. The stored
-    /// cell stays as it was. (Clearing a cell is out of S145, R24; a 0-hour current row would be counted by
-    /// the strand check, returned by the GETs and emit a 0-hour NORMAL_HOURS line.)
+    /// cell stays as it was. (A cell is emptied by the request's <c>cleared</c> member, never by posting 0: a
+    /// 0-hour current row would be counted by the strand check, returned by the GETs and emit a 0-hour
+    /// NORMAL_HOURS line, so a posted 0 or negative number is still refused; AC-CL-7 (1), S148 TASK-14840.)
     ///
     /// <para>Each row first saves a valid cell at 7.4 h (asserted 200) and snapshots the employee's outbox
     /// events, the projection's rows and, for the absence rows, the VACATION balance. The refused save
     /// targets the same cell.</para>
     ///
-    /// <para><b>Red conditions.</b> Today nothing validates the hours of a Skema cell (only
-    /// <c>RequestValidator.cs:16</c> does, on the additive route), so each row's save succeeds with 200 and
+    /// <para><b>Red conditions.</b> These rows pin the Skema save's own 400 checks
+    /// (<c>SkemaEndpoints.cs:809-838</c>). Without them, each row's save would succeed with 200 and
     /// <c>Assert.Equal(HttpStatusCode.BadRequest, ...)</c> trips. Listed under <b>MD-10</b> (the pre-lock
     /// validation loses its hours-at-or-below-zero 400), which turns all four rows red the same way.</para>
     /// </summary>
@@ -375,46 +377,6 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
 
         Assert.Equal(1L, await AbsenceRowCountAsync(emp, Day));
         Assert.Equal(1.0m, await BalanceUsedAsync(emp, "CARE_DAY", Day.Year));
-    }
-
-    /// <summary>
-    /// <b>S10 (guard: passes today).</b> The additive registrations are untouched: two
-    /// <c>POST /api/time-entries</c> for the same day and task (3.4 h and 4.0 h) leave TWO rows, and both
-    /// count: the list returns two rows and the balance summary's actual hours are 7.4 (3.4 + 4.0). Only a
-    /// Skema save replaces a cell; a TIME_POST registration never does.
-    ///
-    /// <para><b>Red conditions.</b> Passes today and must keep passing. <b>MD-13</b> (both repositories'
-    /// insert marks for every source, dropping the SKEMA-only restriction) makes the second registration
-    /// supersede the first: the list shrinks to one row and <c>Assert.Equal(2, rows.Length)</c> trips.</para>
-    /// </summary>
-    [Fact]
-    public async Task TimePost_TwoRegistrationsSameDayAndTask_BothCounted()
-    {
-        var emp = await SeedEmployeeAsync();
-        var client = EmployeeClient(emp);
-
-        foreach (var hours in new[] { 3.4m, 4.0m })
-        {
-            var rsp = await client.PostAsJsonAsync("/api/time-entries", new
-            {
-                employeeId = emp,
-                date = Day.ToString("yyyy-MM-dd"),
-                hours,
-                taskId = Project,
-                activityType = "NORMAL",
-                agreementCode = "AC",
-            });
-            Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
-        }
-
-        var list = (await (await client.GetAsync($"/api/time-entries/{emp}"))
-            .Content.ReadFromJsonAsync<JsonElement>()).EnumerateArray().ToArray();
-        Assert.Equal(2, list.Length);
-        Assert.Equal(new[] { 3.4m, 4.0m }, list.Select(r => r.GetProperty("hours").GetDecimal()).OrderBy(h => h).ToArray());
-
-        var summary = await (await client.GetAsync(
-            $"/api/balance/{emp}/summary?year={Day.Year}&month={Day.Month}")).Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(7.4m, summary.GetProperty("normHoursActual").GetDecimal());
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -522,7 +484,7 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     private async Task SaveEntryCellTwiceAsync(string emp, bool recordWorkTime = true)
     {
         if (recordWorkTime)
-            await SaveOkAsync(emp, Payload(Day, workTime: new[] { (Day, 8.0m) }), "work time 8.0 h");
+            await SaveOkAsync(emp, Payload(Day, workTime: new[] { (Day, "08:00", "16:00") }), "work time 8.0 h");
         await SaveOkAsync(emp, Payload(Day, entries: new[] { (Day, Project, 7.4m) }), "entry 7.4 h");
         await SaveOkAsync(emp, Payload(Day, entries: new[] { (Day, Project, 8.0m) }), "entry re-save 8.0 h");
     }
@@ -535,13 +497,13 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
         DateOnly monthOf,
         (DateOnly Date, string Project, decimal Hours)[]? entries = null,
         (DateOnly Date, string Type, decimal Hours)[]? absences = null,
-        (DateOnly Date, decimal Manual)[]? workTime = null) => new
+        (DateOnly Date, string Start, string End)[]? workTime = null) => new
     {
         year = monthOf.Year,
         month = monthOf.Month,
         entries = entries?.Select(e => new { date = e.Date.ToString("yyyy-MM-dd"), projectCode = e.Project, hours = e.Hours }).ToArray(),
         absences = absences?.Select(a => new { date = a.Date.ToString("yyyy-MM-dd"), absenceType = a.Type, hours = a.Hours }).ToArray(),
-        workTime = workTime?.Select(w => new { date = w.Date.ToString("yyyy-MM-dd"), intervals = Array.Empty<object>(), manualHours = w.Manual }).ToArray(),
+        workTime = workTime?.Select(w => new { date = w.Date.ToString("yyyy-MM-dd"), intervals = new[] { new { start = w.Start, end = w.End } } }).ToArray(), // S148 S0-5: one clock interval (manual hours retired)
     };
 
     private Task<HttpResponseMessage> PostSaveAsync(string emp, object payload)

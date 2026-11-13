@@ -23,7 +23,6 @@ function renderPanel(overrides: Partial<PanelProps> = {}) {
     open: true,
     date: '2026-03-09', // Monday
     periods: [],
-    manualHours: 0,
     projectRows: PROJECTS,
     allocations: new Map<string, number>(),
     dailyNorm: 7.4,
@@ -95,14 +94,14 @@ describe('SkemaDayPanel — R6 warnings (warning-ONLY, panel meta area)', () => 
     expect(screen.queryByText(/Mere end 9 timers arbejde/)).toBeNull()
   })
 
-  it('R6: manual hours count toward the >9t trigger (D-B: worked totals include them)', () => {
-    renderPanel({ periods: [per('p1', '08:00', '16:00')], manualHours: 2 }) // 8 + 2 = 10
+  it('R6: more than 9 clock hours triggers the intra-day warning', () => {
+    renderPanel({ periods: [per('p1', '08:00', '18:00')] }) // 10.0h
     expect(screen.getByText(/Mere end 9 timers arbejde/)).toBeInTheDocument()
   })
 
   it('R6: the adjacent-day 11-hour analysis warns from the served month workTime, LIVE against the panel periods', () => {
     const monthWorkTime: WorkTimeDay[] = [
-      { date: '2026-03-08', intervals: [{ start: '12:00', end: '23:00' }], manualHours: 0 },
+      { date: '2026-03-08', intervals: [{ start: '12:00', end: '23:00' }] },
     ]
     renderPanel({ monthWorkTime, periods: [per('p1', '07:00', '15:00')] }) // gap 8h
     const warning = screen.getByText(/giver kun 8 timers hvile/)
@@ -112,9 +111,19 @@ describe('SkemaDayPanel — R6 warnings (warning-ONLY, panel meta area)', () => 
     expect(warning.closest('[role="alert"]')?.className).toContain('warning')
   })
 
+  // Kind F (S148 14814 fix-up 1). Red conditions: a rest of 8 h 27 min (8.45) is shown with
+  // `toFixed`, which works on the binary value, as "8,4"; the server rounds half up to 8.5.
+  it('S148: a rest of 8 h 27 min is shown rounded half up, "8,5 timers hvile"', () => {
+    const monthWorkTime: WorkTimeDay[] = [
+      { date: '2026-03-08', intervals: [{ start: '14:00', end: '22:00' }] },
+    ]
+    renderPanel({ monthWorkTime, periods: [per('p1', '06:27', '14:00')] })
+    expect(screen.getByText(/giver kun 8,5 timers hvile/)).toBeInTheDocument()
+  })
+
   it('R6: the adjacent-day analysis uses the served boundaryWorkTime at the month edge', () => {
     const boundaryWorkTime: WorkTimeDay[] = [
-      { date: '2026-02-28', intervals: [{ start: '14:00', end: '23:30' }], manualHours: 0 },
+      { date: '2026-02-28', intervals: [{ start: '14:00', end: '23:30' }] },
     ]
     renderPanel({
       date: '2026-03-01',
@@ -210,25 +219,13 @@ describe('SkemaDayPanel — step 1: Registrér arbejdsperioder', () => {
     expect(screen.queryByText(/overlapper/)).toBeNull()
   })
 
-  it('S58 mirror: a day total over 24h shows the advisory inline (manual hours included)', () => {
-    renderPanel({ periods: [per('p1', '00:00', '23:00')], manualHours: 2 }) // 23 + 2 = 25
+  it('S58 mirror: a day total over 24h shows the advisory inline (the panel sums overlapping periods)', () => {
+    renderPanel({ periods: [per('p1', '00:00', '23:00'), per('p2', '00:00', '02:00')] }) // 23 + 2 = 25
     expect(
       screen.getByText('Arbejdstid må ikke overstige 24 timer (i alt 25 t).'),
     ).toBeInTheDocument()
   })
 
-  it('D-B: a day with existing manualHours renders the read-only "Manuelt registreret: X t" line — and NO entry UI', () => {
-    renderPanel({ manualHours: 2 })
-    expect(screen.getByText('Manuelt registreret: 2 t')).toBeInTheDocument()
-    // The only textboxes are the period fra/til pair + the two project rows —
-    // no manual-hours input exists anywhere in the panel.
-    expect(screen.getAllByRole('textbox')).toHaveLength(4)
-  })
-
-  it('D-B: the manual line is absent when the day has no manual hours', () => {
-    renderPanel({ manualHours: 0 })
-    expect(screen.queryByText(/Manuelt registreret/)).toBeNull()
-  })
 })
 
 describe('SkemaDayPanel — step 2: Fordel på projekter (R11 + R5)', () => {
@@ -242,11 +239,6 @@ describe('SkemaDayPanel — step 2: Fordel på projekter (R11 + R5)', () => {
     expect(screen.getByLabelText('Projekt Alfa')).toBeEnabled()
     expect(screen.getByLabelText('Projekt Beta')).toBeEnabled()
     expect(document.querySelector('.sectionDim')).toBeNull()
-  })
-
-  it('a manual-only legacy day still enables step 2 (manual hours count in the worked total)', () => {
-    renderPanel({ manualHours: 7.4 })
-    expect(screen.getByLabelText('Projekt Alfa')).toBeEnabled()
   })
 
   it('renders one FIXED row per visible project (label + input + t) — no add/remove controls', () => {
@@ -313,7 +305,7 @@ describe('SkemaDayPanel — step 2: Fordel på projekter (R11 + R5)', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('clearing a project row propagates null (the save path drops null/0 — R17 recorded limitation)', () => {
+  it('clearing a project row propagates null (the page posts it as a removal)', () => {
     const allocations = new Map([['PRJ-A', 4]])
     const { props } = renderPanel({ periods: [per('p1', '08:00', '16:00')], allocations })
     fireEvent.change(screen.getByLabelText('Projekt Alfa'), { target: { value: '' } })

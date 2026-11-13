@@ -143,9 +143,14 @@ public static class EventSerializer
         ["ManagerVikarEnded"] = typeof(ManagerVikarEnded),
         // Sprint 49: Approval delegation fallback traversal warning (Phase 5 ADR-027 D5)
         ["FallbackTraversalWarning"] = typeof(FallbackTraversalWarning),
-        // Sprint 56: Self-recorded work-time state per (employee, date) — intervals + manual hours.
+        // Sprint 56: Self-recorded work-time state per (employee, date) — its work intervals.
         // Latest-wins superseding event; projection resolves latest (TASK-5601).
         ["WorkTimeRegistered"] = typeof(WorkTimeRegistered),
+        // S148 / TASK-14840 (owner Q2; addendum A1 D-3): a Skema cell emptied, one event per cell family,
+        // each retiring the current row of the registration it names. All three ride employee-{id}.
+        ["TimeEntryCleared"] = typeof(TimeEntryCleared),
+        ["AbsenceCleared"] = typeof(AbsenceCleared),
+        ["WorkTimeCleared"] = typeof(WorkTimeCleared),
         // Sprint 59: Per-employee entitlement eligibility (CHILD_SICK) — ADR-029.
         // Dated/version-guarded superseding event; projection resolves as-of-date latest (TASK-5902/5905).
         ["EmployeeEntitlementEligibilitySet"] = typeof(EmployeeEntitlementEligibilitySet),

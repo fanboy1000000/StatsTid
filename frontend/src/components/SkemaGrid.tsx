@@ -14,7 +14,7 @@
 //         served daily norm is flagged inline (aria-invalid) as the client mirror
 //         of the backend's absence-only cap (SkemaEndpoints.cs:740 — advisory; the
 //         backend 422 stays authoritative).
-//   R2  — Diff(day) = (workTime periods + manualHours + absence hours) − served norm.
+//   R2  — Diff(day) = (workTime clock periods + absence hours) − served norm.
 //         A full-absence day shows 0,0 GREEN (the shipped grid showed −7,4 red); a day
 //         with NO registration at all is BLANK (the shipped grid deliberately showed
 //         −norm). Trailing total sums rendered values.
@@ -28,9 +28,8 @@
 //         data (no panel trigger), no prefill; when `rowPreferences` is absent the
 //         grid falls back to rendering ALL served rows (the approval surface's
 //         leader-sees-the-full-record contract).
-//   R17 — cell-clearing is a RECORDED inherited limitation: the save path drops
-//         null/0 cells, so the 0→null propagation semantics here are kept verbatim
-//         from the shipped grid (do NOT add delete semantics).
+//   Clearing — an emptied or 0 cell propagates null; the page posts it as a removal
+//         (`cleared`, ADR-043 cell clearing), so the grid itself adds no delete semantics.
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useCalendarToday } from '../contexts/CalendarContext'
 import type { SkemaRow, SkemaRowPreferences } from '../types'
@@ -48,7 +47,6 @@ export interface WorkInterval {
 }
 
 export type WorkIntervalsMap = Map<string, WorkInterval[]>  // dateKey -> intervals
-export type ManualHoursMap = Map<string, number>            // dateKey -> manual hours
 export type DailyNormMap = Map<string, number | null>       // dateKey -> norm hours (null = blank)
 // S73 / TASK-7302 — dateKey -> the served ADR-032 consumption basis (R3/R5).
 // `null` = no dated profile covers the day → NO full-day snap (the typed value
@@ -64,16 +62,12 @@ interface SkemaGridProps {
   cellValues: Map<string, number>
   readOnly: boolean
   onCellChange: (rowKey: string, date: string, hours: number | null) => void
-  /** Served work-time intervals per day — feeds worked = periods + manual (R2). */
+  /** Served work-time intervals per day — feeds worked = clock periods (R2). */
   workIntervals?: WorkIntervalsMap
   /** Legacy pre-S72 page wiring ("Tilføj periode" dialog) — accepted for prop
       compatibility until TASK-7205 swaps the page; no longer used (the day panel
       owns interval editing per R16). */
   onWorkIntervalsChange?: (date: string, intervals: WorkInterval[]) => void
-  manualHours?: ManualHoursMap
-  /** Legacy pre-S72 page wiring ("Tilføj timer" row) — accepted-but-unused
-      (owner ruling D-B drops the lump-hours entry UI). */
-  onManualHoursChange?: (date: string, hours: number | null) => void
   dailyNorm?: DailyNormMap
   /** S73 R5 / S123 — the served per-day ADR-032 consumption basis. An entry in a
       `fullDayOnly` absence cell fills-to-norm ON INPUT to `consumptionBasis.get(dateKey)`
@@ -184,7 +178,6 @@ export function SkemaGrid({
   readOnly,
   onCellChange,
   workIntervals,
-  manualHours,
   dailyNorm,
   consumptionBasis,
   rowPreferences,
@@ -256,6 +249,32 @@ export function SkemaGrid({
   // ── Cell editing state: raw typed text while focused (decimal comma survives) ──
   const [editing, setEditing] = useState<{ key: string; raw: string; initial: string } | null>(null)
 
+  // The typing overlay must not outlive a value the PAGE changed under it (a refused removal
+  // restores the stored value while the input is still focused). When the focused cell's value
+  // changes and it is not what the typing itself propagated (blank/0 = absent, a number = that
+  // number), the overlay is reset to the page's value. The person's own typing never trips this:
+  // it changes the value to exactly what the overlay parses to. And only the overlay of the
+  // PROPAGATED edit is reset: text typed since (a "," or "-" the grid never propagates) survives.
+  const propagatedRawRef = useRef<{ key: string; raw: string } | null>(null)
+  const lastSeenRef = useRef<{ key: string; value: number | undefined } | null>(null)
+  useEffect(() => {
+    if (!editing) {
+      lastSeenRef.current = null
+      return
+    }
+    const value = cellValues.get(editing.key)
+    const seen = lastSeenRef.current
+    lastSeenRef.current = { key: editing.key, value }
+    if (!seen || seen.key !== editing.key || seen.value === value) return
+    const n = editing.raw === '' ? NaN : parseDanishNumber(editing.raw)
+    const typed = Number.isNaN(n) || n === 0 ? undefined : n
+    if (typed === value) return
+    const propagated = propagatedRawRef.current
+    if (!propagated || propagated.key !== editing.key || propagated.raw !== editing.raw) return
+    const fmt = value != null && value !== 0 ? formatCell(value) : ''
+    setEditing({ key: editing.key, raw: fmt, initial: fmt })
+  }, [cellValues, editing])
+
   // S123 — a full_day_only cell whose day has NO resolvable full-day basis: the
   // on-input fill-to-norm cannot snap, so we BLOCK the entry (emit no partial that
   // would 422) and flag the cell inline. Ephemeral (only one cell is edited at a
@@ -293,16 +312,15 @@ export function SkemaGrid({
     flashTimerRef.current = setTimeout(() => setRecentKey(null), 1200)
   }, [])
 
-  // ── Per-day worked = interval hours + manual hours (ADR-028 workTime; R2) ──
+  // ── Per-day worked = clock-interval hours (ADR-028 workTime; R2; manual hours retired, ADR-043 D10) ──
   const workedPerDay = useMemo(() => {
     const map = new Map<string, number>()
     for (const dateKey of dateKeys) {
       const period = workIntervals ? calcIntervalHours(workIntervals.get(dateKey) ?? []) : 0
-      const manual = manualHours?.get(dateKey) ?? 0
-      map.set(dateKey, round2(period + manual))
+      map.set(dateKey, round2(period))
     }
     return map
-  }, [dateKeys, workIntervals, manualHours])
+  }, [dateKeys, workIntervals])
 
   // Allocated per day = Σ project cells over ALL served project rows (R3).
   const allocatedPerDay = useMemo(() => {
@@ -367,10 +385,9 @@ export function SkemaGrid({
         projectKeys: new Set(projectRowsAll.map((r) => r.key)),
         absenceKeys: new Set(absenceRowsAll.map((r) => r.key)),
         workIntervals: workIntervals ?? new Map(),
-        manualHours: manualHours ?? new Map(),
         dailyNorm: dailyNorm ?? new Map(),
       }),
-    [year, month, cellValues, projectRowsAll, absenceRowsAll, workIntervals, manualHours, dailyNorm],
+    [year, month, cellValues, projectRowsAll, absenceRowsAll, workIntervals, dailyNorm],
   )
 
   // Trailing Diff total = Σ of RENDERED values (R2) — same single owner.
@@ -436,15 +453,17 @@ export function SkemaGrid({
       setNoBasisCell((cur) => (cur === cellKey ? null : cur))
       setNegativeCell((cur) => (cur === cellKey ? null : cur))
       setEditing({ key: cellKey, raw: fmt, initial: fmt })
+      // The seeded text counts as this input's remembered value: untouched since focus, it may be
+      // reset by a refusal, whichever input propagated last.
+      propagatedRawRef.current = { key: cellKey, raw: fmt }
     },
     [],
   )
 
   // Keeps the RAW typed text in the focused input (decimal comma survives
-  // mid-typing) while propagating the parsed value. Ordinary propagation semantics
-  // are verbatim from the shipped grid (R17): '' → null, 0 → null (the save path
-  // drops null/0 cells — clearing never persists; recorded inherited limitation),
-  // unparsable input → no call.
+  // mid-typing) while propagating the parsed value. Ordinary propagation: '' → null,
+  // 0 → null (the page posts null/0 as a removal under `cleared`, ADR-043 cell
+  // clearing), unparsable input → no call.
   //
   // S123/TASK-12303 — FULL-DAY-ONLY FILL-TO-NORM *ON INPUT* (mandatory, not blur):
   // for a `fullDayOnly` absence row, the moment a non-null/non-zero value is typed
@@ -503,6 +522,7 @@ export function SkemaGrid({
       if (unparsable) return // no propagation (shipped semantics)
       if (negative) return // S145 — refused at entry
       if (isFullDayEntry && !canSnap) return // BLOCK — never let a partial full-day autosave (→ 422)
+      propagatedRawRef.current = { key: cellKey, raw }
       if (canSnap) {
         onCellChange(row.key, dateKey, basis as number)
         return

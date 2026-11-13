@@ -71,37 +71,52 @@ public sealed class SickCodeVocabularyPayrollTests : IClassFixture<FlexLedgerHos
 
     /// <summary>
     /// AC-231-1, the child's sick-day codes as STORED (kind F, Docker). A full-time employee works every June 2026
-    /// weekday (7.40 h; Tuesday 9 June 8.40 h, so the screen total is not trivially zero) except Wednesday 10 June, on
-    /// which the stored child code (<c>CHILD_SICK_DAY</c>, <c>CHILD_SICK_DAY_2</c> or <c>CHILD_SICK_DAY_3</c>, saved
-    /// through the Skema save with 7.40 h) stands for the whole day. The month's flex closing equals the opening (0)
-    /// plus the screen's total: screen days are 0 on the sick day and +1.00 on 9 June, so the closing is exactly
-    /// <b>+1.00</b>.
+    /// weekday (7.40 h; Thursday 11 June 8.40 h, so the screen total is not trivially zero) except the days of ONE
+    /// illness ending on Wednesday 10 June, on which the stored child codes (<c>CHILD_SICK_DAY</c>,
+    /// <c>CHILD_SICK_DAY_2</c>, <c>CHILD_SICK_DAY_3</c>, saved through the Skema save with 7.40 h each) stand for whole days.
+    /// The illness is a legal one under OK26 (S148 S0-2, QUAL-236: day 2 needs day 1 the day before and day 3 needs day 2):
+    /// the row's code is the LAST day, so <c>_DAY</c> is Wednesday 10 June alone, <c>_2</c> is <c>_DAY</c> Tuesday 9 and
+    /// <c>_2</c> Wednesday 10 June, <c>_3</c> is Monday 8, Tuesday 9 and Wednesday 10 June. The month's flex closing equals
+    /// the opening (0) plus the screen's total: screen days are 0 on every sick day and +1.00 on 11 June, so the closing
+    /// is exactly <b>+1.00</b>.
     ///
     /// <para>
     /// The literals in the <c>InlineData</c> rows are the stored spelling written out on purpose (not the
     /// <c>AbsenceTypes</c> constants, whose values moved in S147): the fact proves what is STORED is what is credited.
-    /// Each row is its own employee, because the child's-sick-day quota is per employee and these rows are not about it.
+    /// Each row is its own employee. S148 S0-2: there is no yearly cap any more, so the rows are not about a quota; they
+    /// are about credit, per agreement, for every illness OK26 offers.
     /// </para>
     ///
-    /// <para><b>Red conditions (F; Docker, so not run locally).</b> Before S147 the engine's credit list spelled the
-    /// child codes <c>CHILD_SICK_1/2/3</c> and Skema stores <c>CHILD_SICK_DAY[_2|_3]</c>, so the stored absence was
-    /// not credited: the sick day cost a full 7.40 h of flex and the month closed at <b>-6.40</b>, failing
-    /// <c>closing == screen total (1.00)</c>. Mutation view: if <c>AbsenceClassification</c> drops a child code
-    /// (the row for that code), the same assertion fails for that row.</para>
+    /// <para><b>Kinds, per row (S148 S0-2, QUAL-236; no hybrid labels).</b> The nine rows are the six (agreement, last
+    /// code) pairs that were here before, now saved as a legal OK26 illness, and the three pairs OK26 offers that the
+    /// base's yearly quota refused. <b>R</b> (the base admitted them: HK's quota 2, PROSA's 3, AC's 1 day, within the
+    /// yearly quota): (HK, <c>_DAY</c>), (PROSA, <c>_DAY</c>), (AC, <c>_DAY</c>), (HK, <c>_2</c>), (PROSA, <c>_2</c>),
+    /// (PROSA, <c>_3</c>); red conditions: the closing assertion, as before. <b>F</b> (the base's yearly quota refused
+    /// them, so the first save answers 422 "Entitlement quota exceeded" and the fact fails at the save's 200 assertion):
+    /// (AC, <c>_2</c>) and (AC, <c>_3</c>) (AC's yearly 1), (HK, <c>_3</c>) (HK's yearly 2).</para>
+    ///
+    /// <para><b>Red conditions (Docker, so not run locally; the original F, still true for every row).</b> Before S147 the
+    /// engine's credit list spelled the child codes <c>CHILD_SICK_1/2/3</c> and Skema stores
+    /// <c>CHILD_SICK_DAY[_2|_3]</c>, so the stored absence was not credited: a sick day cost a full 7.40 h of flex and the
+    /// month closed far below <b>+1.00</b>. Mutation view: if <c>AbsenceClassification</c> drops a child code (the row for
+    /// that code), the save refuses it and the fact fails at the 200 assertion for that row.</para>
     /// </summary>
     [Theory]
-    [InlineData("HK", "CHILD_SICK_DAY")]
-    [InlineData("PROSA", "CHILD_SICK_DAY")]
-    [InlineData("AC", "CHILD_SICK_DAY")]
-    [InlineData("HK", "CHILD_SICK_DAY_2")]
-    [InlineData("PROSA", "CHILD_SICK_DAY_2")]
-    [InlineData("PROSA", "CHILD_SICK_DAY_3")]
+    [InlineData("HK", "CHILD_SICK_DAY")]      // R
+    [InlineData("PROSA", "CHILD_SICK_DAY")]   // R
+    [InlineData("AC", "CHILD_SICK_DAY")]      // R
+    [InlineData("HK", "CHILD_SICK_DAY_2")]    // R
+    [InlineData("PROSA", "CHILD_SICK_DAY_2")] // R
+    [InlineData("PROSA", "CHILD_SICK_DAY_3")] // R
+    [InlineData("AC", "CHILD_SICK_DAY_2")]    // F: S148 S0-2 (QUAL-236) AC's day 2, refused by the base's yearly 1
+    [InlineData("AC", "CHILD_SICK_DAY_3")]    // F: S148 S0-2 (QUAL-236) AC's day 3, refused by the base's yearly 1
+    [InlineData("HK", "CHILD_SICK_DAY_3")]    // F: S148 S0-2 (QUAL-236) HK's day 3, refused by the base's yearly 2
     public async Task StoredChildSickCodes_ThroughSkemaAndPayroll_ChangeClosingByScreenTotal(string agreement, string storedCode)
     {
         var employeeId = await _s.NewEmployeeAsync(agreement, childSickEligible: true);
-        var plan = SkemaPayrollScenario.FullMonthPlan(sickDayAbsenceHours: 7.4m, workedOnSickDay: 0m, surplusOnTuesday: 1.0m);
+        var (plan, illness) = SkemaPayrollScenario.ChildSickIllnessPlan(storedCode, surplusOnThursday: 1.0m);
 
-        await _s.SaveAndSeedAsync(employeeId, agreement, plan, storedCode);
+        await _s.SaveIllnessAndSeedAsync(employeeId, agreement, plan, illness);
         await _s.SeedApprovedJuneAsync(employeeId, agreement);
         var response = await _s.ExportJuneAsync(employeeId, agreement);
 
@@ -355,6 +370,55 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
         var absenceDay = plan.Single(d => d.Absence != 0m);
         var save = await SaveAbsencesAsync(employeeId, agreement, (absenceDay.Date, storedCode, absenceDay.Absence));
         Assert.True(save.Status == HttpStatusCode.OK, $"the Skema save of {storedCode} expected 200, got {(int)save.Status}: {save.Json}");
+
+        foreach (var day in plan.Where(d => d.Worked != 0m))
+            await SeedHoursAsync(employeeId, agreement, day.Date, day.Worked);
+    }
+
+    // ── One child's illness (S148 S0-2, QUAL-236): consecutive days, each a whole sick day ──
+
+    /// <summary>The surplus day of an illness plan: Thursday 11 June 2026, the day after the illness's last day.</summary>
+    internal static readonly DateOnly IllnessSurplusDay = new(2026, 6, 11);
+
+    private static readonly string[] ChildSickChain = { "CHILD_SICK_DAY", "CHILD_SICK_DAY_2", "CHILD_SICK_DAY_3" };
+
+    /// <summary>
+    /// A June plan whose one illness ends on <see cref="AbsenceDay"/> (Wednesday 10 June) with <paramref name="lastCode"/>:
+    /// the illness is day 1 .. n on the n consecutive weekdays ending there, each saved as a whole sick day (7,40 h, no work),
+    /// and every other weekday is worked at the norm except <see cref="IllnessSurplusDay"/>, which carries
+    /// <paramref name="surplusOnThursday"/> extra worked hours. Returns the plan (for the screen total) and the absences to save.
+    /// </summary>
+    internal static (IReadOnlyList<PlannedDay> Plan, (DateOnly Date, string Type, decimal Hours)[] Absences) ChildSickIllnessPlan(
+        string lastCode, decimal surplusOnThursday)
+    {
+        var days = Array.IndexOf(ChildSickChain, lastCode) + 1;
+        Assert.True(days >= 1, $"{lastCode} is not one of the child's sick-day codes");
+        var absences = Enumerable.Range(0, days)
+            .Select(i => (AbsenceDay.AddDays(i - (days - 1)), ChildSickChain[i], DayNorm))
+            .ToArray();
+
+        var plan = new List<PlannedDay>();
+        for (var d = June; d <= JuneEnd; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                continue;
+            if (absences.Any(a => a.Item1 == d))
+                plan.Add(new PlannedDay(d, 0m, DayNorm, DayNorm));
+            else if (d == IllnessSurplusDay)
+                plan.Add(new PlannedDay(d, DayNorm + surplusOnThursday, 0m, DayNorm));
+            else
+                plan.Add(new PlannedDay(d, DayNorm, 0m, DayNorm));
+        }
+        return (plan, absences);
+    }
+
+    /// <summary>The illness goes through the real Skema save in one request (200 asserted); then every worked hour is a raw projection row.</summary>
+    internal async Task SaveIllnessAndSeedAsync(
+        string employeeId, string agreement, IReadOnlyList<PlannedDay> plan, (DateOnly Date, string Type, decimal Hours)[] illness)
+    {
+        var save = await SaveAbsencesAsync(employeeId, agreement, illness);
+        Assert.True(save.Status == HttpStatusCode.OK,
+            $"the Skema save of {string.Join(", ", illness.Select(a => a.Type))} expected 200, got {(int)save.Status}: {save.Json}");
 
         foreach (var day in plan.Where(d => d.Worked != 0m))
             await SeedHoursAsync(employeeId, agreement, day.Date, day.Worked);

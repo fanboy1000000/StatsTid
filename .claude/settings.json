@@ -8,8 +8,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/model-routing-guard.ps1",
-            "timeout": 10,
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PROJECT_DIR}/.claude/hooks/model-routing-guard.ps1"],
+            "timeout": 60,
             "statusMessage": "Checking model routing (planning/review on the newest Fable; implementation on Opus and cheaper)"
           }
         ]
@@ -19,8 +20,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/sprint-close-guard.ps1",
-            "timeout": 10,
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PROJECT_DIR}/.claude/hooks/sprint-close-guard.ps1"],
+            "timeout": 60,
             "statusMessage": "Checking sprint-close governance"
           }
         ]

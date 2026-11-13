@@ -14,8 +14,8 @@
 //   R5  — locked month: readOnly grid, unreachable panel, REACHABLE modal.
 //   R6  — S72 Step-7a W2: the §J analysis sees locally-edited NEIGHBOR days
 //         (edit day N locally, open day N+1 → the warning reflects N's state).
-//   R7  — a panel period edit round-trips through the hook's
-//         buildWorkTimePayload, preserving the day's existing manualHours.
+//   R16 — a panel period edit round-trips through the hook's
+//         buildWorkTimePayload as { date, intervals } (clock time only).
 //   R10 — the D-A card pins (hours-first arithmetic; the null-scalar em-dash
 //         fail-soft; the null-feriedage skip in the Afholdt sub-line).
 //   R11 — the modal opens from BOTH entry points; a modal action live-updates
@@ -32,7 +32,7 @@
 // both (deactivated projects with historical hours).
 //
 // March 2026 reference: Mar 1 = Sunday, Mar 2 = Monday. Fixture arithmetic:
-// Mar 2 worked = 8h interval + 1,5 manual = 9,5; allocated 7,4 + 2,1 = 9,5 (✓);
+// Mar 2 worked = one 08:00–17:30 interval = 9,5; allocated 7,4 + 2,1 = 9,5 (✓);
 // Diff +2,1. Mar 3 full VACATION 7,4 → Diff 0,0. Mar 4 VACATION 3,7 (feriedage
 // NULL) → Diff −3,7. Diff total = −1,6. I alt total = 20,6.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -118,7 +118,7 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
     employeeDeadline: '2026-04-05',
     managerDeadline: '2026-04-10',
     workTime: [
-      { date: '2026-03-02', intervals: [{ start: '08:00', end: '16:00' }], manualHours: 1.5 },
+      { date: '2026-03-02', intervals: [{ start: '08:00', end: '17:30' }] },
     ],
     dailyNorm: buildDailyNorm(),
     rowPreferences: {
@@ -210,7 +210,7 @@ let saveBodies: Array<{
   month: number
   entries: { date: string; projectCode: string; hours: number }[] | null
   absences: { date: string; absenceType: string; hours: number }[] | null
-  workTime: { date: string; intervals: { start: string; end: string }[]; manualHours: number }[] | null
+  workTime: { date: string; intervals: { start: string; end: string }[] }[] | null
 }>
 let putBodies: Array<{
   projects: { projectId: string; sortOrder: number }[]
@@ -339,7 +339,7 @@ async function renderLoaded(url?: string, today?: string) {
   await screen.findByText('Drift & support')
   // Settle await. History: the project-row LABELS render in the first commit (straight from
   // useSkema's `data`) while the diff total and every day-derived cell are computed from the
-  // page's editable local cells/intervals/manual hours. Until S147 / QUAL-241 those were seeded
+  // page's editable local cells/intervals. Until S147 / QUAL-241 those were seeded
   // by effects and landed in a SECOND commit, so a synchronous read right after the label
   // appeared raced it (the recurring R2/W1 flake). The page now copies `data` into local state
   // DURING RENDER, so the first commit already holds the hydrated state and no second commit
@@ -447,7 +447,6 @@ describe('SkemaPage — R2 reconciliation', () => {
         projectKeys: basis.projectKeys,
         absenceKeys: basis.absenceKeys,
         workIntervals: new Map(monthData.workTime.map((wt) => [wt.date, wt.intervals])),
-        manualHours: new Map(monthData.workTime.map((wt) => [wt.date, wt.manualHours])),
         dailyNorm: new Map(monthData.dailyNorm.map((dn) => [dn.date, dn.hours])),
       }),
     )
@@ -774,13 +773,11 @@ describe('SkemaPage — R3 visibility-independence end-to-end', () => {
   })
 })
 
-describe('SkemaPage — R7/R16 day-panel save paths', () => {
-  it('R7: a panel period edit round-trips through the hook buildWorkTimePayload, preserving the day\'s existing manualHours', async () => {
+describe('SkemaPage — R16 day-panel save paths', () => {
+  it('R16: a panel period edit round-trips through the hook buildWorkTimePayload as { date, intervals }', async () => {
     await renderLoaded()
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     const drawer = await screen.findByRole('dialog')
-    // D-B: the existing manual hours render read-only in the panel
-    expect(within(drawer).getByText('Manuelt registreret: 1,5 t')).toBeInTheDocument()
 
     vi.useFakeTimers()
     fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '17:00' } })
@@ -792,9 +789,9 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     expect(saveBodies.length).toBe(1)
     expect(saveBodies[0].entries).toBeNull()
     expect(saveBodies[0].absences).toBeNull()
-    // The R7 pin: the edited interval AND the day's EXISTING manualHours (1,5)
+    // The edited interval alone: manual hours are retired (ADR-043 D10)
     expect(saveBodies[0].workTime).toEqual([
-      { date: '2026-03-02', intervals: [{ start: '08:00', end: '17:00' }], manualHours: 1.5 },
+      { date: '2026-03-02', intervals: [{ start: '08:00', end: '17:00' }] },
     ])
   })
 
@@ -838,11 +835,11 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     // S147 / QUAL-241 — the 'Udvikling' row appears in the FIRST commit with data. Before the
     // QUAL-241 fix the page's local state was copied from that data by effects a render LATER,
     // so clicking the day trigger on that first commit opened a panel with no periods
-    // ("Arbejdstid i alt 1,5 t" against 9,5 t allocated → "Overfordelt"): this test's
+    // (no worked time against 9,5 t allocated → "Overfordelt"): this test's
     // "documented flake" (S121 flake-watch, 1 in 32 under parallel load) was that product race,
     // not test noise. The race is now closed in the page and pinned deterministically by the
     // QUAL-241 tests below. This test no longer relies on timing at all: the barrier is the
-    // SERVED PERIOD ITSELF — the panel must show the day's served 08:00–16:00 before anything
+    // SERVED PERIOD ITSELF — the panel must show the day's served 08:00–17:30 before anything
     // is asserted. That is non-vacuous (an unseeded panel has no such field and the assertion
     // would time out), unlike a blank-Diff wait, which an allocation-only state also satisfies.
     await waitFor(() =>
@@ -859,9 +856,9 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     // Neither the "Alt fordelt ✓" text (classifyAllocation(0, 0) is balanced, so it also renders
     // for the empty state — it could resolve vacuously) nor the 'Udvikling' row (served with the
     // first data commit, whatever the periods) proves the periods arrived. The served 08:00 /
-    // 16:00 do: an unseeded panel has no such field and the wait would time out.
+    // 17:30 do: an unseeded panel has no such field and the wait would time out.
     expect(await within(drawer).findByDisplayValue('08:00')).toBeInTheDocument()
-    expect(within(drawer).getByDisplayValue('16:00')).toBeInTheDocument()
+    expect(within(drawer).getByDisplayValue('17:30')).toBeInTheDocument()
     expect(await within(drawer).findByLabelText('Udvikling')).toBeInTheDocument()
 
     // Step 2 renders only the VISIBLE rows — now checked against a hydrated panel, where an
@@ -911,10 +908,10 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
       globals.IS_REACT_ACT_ENVIRONMENT = previousActEnv
     }
     const drawer = await screen.findByRole('dialog')
-    // The served 08:00–16:00 period must be in the panel (findBy: allow the settle, but an
+    // The served 08:00–17:30 period must be in the panel (findBy: allow the settle, but an
     // unseeded panel never shows it, so this fails reliably before the fix).
     expect(await within(drawer).findByDisplayValue('08:00')).toBeInTheDocument()
-    expect(within(drawer).getByDisplayValue('16:00')).toBeInTheDocument()
+    expect(within(drawer).getByDisplayValue('17:30')).toBeInTheDocument()
     expect(within(drawer).queryByText('Overfordelt')).toBeNull()
   })
 
@@ -930,7 +927,7 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
       entries: [],
       absences: [],
       dailyNorm: [],
-      workTime: [{ date: '2026-04-01', intervals: [{ start: '09:00', end: '12:00' }], manualHours: 0 }],
+      workTime: [{ date: '2026-04-01', intervals: [{ start: '09:00', end: '12:00' }] }],
     })
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
@@ -949,7 +946,8 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     expect(screen.queryByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })).toBeNull()
     // …and the lock is announced (quietly): aria-busy on the page region + an "Indlæser…" status.
     expect(document.querySelector('[aria-busy="true"]')).not.toBeNull()
-    expect(screen.getByRole('status')).toHaveTextContent('Indlæser…')
+    // S148 14a (R): the panel is now a second always-mounted status region; query the page's own.
+    expect(screen.getAllByRole('status').find((el) => el.classList.contains('monthLoading'))).toHaveTextContent('Indlæser…')
 
     await act(async () => { release(); await gate })
     const trigger = await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
@@ -993,8 +991,8 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
   it('F: a period edit followed by "Næste" inside the 1 s debounce is SAVED for the month it was made in — the stored day is not replaced by an empty one', async () => {
     // Red condition: against e9195bcf the debounce timer fires after April has hydrated, builds
     // the payload from refs that no longer hold 2026-03-02 and sends
-    // {date: 2026-03-02, intervals: [], manualHours: 0} — the whole-day replace wipes the stored
-    // 08:00–16:00. (Against the original code the same race ends the same way.)
+    // {date: 2026-03-02, intervals: []} — the whole-day replace wipes the stored
+    // 08:00–17:30. (Against the original code the same race ends the same way.)
     await renderLoaded()
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     const drawer = await screen.findByRole('dialog')
@@ -1007,7 +1005,7 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     expect(saveBodies).toHaveLength(1)
     expect(saveBodies[0].month).toBe(3)
     expect(saveBodies[0].workTime).toEqual([
-      { date: '2026-03-02', intervals: [{ start: '08:00', end: '17:00' }], manualHours: 1.5 },
+      { date: '2026-03-02', intervals: [{ start: '08:00', end: '17:00' }] },
     ])
   })
 
@@ -1308,11 +1306,13 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     // Red condition: against ed884d6f the status element was inserted already filled and sat
     // INSIDE the aria-busy region.
     await renderLoaded()
-    const status = screen.getByRole('status')
+    // S148 14a (R): the page's own region (the panel is a second status region).
+    const monthStatus = () => screen.getAllByRole('status').find((el) => el.classList.contains('monthLoading'))!
+    const status = monthStatus()
     expect(status).toHaveTextContent('')
     const release = holdAprilFetch()
     fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
-    expect(screen.getByRole('status')).toBe(status) // same element, text set
+    expect(monthStatus()).toBe(status) // same element, text set
     expect(status).toHaveTextContent('Indlæser…')
     const busy = document.querySelector('[aria-busy="true"]')
     expect(busy).not.toBeNull()
@@ -1787,8 +1787,8 @@ describe('SkemaPage — W2 §J rest analysis over LOCAL edits', () => {
   it('W2/R6: editing day N\'s periods locally (no save round-trip) and opening day N+1 warns from N\'s LOCAL state', async () => {
     await renderLoaded()
 
-    // Day N (Mar 2): extend the served 08:00–16:00 to end 23:00 — LOCAL only
-    // (no refetch happens; the served data still says 16:00).
+    // Day N (Mar 2): extend the served 08:00–17:30 to end 23:00 — LOCAL only
+    // (no refetch happens; the served data still says 17:30).
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     let drawer = await screen.findByRole('dialog')
     fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '23:00' } })
@@ -1796,7 +1796,7 @@ describe('SkemaPage — W2 §J rest analysis over LOCAL edits', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
     // Day N+1 (Mar 3): 06:00 start → 7 h rest against Mar 2's LOCAL 23:00 end
-    // (the served 16:00 end would give 14 h — no warning — so this pin fails
+    // (the served 17:30 end would give 12,5 h — no warning — so this pin fails
     // when the panel is fed raw data.workTime instead of the local overlay).
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-03' }))
     drawer = await screen.findByRole('dialog')
@@ -1935,6 +1935,85 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     })
     vi.useRealTimers()
     expect(await screen.findByText(/overstiger normtiden/)).toBeInTheDocument()
+  })
+
+  // AC-S0-7g, kind F (vitest). Red conditions: before the kind-aware formatter the same bodies
+  // render "…overstiger normtiden (0 t)…" / "…overstiger normtiden (4,4 t)…", so the exact-text
+  // assertions and the absence of "overstiger normtiden" both fail. Expected texts are the
+  // ruled copy (TASK-14810 contract item 3(d), sentences 2 and 3), never read from the code.
+  it("S0-7: the paid-absence bound's 422 (kind paid-absence-day-bound) names the planned and worked hours, not the norm", async () => {
+    await renderLoaded()
+    const typeFerie = async (value: string) => {
+      vi.useFakeTimers()
+      const ferieInput = screen.getByLabelText('Ferie dag 4')
+      fireEvent.change(ferieInput, { target: { value } })
+      fireEvent.blur(ferieInput)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1100)
+      })
+      vi.useRealTimers()
+    }
+
+    // (i) no room: planned 7,4, worked 7,4 → maxHours 0 (sentence 2)
+    saveResponder = () =>
+      jsonResponse(
+        {
+          error: 'Total absence hours exceed norm day', date: '2026-03-04', totalHours: 7.4, maxHours: 0,
+          kind: 'paid-absence-day-bound', plannedHours: 7.4, workedHours: 7.4,
+        },
+        422,
+      )
+    await typeFerie('7.4')
+    expect(
+      await screen.findByText(
+        'Dagen er allerede fyldt: planlagt 7,4 t, registreret arbejde 7,4 t, så der er ikke plads til betalt fravær (7,4 t). Registreringen blev derfor sat tilbage.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/overstiger normtiden/)).not.toBeInTheDocument()
+
+    // (ii) some room: planned 7,4, worked 3 → room for at most 4,4 (sentence 3; AC-S0-7c's figures)
+    saveResponder = () =>
+      jsonResponse(
+        {
+          error: 'Total absence hours exceed norm day', date: '2026-03-04', totalHours: 4.5, maxHours: 4.4,
+          kind: 'paid-absence-day-bound', plannedHours: 7.4, workedHours: 3,
+        },
+        422,
+      )
+    await typeFerie('4.5')
+    expect(
+      await screen.findByText(
+        'Dagens betalte fravær (4,5 t) er mere end dagen kan rumme: planlagt 7,4 t, registreret arbejde 3 t, så der er plads til højst 4,4 t. Registreringen blev derfor sat tilbage.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/overstiger normtiden/)).not.toBeInTheDocument()
+  })
+
+  // Kind F (vitest), companion to AC-S0-7g: sentence 1 (planned 0). Red condition: the pre-change
+  // formatter shows "…overstiger normtiden (0 t)…" instead.
+  it("S0-7: the paid-absence bound's 422 on a day with no planned hours says so (sentence 1)", async () => {
+    await renderLoaded()
+    saveResponder = () =>
+      jsonResponse(
+        {
+          error: 'Total absence hours exceed norm day', date: '2026-03-04', totalHours: 7.4, maxHours: 0,
+          kind: 'paid-absence-day-bound', plannedHours: 0, workedHours: 0,
+        },
+        422,
+      )
+    vi.useFakeTimers()
+    const ferieInput = screen.getByLabelText('Ferie dag 4')
+    fireEvent.change(ferieInput, { target: { value: '7.4' } })
+    fireEvent.blur(ferieInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    expect(
+      await screen.findByText(
+        'Der er ingen planlagte timer denne dag, så der kan ikke registreres betalt fravær (7,4 t). Registreringen blev derfor sat tilbage.',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('S123 (Step-7a WARNING): a >24h work-time 422 does NOT surface the absence-cap alert — the two 422s share a shape, so the branch anchors on the specific error string', async () => {
@@ -2076,7 +2155,7 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     saveResponder = () =>
       jsonResponse({ error: 'absence_full_day_only', message: 'work-time rejected' }, 422)
 
-    // Open Mar 2 (server truth: 08:00–16:00) and push the end to 17:00.
+    // Open Mar 2 (server truth: 08:00–17:30) and set the end to 17:00.
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     let drawer = await screen.findByRole('dialog')
     vi.useFakeTimers()
@@ -2093,11 +2172,11 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     expect(screen.getByText(/work-time rejected|hel dag/i)).toBeInTheDocument()
 
     // Re-open the panel: it re-initialises from the (reverted) local work-time —
-    // the end is back to server truth 16:00, NOT the rejected 17:00.
+    // the end is back to server truth 17:30, NOT the rejected 17:00.
     fireEvent.click(within(drawer).getByRole('button', { name: 'Luk' }))
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     drawer = await screen.findByRole('dialog')
-    expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('16:00')
+    expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('17:30')
   })
 
   it('B2: a work-time 422 counts RESOLVED — a following preference PUT is NOT silently aborted', async () => {
@@ -2154,7 +2233,7 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
       await new Promise((r) => setTimeout(r, 30))
     })
 
-    // The revert restores 18:00 (the LAST KNOWN-GOOD save), NOT the original 16:00.
+    // The revert restores 18:00 (the LAST KNOWN-GOOD save), NOT the original 17:30.
     fireEvent.click(within(drawer).getByRole('button', { name: 'Luk' }))
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     drawer = await screen.findByRole('dialog')

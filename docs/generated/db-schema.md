@@ -893,12 +893,12 @@
 | employee_id | TEXT | No |  |  |
 | date | DATE | No |  |  |
 | intervals | JSONB | No |  | '[]'::jsonb |
-| manual_hours | NUMERIC(8,4) | No |  | 0 |
 | occurred_at | TIMESTAMPTZ | No |  |  |
 | actor_id | TEXT | Yes |  |  |
 | actor_role | TEXT | Yes |  |  |
 | correlation_id | UUID | Yes |  |  |
 | outbox_id | BIGINT | No |  |  |
+| cleared_by_outbox_id | BIGINT | Yes |  |  |
 
 **Table constraints:**
 - PRIMARY KEY (employee_id, date)

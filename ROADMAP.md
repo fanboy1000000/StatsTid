@@ -54,7 +54,10 @@ Not commitments or dates — direction.
    calendar split and recorded forfeiture; **stage 2** decided hours, +50 % overtime, the +25 % supplement and § 14,
    and the overtime account; **stage 3** AC extra-work claims. S148's refinement starts from the build input
    (`.claude/plans/s147/S148-BUILD-INPUT.md`) and decides how many stages S148 carries; a stage it cannot carry is
-   pointed to here. Closes QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232..234 and QUAL-237 when built;
+   pointed to here. **Owner scope ruling 2026-11-09: S148 carries stage 0 and the config stage** (no demo payslip changes, so
+   the sprint's acceptance pin is identical demo pay lines; the one arithmetic change, QUAL-236's new credited
+   call-home day, has no demo row); stage 1, where every HK and PROSA payslip moves, gets its own sprint (S149), then
+   stage 2 and stage 3. Closes QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232..234 and QUAL-237 when built;
    retires S145's weekly settlement machinery (frozen by OQ-2, with QUAL-209/210/212/213).
    The source register's unreliable citations (QUAL-215) make the Phase-B engagement above more urgent.
    **S147's tidy pass handed S148 stage 0 six small inputs** (recorded at S147's C-1; detail in
@@ -590,6 +593,42 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   job green at CI-W2b and CI-W3); QUAL-241 CLOSED. [S128 FU-D]
 
 ### Governance / docs
+- **Should the governance hooks fail closed?** (FAIL-009, 2026-11-05; an owner decision, to be put in prose,
+  one question at a time). Both guards fail OPEN: if PowerShell cannot start the guard in time (now 60 s) or at
+  all, Claude Code lets the action through unchecked — in S147 that happened on 51 of 200 agent spawns. Claude
+  Code's `"onFailure": "block"` makes a failed hook block instead. Options: (a) the routing guard only — a blocked
+  spawn is visible and retried; (b) both — the close guard runs on every shell command, so on this
+  memory-constrained machine a slow start would stop all shell work; (c) neither — rely on the register's
+  "log ALLOW N / transcripts M" reconciliation and the close commit's hook record to notice misses. Read
+  S148's reconciliation first: it shows whether 60 s alone closes the gap.
+  **Owner ruling 2026-11-06: (c) for now — decide at S148's close**, with S148's register row (log vs
+  transcripts, and any `hook_cancelled` / `hook_non_blocking_error` in the session transcript) as the evidence;
+  if misses remain, choose (a) or (b) then.
+- **Keep or revert the Ponytail adoptions — decide at S150's close** (owner "Go", 2026-11-08). Four ideas from
+  the Ponytail plugin (MIT; assessed 2026-11-06, not installed) went in before S148 as a trial: the SMALLEST
+  COMPLETE CHANGE block for implementers (`docs/AGENTS.md`), comments that state what is true now plus
+  `shortcut(<tag>)` comments backed by a register row (PAT-032, CI check 5), and "no concrete case, no BLOCKER or
+  WARNING" with a seven-field finding format for both review lenses. The metrics (M1 review cycles per chain, M2
+  cycle-1 counts — descriptive only, M3 post-close defects, M4 `(unproven)` NOTEs followed up vs hidden, M5
+  required machinery missed because of the block, M6 shortcuts) and the S145–S147 baseline are in
+  `docs/operations/model-routing-register.md`. **M3 was narrowed after the refinement was approved** (2026-11-08,
+  during the change review): the approved rule also compared CI runs to green, but S145's count was not
+  reconstructed from the repository's records (GitHub's run list could supply it), so read literally the approved
+  rule could never reach KEEP; and S145–S147's CI reds were test- or lint-side faults, not review misses. CI runs to green are
+  still recorded each sprint, descriptive only. **Rule, per part — REVERT if any REVERT condition holds, else KEEP if
+  every KEEP condition holds, else MIXED (to the owner with the numbers); an unevaluable condition is false.**
+  M1 *rises* if any included cell (stage 5a/7a × lens, both sides reconstructable, ≥ 3 chains each, pooled means)
+  exceeds its baseline by more than 0.5 cycle; M3 *worsens* if post-close defects exceed the baseline total (0) by
+  more than 1; a metric is evaluated only when both sides are reconstructable. *Review rule:* REVERT if an M4 "hidden" NOTE later proved a
+  BLOCKER-class defect, or M1 rises and M3 worsens; KEEP if at least one M1 cell is included and none rises, M3 is
+  evaluated and not worse, and no hidden NOTE. *Build block:* REVERT if M5 ≥ 2, or M3 worsens with an M5 case among
+  its causes; KEEP if M5 = 0 and M3 is evaluated and not worse. *"Not built / not checked":* drop if empty in every
+  trial report. *Shortcuts:* MIXED if none were used or check 5 gave a false positive outside PAT-032's documented
+  classes; else KEEP. Whatever the outcome, every `(unproven)` NOTE still open at S150's close that names an
+  invariant becomes a register row then, rather than expiring with the trial. The outcome is the input to the
+  owner's decision, read for direction over three sprints
+  (S148 is a large program sprint); it also feeds the governance-bloat review below, since the trial adds standing
+  text to nine agent prompts.
 - **★ Standards and requirements conformance — a systematic approach** (owner-raised 2026-10-26: *"What ISO
   standards, tekniske minimumskrav etc. do we need to measure the system against. We need to add a systematic
   approach."*).

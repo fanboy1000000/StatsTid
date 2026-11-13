@@ -115,12 +115,12 @@ internal static class ProjectionSchemaTestFixture
             employee_id     TEXT            NOT NULL,
             date            DATE            NOT NULL,
             intervals       JSONB           NOT NULL DEFAULT '[]'::jsonb,
-            manual_hours    NUMERIC(8,4)    NOT NULL DEFAULT 0,
             occurred_at     TIMESTAMPTZ     NOT NULL,
             actor_id        TEXT,
             actor_role      TEXT,
             correlation_id  UUID,
             outbox_id       BIGINT          NOT NULL,
+            cleared_by_outbox_id BIGINT     NULL, -- S148 TASK-14840: a cleared day is kept and marked (init.sql)
             PRIMARY KEY (employee_id, date)
         );
 

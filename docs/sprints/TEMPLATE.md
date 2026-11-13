@@ -73,8 +73,9 @@ _Check each constraint that was explicitly validated during this sprint._
 | **Components** | [list of affected bounded contexts / modules] |
 | **KB Refs** | [ADR-xxx, PAT-xxx, DEP-xxx, RES-xxx — knowledge base entries relevant to this task] |
 | **Constraint Validator** | pass \| violations — [count and summary] |
-| **Reviewer Audit** | skipped \| performed — [summary or "no findings"] |
-| **External Review (Codex)** | skipped \| performed (high-risk: {category}) — [cycles: N, findings: NB/NW/NN, or "no findings"] |
+| **Reviewer Audit** | skipped \| performed — [summary or "no findings"; each `(unproven)` NOTE with its evidence requirement and disposition: proved \| refuted \| open] |
+| **External Review (Codex)** | skipped \| performed (high-risk: {category}) — [cycles: N, findings: NB/NW/NN, or "no findings"; `(unproven)` NOTEs as above] |
+| **Not built / found / shortcuts** | none \| [each item and its disposition — not built: accepted \| overruled → built where; found, not fixed: fixed in TASK-x \| registered QUAL/SEC-nnn \| recorded here; shortcut: `shortcut(<tag>)` at file:line] |
 | **Orchestrator Approved** | yes — YYYY-MM-DD |
 
 **Description**: _What was done and why._

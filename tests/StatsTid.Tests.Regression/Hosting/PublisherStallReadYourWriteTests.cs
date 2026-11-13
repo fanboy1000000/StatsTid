@@ -50,8 +50,10 @@ namespace StatsTid.Tests.Regression.Hosting;
 /// The <see cref="WebApplicationFactory{Program}"/>'s default Hosting environment is
 /// <c>Development</c> so the fallback fires. The token carries claims matching the
 /// <c>Employee</c> role + matching <c>employee_id</c>, which short-circuits
-/// <c>OrgScopeValidator</c> per <c>TimeEndpoints.cs:36-44</c> (Employee accessing own
+/// <c>OrgScopeValidator</c> in the Skema save and the GETs (Employee accessing own
 /// data bypasses the scope check). No <c>org_id</c> / <c>scopes</c> claim required.
+/// S148 R-20 re-point: the time-entry write comes in through the Skema save, since
+/// <c>POST /api/time-entries</c> is retired; the GET read stays.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -83,7 +85,8 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Time entry RYW under publisher stall. POST /api/time-entries with the publisher
+    /// Time entry RYW under publisher stall. S148 R-20 re-point: the write is a Skema save of
+    /// one project entry (POST /api/time-entries is retired), made with the publisher
     /// stopped, then immediate GET /api/time-entries/{employeeId}; assert the four
     /// cycle-3 invariants (response contains the entry; events empty; unpublished outbox
     /// row present; projection.outbox_id == outbox row.outbox_id).
@@ -98,7 +101,7 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
         await _factory.StopPublisherAsync();
 
         var employeeId = "EMP_RYW_T_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        // S136 / TASK-13603 — POST /api/time-entries now resolves the subject's users row
+        // S136 / TASK-13603 — the write resolves the subject's users row
         // (terminated-inclusive read, ADR-040 D3 / SEC-046) before writing, so the employee must
         // exist. NULL employment dates ⇒ window-unbounded (D2); is_active=true ⇒ no role floor.
         await SeedFullTimeEmployeeAsync(employeeId, "HK");
@@ -108,15 +111,16 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
         var entryDate = new DateOnly(2026, 5, 7);
         var postBody = new
         {
-            employeeId,
-            date = entryDate.ToString("yyyy-MM-dd"),
-            hours = 7.4m,
-            taskId = "PROJ-RYW-1",
-            activityType = "NORMAL",
-            agreementCode = "HK",
+            year = 2026,
+            month = 5,
+            entries = new[]
+            {
+                new { date = entryDate.ToString("yyyy-MM-dd"), projectCode = "PROJ-RYW-1", hours = 7.4m },
+            },
         };
-        var postRsp = await client.PostAsJsonAsync("/api/time-entries", postBody);
-        Assert.Equal(HttpStatusCode.Created, postRsp.StatusCode);
+        var postRsp = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", postBody);
+        // S148 R-20: was 201 from POST /api/time-entries; the Skema save answers 200.
+        Assert.Equal(HttpStatusCode.OK, postRsp.StatusCode);
 
         // (1) GET response contains the just-written entry.
         var getRsp = await client.GetAsync($"/api/time-entries/{employeeId}");

@@ -524,3 +524,263 @@ Judgement calls:
 - EM-G7 is rated Not met only because parity cannot be demonstrated.
 - For A28 and VD 31, I counted the reproducible containerised stack and demo loader as the "substantive part" of a test environment. That was a close call against Not met.
 - Rows that are mainly supplier duties but contain a capability (C2, VD 72, VD 75, VD 83, §5.1 rollback, §5.6–5.8 uptime, §8 counting, §10.1 errors) are rated on that capability, as the brief directs.
+
+## Owner review (2026-11-13)
+
+*Recorded from the review page "StatsTid Tender Review" (`https://claude.ai/artifact/F56eLjA9bQT4eQX5iRAnXX`), where the owner marked each requirement **Should meet** or **Not relevant** and commented where it helped. Exported from the page's database on 2026-11-13; the page stays the working copy, this section is the durable record. The decisions are the owner's scope direction for the design target. They are not yet planned work: turning them into roadmap items is a separate step.*
+
+**The outcome in brief.**
+- **128 of 215 should be met.** Of those, 72 are not met today, 55 partly and 1 met. So almost everything the owner wants is still to be built.
+- **85 are not relevant.** 53 of them are supplier, hosting, support or contract duties that no code meets; 17 not met and 15 partly met are deliberately out of scope.
+- **Two are open:** VD 38 (supplier–customer communication in Danish; outside software) has no decision, and EM-G8 (compatibility with Navision Stat, FRAV and HR-Løn) has a comment but no decision.
+
+**The direction the owner's comments set** (each with the requirement it was written on):
+- **Payroll and absence statistics target the new state system, SLP.** HR-Løn and SLS are being replaced by SLP (EM A22), and the old FRAV module by a new one inside SLP (EM B1). The owner will provide the integration specifications later (EM-G8). The Navision posting details need thorough analysis when that integration is specified (EM B9, EM B11). Project codes are what the tenders call *aliases* (EM B20).
+- **Identity and access come from outside StatsTid.** Sign-on is Statens SSO (EM A19, not relevant as a StatsTid feature). The user lifecycle is handled through the HR-system integration (EM A33, VD 33), and roles by an external user-administration system (EM A34). StatsTid keeps its own role model; shift planners and shift users are added with that functionality (VD 8).
+- **Shift planning is in scope;** the open question is how (VD-G1, VD-G2).
+- **StatsTid follows its own verified rule analysis,** not a tender's description of the rules (EM A16). The vacation rules need documentation of exactly what current legislation is (EM A9).
+- **General reporting is wanted** (EM A23); what an "extract" means must be defined first (VD 17).
+- **The owner will supply the full master-data list** (EM A6).
+- **Needs analysis before it can be planned:** keeping the night supplement during sickness (VD 25) and the annex-dependent VD 45. EM A38 (the ØS solution-architecture guide) was flagged as important.
+
+**The decisions, requirement by requirement.** Rating is the gap analysis's, as of 2026-10-26.
+
+### Owner decisions — R1, Registration, approval & reporting
+
+| Id | Rating | Decision | Owner comment |
+|---|---|---|---|
+| EM-G1 | Partly | Should meet |  |
+| EM-G2 | Partly | Should meet |  |
+| EM A1 | Partly | Should meet |  |
+| EM A2 | Partly | Should meet |  |
+| EM A3 | Partly | Should meet |  |
+| EM A4 | Partly | Should meet |  |
+| EM A5 | Partly | Should meet |  |
+| EM A7 | Partly | Should meet |  |
+| EM A23 | Not met | Should meet | We should have some general reporting functionality. |
+| EM A24 | Not met | Not relevant |  |
+| EM A25 | Not met | Not relevant |  |
+| EM A26 | Not met | Should meet |  |
+| EM A29 | Partly | Should meet |  |
+| EM A30 | Not met | Should meet |  |
+| EM A31 | Partly | Should meet |  |
+| EM A32 | Partly | Should meet |  |
+| EM A33 | Partly | Not relevant | Identity lifecycle should be handled together with HR system integration |
+| EM A34 | Partly | Not relevant | Roles will be handled by external user administration system |
+| EM A35 | Not met | Not relevant |  |
+| EM A36 | Met | Should meet |  |
+| VD-G1 | Partly | Should meet | The important question is how. |
+| VD-G2 | Partly | Should meet | The important question is how. |
+| VD 8 | Partly | Not relevant | We use our own roles. Shift planner and shift users added with the fucntionality |
+| VD 9 | Partly | Should meet |  |
+| VD 10 | Partly | Should meet |  |
+| VD 23 | Partly | Not relevant |  |
+| VD 29 | Not met | Not relevant |  |
+| VD 30 | Not met | Not relevant |  |
+| VD 32 | Partly | Should meet |  |
+| VD 33 | Partly | Should meet | Identity lifecycle will be handled through HR system integration |
+| VD 34 | Partly | Not relevant |  |
+| VD 37 | Not met | Not relevant |  |
+
+### Owner decisions — R2, Working-time rules, configuration & shift planning
+
+| Id | Rating | Decision | Owner comment |
+|---|---|---|---|
+| EM A6 | Partly | Should meet | I will add a detailed list of all master data |
+| EM A8 | Partly | Should meet |  |
+| EM A16 | Partly | Not relevant | We should stick to our own analysis of rules |
+| EM A17 | Partly | Should meet |  |
+| VD 11 | Partly | Should meet |  |
+| VD 12 | Partly | Should meet |  |
+| VD 20 | Partly | Should meet |  |
+| VD 21 | Partly | Should meet |  |
+| VD 25 | Not met | Should meet | Needs thorough analysis |
+| VD 26 | Partly | Not relevant |  |
+| VD 45 | Not met | Should meet | Needs analysis and evidence |
+| VD 46 | Not met | Should meet |  |
+| VD 47 | Not met | Should meet |  |
+| VD 48 | Not met | Should meet |  |
+| VD 49 | Not met | Should meet |  |
+| VD 50 | Not met | Should meet |  |
+| VD 51 | Not met | Should meet |  |
+| VD 52 | Not met | Should meet |  |
+| VD 53 | Not met | Should meet |  |
+| VD 54 | Not met | Should meet |  |
+| VD 55 | Not met | Should meet |  |
+| VD 56 | Not met | Should meet |  |
+| VD 57 | Not met | Should meet |  |
+| VD 59 | Not met | Should meet |  |
+| VD 61 | Not met | Should meet |  |
+
+### Owner decisions — R3, Vacation, requests & notifications
+
+| Id | Rating | Decision | Owner comment |
+|---|---|---|---|
+| EM A9 | Partly | Should meet | Needs documentation so we know exactly what the current legislation is |
+| EM A9b | Partly | Should meet |  |
+| EM A10 | Partly | Should meet |  |
+| EM A11 | Partly | Should meet |  |
+| EM A12 | Not met | Not relevant |  |
+| EM A13 | Partly | Should meet |  |
+| EM A14 | Partly | Should meet |  |
+| EM A15 | Not met | Should meet |  |
+| VD 13 | Partly | Should meet |  |
+| VD 14 | Partly | Should meet |  |
+| VD 15 | Partly | Should meet |  |
+| VD 16 | Partly | Should meet |  |
+| VD 17 | Not met | Should meet | We need to define what extract means. |
+| VD 18 | Partly | Should meet |  |
+| VD 22 | Not met | Should meet |  |
+| VD 24 | Partly | Should meet |  |
+
+### Owner decisions — R4, State-system integrations
+
+| Id | Rating | Decision | Owner comment |
+|---|---|---|---|
+| EM-G8 | Partly | — | I will provide the integration specs at a later point |
+| EM A22 | Not met | Should meet | HRLøn and SLS are being replaced by a new system - SLP. |
+| EM B1 | Not met | Should meet | Old FRAV module is being replaced by a new one in the new SLP system. |
+| EM B2 | Partly | Should meet |  |
+| EM B3 | Not met | Should meet |  |
+| EM B4 | Not met | Should meet |  |
+| EM B5 | Not met | Should meet |  |
+| EM B6 | Not met | Should meet |  |
+| EM B7 | Outside software | Not relevant |  |
+| EM B8 | Not met | Should meet |  |
+| EM B9 | Not met | Should meet | Needs thorough anlysis when we spec the integration |
+| EM B10 | Not met | Should meet |  |
+| EM B11 | Not met | Should meet | Again, should be analysied when the integration is specced |
+| EM B12 | Not met | Not relevant |  |
+| EM B13 | Not met | Should meet |  |
+| EM B14 | Not met | Should meet |  |
+| EM B15 | Not met | Should meet |  |
+| EM B16 | Not met | Should meet |  |
+| EM B17 | Not met | Should meet |  |
+| EM B18 | Not met | Should meet |  |
+| EM B19 | Not met | Should meet |  |
+| EM B20 | Not met | Should meet | Alias is the same as projects in our current system |
+| EM B21 | Not met | Should meet |  |
+| EM B22 | Not met | Should meet |  |
+| EM B23 | Not met | Should meet |  |
+| EM B24 | Not met | Should meet |  |
+| EM B25 | Not met | Should meet |  |
+| EM B26 | Not met | Should meet |  |
+| EM B27 | Not met | Should meet |  |
+| EM B28 | Not met | Should meet |  |
+| EM B29 | Not met | Should meet |  |
+| EM B30 | Not met | Should meet |  |
+| EM B31 | Partly | Should meet |  |
+| EM B32 | Partly | Should meet |  |
+| VD-G4 | Partly | Should meet |  |
+| VD 1 | Not met | Should meet |  |
+| VD 2 | Partly | Should meet |  |
+| VD 3 | Partly | Should meet |  |
+| VD 4 | Not met | Should meet |  |
+| VD 5 | Partly | Not relevant |  |
+| VD 28 | Not met | Should meet |  |
+| VD 39 | Not met | Should meet |  |
+| VD 40 | Not met | Not relevant |  |
+| VD 41 | Not met | Should meet |  |
+| VD 44 | Not met | Should meet |  |
+| VD 58 | Not met | Should meet |  |
+| VD 60 | Partly | Should meet |  |
+| VD 62 | Not met | Should meet |  |
+| VD 63 | Not met | Should meet |  |
+| VD 64 | Not met | Should meet |  |
+| VD 65 | Not met | Should meet |  |
+| VD 66 | Not met | Should meet |  |
+| VD 67 | Not met | Should meet |  |
+| VD 68 | Not met | Should meet |  |
+| VD 69 | Not met | Should meet |  |
+| VD 70 | Not met | Should meet |  |
+| VD 71 | Not met | Should meet |  |
+
+### Owner decisions — R5, Platform, security, compliance & supplier
+
+| Id | Rating | Decision | Owner comment |
+|---|---|---|---|
+| EM-G3 | Outside software | Not relevant |  |
+| EM-G4 | Partly | Not relevant |  |
+| EM-G5 | Outside software | Not relevant |  |
+| EM-G6 | Not met | Not relevant |  |
+| EM-G7 | Not met | Not relevant |  |
+| EM A18 | Partly | Should meet |  |
+| EM A19 | Not met | Not relevant | We will use Statens SSO. |
+| EM A20 | Partly | Not relevant |  |
+| EM A21 | Not met | Should meet |  |
+| EM A27 | Partly | Not relevant |  |
+| EM A28 | Partly | Not relevant |  |
+| EM A37 | Partly | Should meet |  |
+| EM A38 | Partly | Should meet | This one sounds important |
+| EM C1 | Outside software | Not relevant |  |
+| EM C2 | Outside software | Not relevant |  |
+| EM C3 | Outside software | Not relevant |  |
+| EM C4 | Outside software | Not relevant |  |
+| EM C5 | Outside software | Not relevant |  |
+| EM C6 | Outside software | Not relevant |  |
+| EM C7 | Outside software | Not relevant |  |
+| EM C8 | Outside software | Not relevant |  |
+| EM C9 | Outside software | Not relevant |  |
+| EM C10 | Outside software | Not relevant |  |
+| EM C11 | Outside software | Not relevant |  |
+| EM C12 | Outside software | Not relevant |  |
+| EM §2.2.3 | Outside software | Not relevant |  |
+| EM D1 | Partly | Should meet |  |
+| EM D2 | Outside software | Not relevant |  |
+| EM D3 | Outside software | Not relevant |  |
+| EM E1 | Outside software | Not relevant |  |
+| EM E2 | Outside software | Not relevant |  |
+| EM E3 | Outside software | Not relevant |  |
+| EM E4 | Not met | Should meet |  |
+| EM §2.5 | Outside software | Not relevant |  |
+| EM §5 | Outside software | Not relevant |  |
+| EM §6 | Outside software | Not relevant |  |
+| EM §7 | Outside software | Not relevant |  |
+| EM §8.1 | Outside software | Not relevant |  |
+| EM §8.2 | Outside software | Not relevant |  |
+| EM §8.3 | Partly | Should meet |  |
+| VD-G3 | Outside software | Not relevant |  |
+| VD-G5 | Partly | Not relevant |  |
+| VD-G6 | Outside software | Not relevant |  |
+| VD-G7 | Not met | Not relevant |  |
+| VD 6 | Not met | Not relevant |  |
+| VD 7 | Outside software | Not relevant |  |
+| VD 27 | Partly | Should meet |  |
+| VD 31 | Partly | Not relevant |  |
+| VD 35 | Partly | Should meet |  |
+| VD 36 | Partly | Should meet |  |
+| VD 38 | Outside software | — |  |
+| VD 42 | Partly | Should meet |  |
+| VD 43 | Partly | Should meet |  |
+| VD 72 | Not met | Should meet |  |
+| VD 73 | Outside software | Not relevant |  |
+| VD 74 | Outside software | Not relevant |  |
+| VD 75 | Not met | Should meet |  |
+| VD 76 | Outside software | Not relevant |  |
+| VD 77 | Outside software | Not relevant |  |
+| VD 78 | Outside software | Not relevant |  |
+| VD 79 | Outside software | Not relevant |  |
+| VD 80 | Outside software | Not relevant |  |
+| VD 81 | Outside software | Not relevant |  |
+| VD 82 | Outside software | Not relevant |  |
+| VD 83 | Not met | Should meet |  |
+| VD 84 | Outside software | Not relevant |  |
+| VD 85 | Partly | Should meet |  |
+| VD 86 | Outside software | Not relevant |  |
+| VD 87 | Partly | Should meet |  |
+| VD 88 | Outside software | Not relevant |  |
+| VD 89 | Outside software | Not relevant |  |
+| VD §5 | Outside software | Not relevant |  |
+| VD §5.1 | Not met | Not relevant |  |
+| VD §5.2 | Outside software | Not relevant |  |
+| VD §5.3 | Outside software | Not relevant |  |
+| VD §5.4 | Outside software | Not relevant |  |
+| VD §5.5 | Outside software | Not relevant |  |
+| VD §5.6–5.8 | Not met | Not relevant |  |
+| VD §6 | Outside software | Not relevant |  |
+| VD §7 | Outside software | Not relevant |  |
+| VD §8 | Not met | Not relevant |  |
+| VD §9 | Outside software | Not relevant |  |
+| VD §10 | Partly | Not relevant |  |
+| VD §11 | Outside software | Not relevant |  |
+| VD §12.1 | Outside software | Not relevant |  |

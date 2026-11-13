@@ -226,7 +226,6 @@ describe('computeMonthFlexDelta (R2 arithmetic — the grid Diff total mirror)',
     projectKeys: new Set(['DRIFT']),
     absenceKeys: new Set(['VACATION']),
     workIntervals: new Map(),
-    manualHours: new Map(),
     dailyNorm: new Map<string, number | null>([
       ['2026-03-02', 7.4], // Monday
       ['2026-03-03', 7.4],
@@ -244,12 +243,11 @@ describe('computeMonthFlexDelta (R2 arithmetic — the grid Diff total mirror)',
     expect(delta).toBe(0)
   })
 
-  it('worked = intervals + manualHours against the served norm', () => {
+  it('worked = clock intervals against the served norm', () => {
     const delta = computeMonthFlexDelta({
       ...base,
       cellValues: new Map(),
-      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '15:00' }]]]), // 7.0
-      manualHours: new Map([['2026-03-02', 1.0]]), // worked 8.0 vs 7.4 → +0.6
+      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '16:00' }]]]), // worked 8.0 vs 7.4 → +0.6
     })
     expect(delta).toBe(0.6)
   })

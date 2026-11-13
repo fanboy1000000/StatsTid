@@ -312,6 +312,12 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'AC', 'Childs 1st sick day', '2020-01-01'),
     ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'HK', 'Childs 1st sick day', '2020-01-01'),
     ('CHILD_SICK_DAY', 'SLS_0530', 'OK26', 'PROSA', 'Childs 1st sick day', '2020-01-01'),
+    -- The child's call-home day (OK26 only; QUAL-236): an unmapped line is skipped by payroll, so
+    -- every agreement that can carry one has its row.
+    -- shortcut(QUAL-249): the call-home day is exported under the child's first sick day's code SLS_0530, provisional; upgrade when the Phase B payroll experts name its wage type (R-16)
+    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'AC', 'Childs sick day, call-home hours', '2020-01-01'),
+    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'HK', 'Childs sick day, call-home hours', '2020-01-01'),
+    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'PROSA', 'Childs sick day, call-home hours', '2020-01-01'),
     ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'AC', 'Parental leave', '2020-01-01'),
     ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'HK', 'Parental leave', '2020-01-01'),
     ('PARENTAL_LEAVE', 'SLS_0540', 'OK26', 'PROSA', 'Parental leave', '2020-01-01'),
@@ -1277,6 +1283,8 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_RESEARCH', 'Sick day',                           '2020-01-01'),
     ('CARE_DAY',          'SLS_0520', 'OK26', 'AC_RESEARCH', 'Care day (omsorgsdage)',             '2020-01-01'),
     ('CHILD_SICK_DAY',    'SLS_0530', 'OK26', 'AC_RESEARCH', 'Childs 1st sick day',                '2020-01-01'),
+    -- shortcut(QUAL-249): the call-home day is exported under the child's first sick day's code SLS_0530, provisional; upgrade when the Phase B payroll experts name its wage type (R-16)
+    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'AC_RESEARCH', 'Childs sick day, call-home hours', '2020-01-01'),
     ('CHILD_SICK_DAY_2',  'SLS_0531', 'OK26', 'AC_RESEARCH', 'Childs 2nd sick day',                '2020-01-01'),
     ('CHILD_SICK_DAY_3',  'SLS_0532', 'OK26', 'AC_RESEARCH', 'Childs 3rd sick day',                '2020-01-01'),
     ('SENIOR_DAY',        'SLS_0550', 'OK26', 'AC_RESEARCH', 'Senior day',                         '2020-01-01'),
@@ -1311,6 +1319,8 @@ INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code
     ('SICK_DAY',          'SLS_0540', 'OK26', 'AC_TEACHING', 'Sick day',                           '2020-01-01'),
     ('CARE_DAY',          'SLS_0520', 'OK26', 'AC_TEACHING', 'Care day (omsorgsdage)',             '2020-01-01'),
     ('CHILD_SICK_DAY',    'SLS_0530', 'OK26', 'AC_TEACHING', 'Childs 1st sick day',                '2020-01-01'),
+    -- shortcut(QUAL-249): the call-home day is exported under the child's first sick day's code SLS_0530, provisional; upgrade when the Phase B payroll experts name its wage type (R-16)
+    ('CHILD_SICK_CALL_HOME', 'SLS_0530', 'OK26', 'AC_TEACHING', 'Childs sick day, call-home hours', '2020-01-01'),
     ('CHILD_SICK_DAY_2',  'SLS_0531', 'OK26', 'AC_TEACHING', 'Childs 2nd sick day',                '2020-01-01'),
     ('CHILD_SICK_DAY_3',  'SLS_0532', 'OK26', 'AC_TEACHING', 'Childs 3rd sick day',                '2020-01-01'),
     ('SENIOR_DAY',        'SLS_0550', 'OK26', 'AC_TEACHING', 'Senior day',                         '2020-01-01'),
@@ -1793,13 +1803,19 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     ('CARE_DAY', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
     ('CARE_DAY', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
     ('CARE_DAY', 'PROSA', 'OK26', 2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage', '0001-01-01', true),
-    -- CHILD_SICK: AC=1, HK=2, PROSA=3, per-episode (stays hours-based per D-A — full_day_only FALSE)
-    ('CHILD_SICK', 'AC', 'OK24', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01', false),
-    ('CHILD_SICK', 'AC', 'OK26', 1, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 1 dag per episode', '0001-01-01', false),
-    ('CHILD_SICK', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01', false),
-    ('CHILD_SICK', 'HK', 'OK26', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 2 dage per episode', '0001-01-01', false),
-    ('CHILD_SICK', 'PROSA', 'OK24', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01', false),
-    ('CHILD_SICK', 'PROSA', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barn syg – 3 dage per episode', '0001-01-01', false),
+    -- CHILD_SICK: whole sick days PER ILLNESS (is_per_episode; no yearly cap; QUAL-236): 2 under
+    -- OK24, 3 under OK26 (from 1 April 2026), for every agreement. annual_quota holds the per-illness
+    -- count, and it decides which day codes the Skema save and catalogue offer (day 1 up to
+    -- min(whole quota, 3); DefaultEntitlementConfigs.ChildSickCodesOffered), so these values must
+    -- agree with DefaultEntitlementConfigs.CreateChildSick (ADR-014). Stays hours-based per D-A
+    -- (full_day_only FALSE).
+    ('CHILD_SICK', 'AC', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barns sygedag – 2 dage pr. sygdomsforløb', '0001-01-01', false),
+    -- shortcut(QUAL-BF-004): AC's OK26 child's-sick rule (3 days plus the call-home day) is agreed but its circular is pending; upgrade when the circular is issued (QUAL-236)
+    ('CHILD_SICK', 'AC', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barns sygedag – 3 dage pr. sygdomsforløb (foreløbig)', '0001-01-01', false),
+    ('CHILD_SICK', 'HK', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barns sygedag – 2 dage pr. sygdomsforløb', '0001-01-01', false),
+    ('CHILD_SICK', 'HK', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barns sygedag – 3 dage pr. sygdomsforløb', '0001-01-01', false),
+    ('CHILD_SICK', 'PROSA', 'OK24', 2, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barns sygedag – 2 dage pr. sygdomsforløb', '0001-01-01', false),
+    ('CHILD_SICK', 'PROSA', 'OK26', 3, 'IMMEDIATE', 1, 0, false, true, NULL, 'Barns sygedag – 3 dage pr. sygdomsforløb', '0001-01-01', false),
     -- SENIOR_DAY: 2 days/year for age 62+ (S37 TASK-3703 Bug #3 absorption 2026-05-21, Path B seed-side fix
     -- per interim-expert decision; previously paired-broken with quota=0 + min_age=60). Bug-with-no-past-impact.
     -- S73 / TASK-7301 (D-A): full_day_only = TRUE — seniordage are whole days ("hele dage").
@@ -1830,10 +1846,14 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     ('CARE_DAY',        'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
     ('CARE_DAY',        'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
     ('CARE_DAY',        'AC_TEACHING', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, NULL, 'Omsorgsdage – 2 dage',             '0001-01-01', true),
-    ('CHILD_SICK',      'AC_RESEARCH', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
-    ('CHILD_SICK',      'AC_RESEARCH', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
-    ('CHILD_SICK',      'AC_TEACHING', 'OK24',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
-    ('CHILD_SICK',      'AC_TEACHING', 'OK26',  1, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barn syg – 1 dag per episode',     '0001-01-01', false),
+    -- CHILD_SICK: as AC above (2 per illness under OK24, 3 under OK26; the AC overenskomst they
+    -- inherit, so their OK26 rows share AC's provisional label; QUAL-236).
+    ('CHILD_SICK',      'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barns sygedag – 2 dage pr. sygdomsforløb', '0001-01-01', false),
+    -- shortcut(QUAL-BF-004): AC's OK26 child's-sick rule (3 days plus the call-home day) is agreed but its circular is pending; upgrade when the circular is issued (QUAL-236)
+    ('CHILD_SICK',      'AC_RESEARCH', 'OK26',  3, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barns sygedag – 3 dage pr. sygdomsforløb (foreløbig)', '0001-01-01', false),
+    ('CHILD_SICK',      'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barns sygedag – 2 dage pr. sygdomsforløb', '0001-01-01', false),
+    -- shortcut(QUAL-BF-004): AC's OK26 child's-sick rule (3 days plus the call-home day) is agreed but its circular is pending; upgrade when the circular is issued (QUAL-236)
+    ('CHILD_SICK',      'AC_TEACHING', 'OK26',  3, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barns sygedag – 3 dage pr. sygdomsforløb (foreløbig)', '0001-01-01', false),
     ('SENIOR_DAY',      'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
     ('SENIOR_DAY',      'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
     ('SENIOR_DAY',      'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
@@ -1895,10 +1915,11 @@ CREATE TABLE IF NOT EXISTS time_entries_projection (
     --     row, so creating it can never fail. The cost: a future Skema writer that forgets to
     --     stamp 'SKEMA' would silently be additive; the Resave_Entry_* tests pin that.
     source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
-    -- Set to the outbox_id of the re-save that REPLACED this row; NULL while the row is the
-    -- current value of its cell. A replaced row is KEPT, not deleted, so the audit trail and
-    -- a replay by event id can still read exactly what a calculation was fed (ADR-028 D6,
-    -- to be recorded at the S145 close). Every read that totals hours counts current rows only.
+    -- Set to the outbox_id of the re-save that REPLACED this row, or of the clear
+    -- (TimeEntryCleared) that EMPTIED its cell; NULL while the row is the current value of its
+    -- cell. A replaced or cleared row is KEPT, not deleted, so the audit trail and a replay by
+    -- event id can still read exactly what a calculation was fed (ADR-028 D6). Every read that
+    -- totals hours counts current rows only.
     superseded_by_outbox_id     BIGINT          NULL,
     CONSTRAINT time_entries_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 );
@@ -1940,9 +1961,10 @@ CREATE TABLE IF NOT EXISTS absences_projection (
     -- tables. Allowed values: 'SKEMA' and 'TIME_POST' (CHECK at the end of this table);
     -- DEFAULT 'TIME_POST' for the reasons given on the sibling table (R28/N4).
     source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
-    -- outbox_id of the re-save that REPLACED this row; NULL while it is the current value.
-    -- Replaced rows are kept for replay and audit (ADR-028 D6, to be recorded at the S145 close). The vacation
-    -- settlement and every quota total count current rows only.
+    -- outbox_id of the re-save that REPLACED this row, or of the clear (AbsenceCleared) that
+    -- EMPTIED its cell; NULL while it is the current value. Replaced and cleared rows are kept
+    -- for replay and audit (ADR-028 D6). The vacation settlement and every quota total count
+    -- current rows only.
     superseded_by_outbox_id     BIGINT          NULL,
     CONSTRAINT absences_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 );
@@ -1963,23 +1985,32 @@ CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
 -- ordering so a stale event never overwrites a newer one (apply only when incoming
 -- outbox_id >= stored).
 --
+-- A day EMPTIED by a Skema save (WorkTimeCleared, owner Q2) is KEPT and marked, not deleted:
+-- cleared_by_outbox_id and outbox_id both become the clear's outbox_id. The row is current only
+-- while cleared_by_outbox_id is NULL, and every reader counts current rows only. Keeping it is
+-- what stops the startup rebuild (ProjectionBackfillService, which replays from `events` while a
+-- just-committed clear may not be published yet) from replaying an older registration over the
+-- day: the advanced outbox_id refuses it. Registering the day again overwrites the row and sets
+-- the marker back to NULL.
+--
 -- S145 / A0 correction of the former "time_entries_projection is append-per-event" remark:
 -- a Skema cell (employee + date + task) in time_entries_projection is ALSO latest-wins now,
 -- but by a different mechanism: a re-save inserts a new row and marks the old one superseded
--- (superseded_by_outbox_id), so the replaced rows are RETAINED for replay and audit rather
--- than overwritten. Rows written by POST /api/time-entries stay ADDITIVE (one row per
--- event, never superseded). The same holds for absences_projection. See ADR-028 D6
--- (to be recorded at the S145 close) and the S145 segment further down.
+-- (superseded_by_outbox_id), and a clear marks the current row without inserting one, so the
+-- replaced and cleared rows are RETAINED for replay and audit rather than overwritten. Rows
+-- written by POST /api/time-entries (TIME_POST) stay ADDITIVE (one row per event, never
+-- superseded). The same holds for absences_projection. See ADR-028 D6 and the S145 segment
+-- further down.
 CREATE TABLE IF NOT EXISTS work_time_projection (
     employee_id     TEXT            NOT NULL,
     date            DATE            NOT NULL,
     intervals       JSONB           NOT NULL DEFAULT '[]'::jsonb,  -- [{ "start":"HH:mm", "end":"HH:mm" }, ...]
-    manual_hours    NUMERIC(8,4)    NOT NULL DEFAULT 0,            -- "Tilføj timer" direct daily hours
     occurred_at     TIMESTAMPTZ     NOT NULL,
     actor_id        TEXT,
     actor_role      TEXT,
     correlation_id  UUID,
     outbox_id       BIGINT          NOT NULL,                      -- event ordering / latest-wins guard
+    cleared_by_outbox_id BIGINT     NULL,                          -- the clearing WorkTimeCleared's outbox_id; NULL while current
     PRIMARY KEY (employee_id, date)
 );
 -- PK (employee_id, date) already serves month-range reads (employee_id + date BETWEEN).

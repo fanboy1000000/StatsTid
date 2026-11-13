@@ -239,6 +239,8 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // the terminated-inclusive subject read and the window read.
     UserRepository userRepo,
     IEmploymentWindowResolver windowResolver,
+    // The typed-entry refusal's read of the month's current recorded hours (RefuseTypedEntriesAsync).
+    IRecordedHoursReader hoursReader,
     ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
@@ -320,6 +322,24 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             currentStatus = approval?.Status ?? "NOT_FOUND"
         }, statusCode: 403);
     }
+
+    // The payroll checkpoint of four-eyes, at admission (QUAL-246; SEC-053, SEC-009): an APPROVED month whose approver
+    // is its sender or its own employee is not two people's decision and is not paid. Checked on the row just read,
+    // before anything is calculated or written: no manifest, no export record, no PayrollExportGenerated, no ADR-026
+    // audit row. The export transaction re-checks the same predicate under its row lock (the row can change after this
+    // read) and answers the same 409.
+    if (PayrollFourEyesException.FailedClause(
+            approval.ApprovedBy, approval.EmployeeApprovedBy, approval.SubmittedBy, approval.EmployeeId) is { } fourEyesClause)
+    {
+        return PayrollFourEyesRefused(loggerFactory, approval.PeriodId, fourEyesClause, "calculate-and-export admission");
+    }
+
+    // Typed time is refused by name (QUAL-232, QUAL-202): after the approval and four-eyes checks, before anything is
+    // calculated or written — no manifest, no export record, no PayrollExportGenerated, no ADR-026 audit row.
+    if (await RefuseTypedEntriesAsync(
+            hoursReader, loggerFactory, request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd,
+            "calculate-and-export", ct) is { } typedEntriesRefusal)
+        return typedEntriesRefusal;
 
     // Forward auth header and correlation ID for traceability
     var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
@@ -490,16 +510,22 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             // admission's.
             return PriorMonthNotApproved(ex);
         }
+        catch (PayrollFourEyesException ex)
+        {
+            // The export's row-locked re-check of four-eyes (B2) refused: the approval changed after admission read it.
+            // The transaction rolled back: no export record, no PayrollExportGenerated, no audit row. The calculation's
+            // own manifest stays, as with the other export-time rechecks. The same 409 as admission's (QUAL-246).
+            return PayrollFourEyesRefused(loggerFactory, ex.PeriodId, ex.Clause, "calculate-and-export export");
+        }
         catch (PayrollExportConflictException ex)
         {
-            // Every export-time conflict PayrollExportService raises answers this one 409: already exported for
+            // Every other export-time conflict PayrollExportService raises answers this one 409: already exported for
             // this month with different content (idempotency), or with the same lines but a different flex balance
             // (S146 R-16); a line spanning more than one calendar month; a record that vanished mid-transaction
-            // (defensive); and a refusal of the approval re-assert under the row lock (B2): the period not found or
-            // no longer APPROVED, and since S147 also not the exported employee's whole calendar month (R-G2, R-G8),
-            // approved by the person who sent it (four-eyes, SEC-053), or approved by its own employee (SEC-009).
-            // All answer this one kind; a distinct four-eyes kind is a recorded follow-up (tidy item 12). For an
-            // already-exported month the remedy is a correction (/recalculate).
+            // (defensive); and a refusal of the approval re-assert under the row lock (B2): the period not found, no
+            // longer APPROVED, or not the exported employee's whole calendar month (R-G2, R-G8). A four-eyes failure
+            // has its own kind, payroll-four-eyes (caught above; QUAL-246). For an already-exported month the remedy
+            // is a correction (/recalculate).
             return Results.Json(new
             {
                 result.EmployeeId,
@@ -553,6 +579,8 @@ app.MapPost("/api/payroll/recalculate", async (
     // S147 / TASK-14703 (F1): the departed-self guard's deny-only subject read and its clock.
     UserRepository userRepo,
     TimeProvider timeProvider,
+    // The typed-entry refusal's read of the month's current recorded hours (RefuseTypedEntriesAsync).
+    IRecordedHoursReader hoursReader,
     ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
@@ -621,6 +649,14 @@ app.MapPost("/api/payroll/recalculate", async (
             idempotencyToken
         });
     }
+
+    // Typed time is refused by name (QUAL-232, QUAL-202): after the idempotency fast path, so a token already delivered
+    // keeps its original answer, and before the correction is calculated — no manifest, no correction event, no baseline
+    // or balance change, no ADR-026 audit row, no idempotency marker.
+    if (await RefuseTypedEntriesAsync(
+            hoursReader, loggerFactory, request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd,
+            "recalculate", ct) is { } typedEntriesRefusal)
+        return typedEntriesRefusal;
 
     // Extract actor ID from claims
     var actorId = httpContext.User.FindFirst("sub")?.Value ?? "unknown";
@@ -799,6 +835,72 @@ static IResult PriorMonthNotApproved(PriorMonthNotApprovedException ex) =>
         periodStart = ex.PeriodStart,
         periodEnd = ex.PeriodEnd
     }, statusCode: 409);
+
+// The ONE response for "this month's approval is not two people's decision" (QUAL-246; SEC-053, SEC-009). 409 because
+// the month is in a state the operator can fix (reopen it and have someone else approve it) and retry. Shared by
+// /calculate-and-export's admission check and the export transaction's row-locked re-check (PayrollFourEyesException),
+// so a given case answers alike at both. The body is FIXED (PayrollFourEyesException.ErrorSentence): no employee id, no
+// date and no period id (ADR-040 D7). The server log names the clause that fired, the approval period id and the site;
+// the refusal itself writes nothing, so the log line is its record beside the HTTP request's own audit_log row.
+static IResult PayrollFourEyesRefused(ILoggerFactory loggerFactory, Guid periodId, string clause, string site)
+{
+    loggerFactory.CreateLogger("StatsTid.Integrations.Payroll.FourEyes").LogWarning(
+        "Refused ({Clause}): approval period {PeriodId} is not two people's decision ({Site})",
+        clause, periodId, site);
+    return Results.Json(new
+    {
+        success = false,
+        error = PayrollFourEyesException.ErrorSentence,
+        kind = PayrollFourEyesException.KindValue
+    }, statusCode: 409);
+}
+
+// The ONE refusal for "this month holds recorded time typed as something other than ordinary work" (QUAL-232, QUAL-202).
+// Payroll pays a stored time entry as ordinary work only when its ActivityType is null or "NORMAL" (Ordinal). Any other
+// type is paid wrongly by today's rules (an on-call hour at the reduced on-call rate AND as a fully worked hour), so the
+// month is refused by name instead of paid; a historical "timer" row is refused too (ADR-028 D5). No route registers a
+// typed entry (the Skema save writes NORMAL itself), so this is defence in depth over rows already stored.
+// The window is the calculation's own hours read — the same reader, the same CURRENT rows and the same
+// [PeriodCalculationService.HoursReadStart(periodStart), periodEnd] (ADR-016 D10) — so a typed row on a context day of
+// the opening week is refused exactly when the calculation would read and pay it. Both calculating routes call it before
+// anything is calculated, so a refusal writes nothing; replay never does (evaluation, never admission: ADR-016 D10 R42).
+// A blank employee id cannot hold stored entries, so it is left to the route's own outcome. 422 because the request is
+// well formed but the month's data cannot be paid. The body is FIXED: no employee id, no date, no row data (ADR-040 D7);
+// the server log names the employee, the period and the refused rows' event ids and types.
+// shortcut(QUAL-BF-003): a month holding a stored typed row has no in-product remedy (no route removes or re-types a stored
+// entry), so it stays refused; upgrade when a database holding typed rows is carried forward instead of reseeded.
+static async Task<IResult?> RefuseTypedEntriesAsync(
+    IRecordedHoursReader hoursReader,
+    ILoggerFactory loggerFactory,
+    string employeeId,
+    DateOnly periodStart,
+    DateOnly periodEnd,
+    string route,
+    CancellationToken ct)
+{
+    if (string.IsNullOrWhiteSpace(employeeId))
+        return null;
+
+    var recorded = await hoursReader.ReadCurrentAsync(
+        employeeId, PeriodCalculationService.HoursReadStart(periodStart), periodEnd, ct);
+    var typed = recorded.Entries
+        .Where(e => e.ActivityType is not null && !string.Equals(e.ActivityType, "NORMAL", StringComparison.Ordinal))
+        .ToList();
+    if (typed.Count == 0)
+        return null;
+
+    loggerFactory.CreateLogger("StatsTid.Integrations.Payroll.ActivityType").LogWarning(
+        "Refused ({Kind}): employee {EmployeeId}, period {PeriodStart:yyyy-MM-dd}..{PeriodEnd:yyyy-MM-dd} holds {Count} " +
+        "recorded time entries typed other than NORMAL: {TypedEntries} ({Route})",
+        "payroll-activity-type-refused", employeeId, periodStart, periodEnd, typed.Count,
+        string.Join(", ", typed.Select(e => $"{e.EventId}:{e.ActivityType}")), route);
+    return Results.Json(new
+    {
+        success = false,
+        error = "The month holds recorded hours of an activity type other than ordinary work (such as on-call duty, a call-in or travel). Payroll calculates a month only when all its recorded working hours are ordinary work, so this month is refused. Nothing was calculated, written or exported.",
+        kind = "payroll-activity-type-refused"
+    }, statusCode: 422);
+}
 
 // S145 TASK-14508 (R14) — the ONE refusal for "this request carries hours". Payroll reads the
 // employee's recorded, current hours itself, so a caller-supplied hours list is no longer an input.

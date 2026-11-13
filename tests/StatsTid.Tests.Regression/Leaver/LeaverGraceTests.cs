@@ -155,8 +155,8 @@ public sealed class LeaverGraceTests : IAsyncLifetime
 
     /// <summary>
     /// AC-230-5 (others). Kind B on the HR leg (boundary pin, holds today: HR registering for someone else was
-    /// always allowed) and kind F on the manager leg. On D+1 (Saturday 2026-03-14, still the grace) HR's time
-    /// entry for Mette's last working week answers 201, and the manager's approve of her EMPLOYEE_APPROVED March
+    /// always allowed) and kind F on the manager leg. On D+1 (Saturday 2026-03-14, still the grace) HR's Skema
+    /// save of a time entry for Mette's last working week answers 200, and the manager's approve of her EMPLOYEE_APPROVED March
     /// answers 200. The new self-service rule must not over-reach to someone ELSE acting for her. The Step-A
     /// poll runs first (a due witness proves it ran). Red condition (manager leg): the 200 on the manager's approve —
     /// today Step A flips Mette on D+1, so the approve meets an inactive subject and answers 403.
@@ -176,13 +176,15 @@ public sealed class LeaverGraceTests : IAsyncLifetime
 
         using (var hr = ClientFor(host, "lg_oth_hr", StatsTidRoles.LocalHR))
         {
-            var entry = await hr.PostAsJsonAsync("/api/time-entries", new
+            // S148 R-20 re-point: the hours come in through the Skema save (POST /api/time-entries is retired).
+            var entry = await hr.PostAsJsonAsync($"/api/skema/{mette}/save", new
             {
-                employeeId = mette, date = new DateOnly(2026, 3, 10), hours = 7.4m,
-                taskId = (string?)null, activityType = "NORMAL", agreementCode = "AC",
+                year = 2026, month = 3,
+                entries = new[] { new { date = new DateOnly(2026, 3, 10), projectCode = "PROJ-LG", hours = 7.4m } },
             });
             var entryRaw = await entry.Content.ReadAsStringAsync();
-            Assert.True(entry.StatusCode == HttpStatusCode.Created,
+            // S148 R-20: was 201 (the retired route); the Skema save answers 200.
+            Assert.True(entry.StatusCode == HttpStatusCode.OK,
                 $"HR's write for Mette on D+1 must be allowed, got {(int)entry.StatusCode}: {entryRaw}");
         }
 

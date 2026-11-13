@@ -59,6 +59,7 @@ public static class AbsenceTypeLabels
         // frontend's entitlement label (frontend/src/lib/entitlementConstants.ts).
         new(AbsenceTypes.SpecialHolidayAllowance, "Særlig feriedag"),
         new(AbsenceTypes.CareDay, "Omsorgsdag"),
+        new(AbsenceTypes.ChildSickCallHome, "Barns sygdom – hjemkaldelsesdag"),
         new(AbsenceTypes.ChildSick1, "Barns 1. sygedag"),
         new(AbsenceTypes.ChildSick2, "Barns 2. sygedag"),
         new(AbsenceTypes.ChildSick3, "Barns 3. sygedag"),

@@ -40,6 +40,14 @@ public static class AbsenceTypes
     public const string ChildSick1 = "CHILD_SICK_DAY";
     public const string ChildSick2 = "CHILD_SICK_DAY_2";
     public const string ChildSick3 = "CHILD_SICK_DAY_3";
+
+    /// <summary>
+    /// The call-home day ("hjemkaldelsesdag"): paid leave for the remaining working hours of the
+    /// day a child falls ill after the parent has met for work (021-26 and 020-26 § 14, from
+    /// OK26). Registered in hours, beside the child's 1st to 3rd sick day; which dates offer it is
+    /// <c>DefaultEntitlementConfigs.ChildSickCodesOffered</c> (QUAL-236).
+    /// </summary>
+    public const string ChildSickCallHome = "CHILD_SICK_CALL_HOME";
     public const string ParentalLeave = "PARENTAL_LEAVE";
     public const string SeniorDay = "SENIOR_DAY";
     public const string SpecialHolidayAllowance = "SPECIAL_HOLIDAY_ALLOWANCE";

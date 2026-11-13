@@ -62,8 +62,7 @@ public sealed record SkemaWorkIntervalRow(
 /// <c>boundaryWorkTime</c> rows (identical projections; sibling rule).</summary>
 public sealed record SkemaWorkTimeDayRow(
     DateOnly Date,
-    IReadOnlyList<SkemaWorkIntervalRow> Intervals,
-    decimal ManualHours);
+    IReadOnlyList<SkemaWorkIntervalRow> Intervals);
 
 /// <summary>One { date, hours|null } day row — the shape of BOTH <c>dailyNorm</c> (per-day
 /// display norm; null for ANNUAL_ACTIVITY / no-profile days) and <c>consumptionBasis</c> (the

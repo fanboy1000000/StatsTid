@@ -12,6 +12,7 @@ using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 using ReportingLineModel = StatsTid.SharedKernel.Models.ReportingLine;
 
 namespace StatsTid.Tests.Regression.Approval;
@@ -299,19 +300,22 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task InsertWorkTimeAsync(string employeeId, DateOnly date, decimal manualHours)
+    // S148 S0-5: manual hours are retired; the day's worked hours are seeded as one clock interval
+    // from 08:00 (so workedHours must be at most 16). Same hours as before for the 7,4 / 2,0 callers.
+    private async Task InsertWorkTimeAsync(string employeeId, DateOnly date, decimal workedHours)
     {
+        var end = (TimeSpan.FromHours(8) + TimeSpan.FromSeconds((double)(workedHours * 3600m))).ToString(@"hh\:mm\:ss");
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            INSERT INTO work_time_projection (employee_id, date, intervals, manual_hours, occurred_at, outbox_id)
-            VALUES (@emp, @date, '[]'::jsonb, @manual, NOW(), @outbox)
-            ON CONFLICT (employee_id, date) DO UPDATE SET manual_hours = @manual
+            INSERT INTO work_time_projection (employee_id, date, intervals, occurred_at, outbox_id)
+            VALUES (@emp, @date, @intervals::jsonb, NOW(), @outbox)
+            ON CONFLICT (employee_id, date) DO UPDATE SET intervals = @intervals::jsonb
             """, conn);
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("date", date);
-        cmd.Parameters.AddWithValue("manual", manualHours);
+        cmd.Parameters.AddWithValue("intervals", $$"""[{"start":"08:00:00","end":"{{end}}"}]""");
         cmd.Parameters.AddWithValue("outbox", _outboxSeq++);
         await cmd.ExecuteNonQueryAsync();
     }
@@ -504,7 +508,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         // 40 h registered + a deliberate worked/allocated imbalance that WOULD raise hasWarning.
         await InsertPeriodAsync(Emp, "STY02", "DRAFT");
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
-        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 8m); // S148 S0-5: one day holds at most 24 h of clock time; 08:00-16:00 beside the 40 h time entry (a real imbalance)
         await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
         await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: was a FlexBalanceUpdated event
 
@@ -555,7 +559,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     {
         await InsertPeriodAsync(Emp, "STY02", status);
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
-        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 8m); // S148 S0-5: one day holds at most 24 h of clock time; 08:00-16:00 beside the 40 h time entry (a real imbalance)
         await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: the latest recorded closing (a released row shows it)
 
         var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
@@ -590,7 +594,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     {
         await InsertPeriodAsync(Emp, "STY02", "REJECTED", rejectionReason: "rettelser nødvendige");
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
-        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 8m); // S148 S0-5: one day holds at most 24 h of clock time; 08:00-16:00 beside the 40 h time entry (a real imbalance)
         await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
         await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: was a FlexBalanceUpdated event
 
@@ -673,6 +677,75 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
         Assert.True(rows.Single(r => EmployeeId(r) == Emp).GetProperty("awayToday").GetBoolean());
         Assert.False(rows.Single(r => EmployeeId(r) == EmpNoPeriod).GetProperty("awayToday").GetBoolean());
+    }
+
+    /// <summary>
+    /// AC-CL-24 (S148 TASK-14840-T, rider). An employee with a <c>SICK_DAY</c> TODAY shows <c>awayToday</c> true; after the
+    /// cell is cleared through the real Skema save, false. The row is SQL-seeded as the sibling seeds its absence, with
+    /// <c>source = 'SKEMA'</c> (a clear retires only Skema rows) and an <c>outbox_id</c> below any real one (the retire marks
+    /// rows whose id is smaller than the clear's). "Today" is pinned to Wednesday 13 May 2026 on the derived host (the
+    /// handler reads the injected clock; saving "today" would otherwise meet the weekend refusal on a Saturday), and BOTH
+    /// the clear and the leader's read ride that host.
+    ///
+    /// <para><b>Kind F.</b> Red conditions: on base the <c>cleared</c> member is ignored, so the row stays current and the
+    /// final <c>awayToday</c> assertion trips (the absence read keeps the row: the filter is the current-row predicate).</para>
+    ///
+    /// <para><b>Mutation M-19 (CI-M2; argued, not run locally).</b> The team overview's <c>awayToday</c> query loses
+    /// <c>AND superseded_by_outbox_id IS NULL</c> (<c>ApprovalEndpoints.cs:1267</c> at base). The clear succeeds (200, the
+    /// row retired by its marker) and the premise assertion passed, so the FIRST assertion to trip is the final
+    /// <c>Assert.False(await AwayAsync())</c> ("away" is still true: the retired row still covers today), which is the
+    /// row's "must trip" cell.</para>
+    /// </summary>
+    [Fact]
+    public async Task AwayToday_False_AfterTodaysAbsenceCleared()
+    {
+        var today = new DateOnly(2026, 5, 13);
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, Emp, "STY02", "HK", "OK26", ensureOrg: false);
+        await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                """
+                INSERT INTO absences_projection
+                    (event_id, employee_id, date, absence_type, hours, feriedage, agreement_code, ok_version, occurred_at, outbox_id, source)
+                VALUES
+                    (gen_random_uuid(), @emp, @today, 'SICK_DAY', 7.4, NULL, 'HK', 'OK26', NOW(), 0, 'SKEMA')
+                """, conn);
+            cmd.Parameters.AddWithValue("emp", Emp);
+            cmd.Parameters.AddWithValue("today", today);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        using var host = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<IHttpClientFactory>(new Skema.PaidAbsenceRuleStubFactory());
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(today));
+            }));
+
+        async Task<bool> AwayAsync()
+        {
+            var leader = host.CreateClient();
+            leader.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
+            var rsp = await leader.GetAsync("/api/approval/team-overview?year=2026&month=5");
+            Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+            var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+            return body.GetProperty("employees").EnumerateArray()
+                .Single(r => EmployeeId(r) == Emp).GetProperty("awayToday").GetBoolean();
+        }
+
+        Assert.True(await AwayAsync(), "premise: the seeded sick day today makes the employee away");
+
+        var self = host.CreateClient();
+        self.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintEmployeeToken(Emp, "STY02"));
+        var clear = await self.PostAsJsonAsync($"/api/skema/{Emp}/save", new
+        {
+            year = 2026,
+            month = 5,
+            cleared = new { absences = new[] { new { date = today.ToString("yyyy-MM-dd"), absenceType = "SICK_DAY" } } },
+        });
+        Assert.True(clear.StatusCode == HttpStatusCode.OK, $"the clear answered {(int)clear.StatusCode}: {await clear.Content.ReadAsStringAsync()}");
+
+        Assert.False(await AwayAsync());
     }
 
     [Fact]

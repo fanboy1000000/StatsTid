@@ -857,8 +857,9 @@ public static class BalanceEndpoints
                     .Sum(a => a.DayEquivalents);
 
             // ── Months: workedHours + normHours + diff ──
-            // workedHours = Σ work_time_projection (intervals + manual) in the calendar month
-            // (ADR-028). normHours = Σ DailyNormCalculator per-day norms; null if ANY norm-bearing
+            // workedHours = Σ interval hours of the month's current work_time_projection days (a cleared
+            // day counts nothing; the repository read filters it)
+            // (ADR-028; intervals alone, ADR-043 D10, D-2.4). normHours = Σ DailyNormCalculator per-day norms; null if ANY norm-bearing
             // day resolves null. diff = worked − norm for months ≤ today's month; null for future.
             var months = new List<YearOverviewMonth>(12); // S120 / TASK-12000 — typed rows
             for (var m = 1; m <= 12; m++)
@@ -870,7 +871,7 @@ public static class BalanceEndpoints
                 var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
                     employeeId, monthStart, monthEnd, ct);
                 var workedHours = Math.Round(
-                    workTimeRows.Sum(w => SumIntervalHours(w.Intervals) + w.ManualHours), 2);
+                    workTimeRows.Sum(w => SumIntervalHours(w.Intervals)), 2);
 
                 var normEntries = await dailyNormCalculator.ComputeRangeAsync(
                     employeeId, monthStart, monthEnd, user.PrimaryOrgId, ct);
@@ -1291,7 +1292,7 @@ public static class BalanceEndpoints
             var childSickEligible = (await eligibilityRepo
                 .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", today, ct)).Eligible;
 
-            // Live "remaining" for the four entitlement tiles. Local helper computes
+            // Live "remaining" for the three entitlement tiles. Local helper computes
             // earned(asOf today) + carryoverIn − used − planned for the current ferieår of a type.
             async Task<decimal?> CurrentRemainingAsync(string type)
             {
@@ -1299,8 +1300,9 @@ public static class BalanceEndpoints
                     type, todayAgreementCode, user.OkVersion, ct);
                 if (live is null) return null;
                 // S80 / TASK-8001 (R2/R10) — the entitlement (accrual) year + accrual start for `type`
-                // as-of today, via the shared resolver. The four tiles cover VACATION/CARE_DAY/
-                // SENIOR_DAY/CHILD_SICK only (NOT SPECIAL_HOLIDAY), all BEHAVIOR-IDENTICAL to the old
+                // as-of today, via the shared resolver. The three tiles cover VACATION/CARE_DAY/
+                // SENIOR_DAY only (NOT SPECIAL_HOLIDAY; the child's-sick tile is a per-illness
+                // allowance, below, QUAL-236), all BEHAVIOR-IDENTICAL to the old
                 // ResolveEntitlementYear keying; routing through the resolver keeps the geometry in one
                 // place (and would key SPECIAL_HOLIDAY correctly if a tile is ever added).
                 var period = EntitlementPeriodResolver.Resolve(type, live.ResetMonth, today);
@@ -1342,7 +1344,21 @@ public static class BalanceEndpoints
             var ferieRemaining = await CurrentRemainingAsync("VACATION");
             var careDayRemaining = await CurrentRemainingAsync("CARE_DAY");
             var seniorDayRemaining = seniorDayEligible ? await CurrentRemainingAsync("SENIOR_DAY") : null;
-            var childSickRemaining = childSickEligible ? await CurrentRemainingAsync("CHILD_SICK") : null;
+            // The child's-sick tile: the allowance PER ILLNESS at today's agreement and OK version,
+            // not a yearly remainder (no yearly cap, QUAL-236). Read from the source the Skema save
+            // and catalogue read: the CHILD_SICK config dated at today under today's OK version,
+            // through DefaultEntitlementConfigs (the whole days per illness, and whether the
+            // call-home day is offered). Null days (and no call-home day) when ineligible or when no
+            // config is dated at today.
+            var childSickConfig = childSickEligible
+                ? await entitlementConfigRepo.GetByTypeAtAsync(
+                    "CHILD_SICK", todayAgreementCode, headerOkVersion, today, ct)
+                : null;
+            int? childSickDaysPerIllness = childSickConfig is null
+                ? null
+                : DefaultEntitlementConfigs.ChildSickDaysPerIllness(childSickConfig);
+            var childSickCallHomeDay = DefaultEntitlementConfigs.ChildSickCodesOffered(childSickConfig)
+                .Contains(AbsenceTypes.ChildSickCallHome);
 
             // sickDaysYtd: distinct SICK_DAY dates in the current calendar year (not quota-gated →
             // distinct-date is the right primitive). Uses the raw absence_type (SICK_DAY maps to a
@@ -1381,7 +1397,8 @@ public static class BalanceEndpoints
                     CareDayRemaining: careDayRemaining,
                     SeniorDayRemaining: seniorDayRemaining,
                     SickDaysYtd: sickDaysYtd,
-                    ChildSickRemaining: childSickRemaining,
+                    ChildSickDaysPerIllness: childSickDaysPerIllness,
+                    ChildSickCallHomeDay: childSickCallHomeDay,
                     ChildSickEligible: childSickEligible,
                     SeniorDayEligible: seniorDayEligible),
                 Months: months,

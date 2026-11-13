@@ -93,8 +93,8 @@ public static class AllocationBalance
     /// once per day, in one place, and no caller can compare an unrounded pair by accident.
     /// </summary>
     /// <param name="workedHours">
-    /// Raw worked total for the day: summed work-interval hours plus manual hours from
-    /// <c>work_time_projection</c>. Zero when the day has no row at all.
+    /// Raw worked total for the day: summed work-interval hours from
+    /// <c>work_time_projection</c> (ADR-043 D10, D-2.4). Zero when the day has no row at all.
     /// </param>
     /// <param name="allocatedHours">
     /// Raw allocated total for the day: summed hours of <c>time_entries_projection</c> rows with

@@ -246,7 +246,7 @@ const realSpecProbes = {
     }),
   // Explicit-T callers ride the plain-string fallback untouched (the explicit
   // type argument is not assignable to the path-key union).
-  explicitT: () => apiClient.post<{ eventId: string }>('/api/time-entries', { hours: 7 }),
+  explicitT: () => apiClient.post<{ eventId: string }>('/api/skema/{employeeId}/save', { hours: 7 }),
   templateLiteral: () => apiClient.put<void>(`/api/overtime/pre-approval/${'x'}/approve`),
   deleteFallback: () => apiClient.delete<void>('/api/reporting-lines/delegate'),
   // KNOWN+ACCEPTED (task charter): a no-explicit-T literal-path RAW-body call
@@ -384,6 +384,8 @@ describe('S112 typed derivation — real committed spec', () => {
     // S147 / TASK-14711 — the two deprecated project selection routes (POST and
     // DELETE under /api/projects/{orgId}/select/) were retired server-side: -1 POST
     // and -1 DELETE; the project select / deselect pins above are retired.
+    // S148 / TASK-14802 — POST /api/time-entries (the time-entries create below)
+    // was retired server-side: -1 POST; its union member is gone.
     // S120 / TASK-12001 — Pass 7 bucket C (TASK-12000) drained the final
     // employee-facing surface: +3 POSTs (time-entries create, JSON 201 receipt;
     // skema save, JSON 200 {saved}; overtime compensate, JSON 200 — the
@@ -478,7 +480,6 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/agreement-configs/{configId}/entitlements'
       | '/api/projects/{orgId}'
       | '/api/config/{orgId}/absence-types/visibility'
-      | '/api/time-entries'
       | '/api/skema/{employeeId}/save'
       | '/api/overtime/{employeeId}/compensate'
     >()

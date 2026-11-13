@@ -71,7 +71,7 @@ public static class EmploymentWindowStrandCheck
                 UNION ALL
                 SELECT date, 'workTime' AS kind
                 FROM work_time_projection
-                WHERE employee_id = @employeeId
+                WHERE employee_id = @employeeId AND cleared_by_outbox_id IS NULL
             ) stranded
             WHERE (@proposedStart IS NOT NULL AND stranded.date < @proposedStart)
                OR (@proposedEnd IS NOT NULL AND stranded.date > @proposedEnd)

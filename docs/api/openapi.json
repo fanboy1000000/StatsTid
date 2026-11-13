@@ -46,38 +46,6 @@
         }
       }
     },
-    "/api/time-entries": {
-      "post": {
-        "tags": [
-          "StatsTid.Backend.Api"
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict"
-          }
-        }
-      }
-    },
     "/api/time-entries/{employeeId}": {
       "get": {
         "tags": [
@@ -9137,54 +9105,6 @@
         },
         "additionalProperties": false
       },
-      "StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest": {
-        "required": [
-          "agreementCode",
-          "date",
-          "employeeId",
-          "hours"
-        ],
-        "type": "object",
-        "properties": {
-          "employeeId": {
-            "type": "string"
-          },
-          "date": {
-            "type": "string",
-            "format": "date"
-          },
-          "hours": {
-            "type": "number",
-            "format": "double"
-          },
-          "startTime": {
-            "type": "string",
-            "format": "time",
-            "nullable": true
-          },
-          "endTime": {
-            "type": "string",
-            "format": "time",
-            "nullable": true
-          },
-          "taskId": {
-            "type": "string",
-            "nullable": true
-          },
-          "activityType": {
-            "type": "string",
-            "nullable": true
-          },
-          "agreementCode": {
-            "type": "string"
-          },
-          "okVersion": {
-            "type": "string",
-            "deprecated": true
-          }
-        },
-        "additionalProperties": false
-      },
       "StatsTid.Backend.Api.Contracts.RemoveWithReassignmentResponse": {
         "required": [
           "actingEdgesClosed",
@@ -10238,8 +10158,7 @@
       "StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow": {
         "required": [
           "date",
-          "intervals",
-          "manualHours"
+          "intervals"
         ],
         "type": "object",
         "properties": {
@@ -10252,10 +10171,6 @@
             "items": {
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow"
             }
-          },
-          "manualHours": {
-            "type": "number",
-            "format": "double"
           }
         },
         "additionalProperties": false
@@ -10532,23 +10447,6 @@
           "today": {
             "type": "string",
             "format": "date"
-          }
-        },
-        "additionalProperties": false
-      },
-      "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
-        "required": [
-          "eventId",
-          "streamId"
-        ],
-        "type": "object",
-        "properties": {
-          "eventId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "streamId": {
-            "type": "string"
           }
         },
         "additionalProperties": false
@@ -11508,8 +11406,9 @@
       "StatsTid.Backend.Api.Contracts.YearOverviewTiles": {
         "required": [
           "careDayRemaining",
+          "childSickCallHomeDay",
+          "childSickDaysPerIllness",
           "childSickEligible",
-          "childSickRemaining",
           "ferieRemaining",
           "flexBalance",
           "flexBalanceMonth",
@@ -11547,10 +11446,13 @@
             "type": "integer",
             "format": "int32"
           },
-          "childSickRemaining": {
-            "type": "number",
-            "format": "double",
+          "childSickDaysPerIllness": {
+            "type": "integer",
+            "format": "int32",
             "nullable": true
+          },
+          "childSickCallHomeDay": {
+            "type": "boolean"
           },
           "childSickEligible": {
             "type": "boolean"
@@ -12815,6 +12717,9 @@
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkTimeDay"
             },
             "nullable": true
+          },
+          "cleared": {
+            "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared"
           }
         },
         "additionalProperties": false
@@ -12837,6 +12742,80 @@
           "hours": {
             "type": "number",
             "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry"
+            },
+            "nullable": true
+          },
+          "absences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence"
+            },
+            "nullable": true
+          },
+          "workTime": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence": {
+        "required": [
+          "absenceType",
+          "date"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "absenceType": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry": {
+        "required": [
+          "date",
+          "projectCode"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "projectCode": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay": {
+        "required": [
+          "date"
+        ],
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
           }
         },
         "additionalProperties": false
@@ -12895,10 +12874,6 @@
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkInterval"
             },
             "nullable": true
-          },
-          "manualHours": {
-            "type": "number",
-            "format": "double"
           }
         },
         "additionalProperties": false

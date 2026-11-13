@@ -21,9 +21,8 @@
 //   R11 — the modal opens from BOTH the header button AND the panel's step-2
 //         link; modal actions apply LIVE to the grid (optimistic overlay +
 //         server-truth refetch).
-//   R16 — the page consumes the HOOK's buildWorkTimePayload (the page's former
-//         private copy is DELETED — R7 manualHours preservation lives in the
-//         hook); preference writes FLUSH pending debounced saves (cells AND
+//   R16 — the page consumes the HOOK's buildWorkTimePayload (the single
+//         owner of the clock-time-only payload; ADR-028, ADR-043 D10); preference writes FLUSH pending debounced saves (cells AND
 //         workTime) BEFORE the PUT + month refetch, so the refetch can never
 //         clobber in-flight local state. S72 Step-7a B2: the flush is failure-
 //         AND in-flight-safe — the debounce callbacks retain their save
@@ -33,9 +32,8 @@
 //         workTime (the same merged view the save path uses), so the §J
 //         adjacent-day analysis sees locally-edited NEIGHBOR days.
 //   R9  — AllocationSummary + ProjectPicker retired; ComplianceWarnings kept;
-//         the legacy add-row wiring (onWorkIntervalsChange/onManualHoursChange
-//         grid plumbing for the deleted "Tilføj periode"/"Tilføj timer" rows)
-//         removed from the page side.
+//         the legacy add-row wiring (onWorkIntervalsChange grid plumbing for
+//         the deleted "Tilføj periode" row) removed from the page side.
 import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
@@ -46,7 +44,6 @@ import {
   SkemaGrid,
   type WorkInterval,
   type WorkIntervalsMap,
-  type ManualHoursMap,
   type DailyNormMap,
   type ConsumptionBasisMap,
 } from '../components/SkemaGrid'
@@ -114,10 +111,23 @@ function formatAbsenceRuleError(e: AbsenceRuleError, labelFor: (absenceType: str
 }
 
 /** S123 / TASK-12303 — the daily-norm ABSENCE cap 422 (a day's summed absence
-    hours exceed the norm) → a comprehensible Danish alert. */
+    hours exceed the norm) → a comprehensible Danish alert. A body with
+    `kind: 'paid-absence-day-bound'` (planned minus worked leaves no or too little room) names
+    the planned and worked hours instead of the norm (ADR-043; three fixed sentences). */
 function formatAbsenceCapError(e: AbsenceCapError): string {
-  const total = e.totalHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
-  const max = e.maxHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
+  const fmt = (h: number) => h.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
+  const total = fmt(e.totalHours)
+  const max = fmt(e.maxHours)
+  if (e.kind === 'paid-absence-day-bound' && e.plannedHours !== undefined && e.workedHours !== undefined) {
+    const planned = fmt(e.plannedHours)
+    const worked = fmt(e.workedHours)
+    const tail = 'Registreringen blev derfor sat tilbage.'
+    if (e.plannedHours === 0)
+      return `Der er ingen planlagte timer denne dag, så der kan ikke registreres betalt fravær (${total} t). ${tail}`
+    if (e.maxHours === 0)
+      return `Dagen er allerede fyldt: planlagt ${planned} t, registreret arbejde ${worked} t, så der er ikke plads til betalt fravær (${total} t). ${tail}`
+    return `Dagens betalte fravær (${total} t) er mere end dagen kan rumme: planlagt ${planned} t, registreret arbejde ${worked} t, så der er plads til højst ${max} t. ${tail}`
+  }
   return `Det samlede fravær for dagen (${total} t) overstiger normtiden (${max} t). Registreringen blev derfor sat tilbage.`
 }
 
@@ -192,14 +202,13 @@ function toHHmm(value: string): string | null {
   return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
 }
 
-/** S73 Step-7a B2 — value-equality of a single day's work-time (intervals +
-    manualHours), used as the overlap guard for the work-time 422 revert: revert a
-    day only when its CURRENT local value still equals what the rejected save SENT. */
+/** S73 Step-7a B2 — value-equality of a single day's work-time intervals, used as
+    the overlap guard for the work-time 422 revert: revert a day only when its
+    CURRENT local value still equals what the rejected save SENT. */
 function workTimeDayEquals(
-  aIntervals: WorkInterval[], aManual: number,
-  bIntervals: WorkInterval[], bManual: number,
+  aIntervals: WorkInterval[],
+  bIntervals: WorkInterval[],
 ): boolean {
-  if (aManual !== bManual) return false
   if (aIntervals.length !== bIntervals.length) return false
   for (let i = 0; i < aIntervals.length; i++) {
     if (aIntervals[i].start !== bIntervals[i].start || aIntervals[i].end !== bIntervals[i].end) {
@@ -395,22 +404,12 @@ export function SkemaPage() {
   )
   const rows = rowBasis.rows
 
-  // Build work intervals + manual hours maps from backend workTime
+  // Build the work intervals map from backend workTime
   const workIntervalsFromData = useMemo<WorkIntervalsMap>(() => {
     const map: WorkIntervalsMap = new Map()
     for (const wt of data?.workTime ?? []) {
       if (wt.intervals && wt.intervals.length > 0) {
         map.set(wt.date, wt.intervals.map(iv => ({ start: iv.start, end: iv.end })))
-      }
-    }
-    return map
-  }, [data])
-
-  const manualHoursFromData = useMemo<ManualHoursMap>(() => {
-    const map: ManualHoursMap = new Map()
-    for (const wt of data?.workTime ?? []) {
-      if (wt.manualHours && wt.manualHours !== 0) {
-        map.set(wt.date, wt.manualHours)
       }
     }
     return map
@@ -435,23 +434,18 @@ export function SkemaPage() {
     return map
   }, [data])
 
-  // Local editable work-time state (intervals + manual hours; D-B: manual hours
-  // have no entry UI anymore but existing values keep counting and round-trip)
+  // Local editable work-time state (clock intervals only; manual hours are retired, ADR-043 D10)
   const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
-  const [localManualHours, setLocalManualHours] = useState<ManualHoursMap>(new Map())
 
-  // Live refs so the debounced work-time save reads the latest local state
+  // Live ref so the debounced work-time save reads the latest local state
   const workIntervalsRef = useRef<WorkIntervalsMap>(localWorkIntervals)
-  const manualHoursRef = useRef<ManualHoursMap>(localManualHours)
   useEffect(() => { workIntervalsRef.current = localWorkIntervals }, [localWorkIntervals])
-  useEffect(() => { manualHoursRef.current = localManualHours }, [localManualHours])
 
-  // S73 Step-7a B2 — server-truth work-time maps (the last refetched/successful
-  // month): a work-time 422 reverts the affected day's intervals + manualHours to
-  // THESE values (the mirror of serverCellsRef for cells). Kept in refs so the
-  // memoized fireWorkTimeSave reads them fresh without re-binding.
+  // S73 Step-7a B2 — server-truth work-time map (the last refetched/successful
+  // month): a work-time 422 reverts the affected day's intervals to THESE values
+  // (the mirror of serverCellsRef for cells). Kept in a ref so the memoized
+  // fireWorkTimeSave reads it fresh without re-binding.
   const serverWorkIntervalsRef = useRef<WorkIntervalsMap>(new Map())
-  const serverManualHoursRef = useRef<ManualHoursMap>(new Map())
 
   // Send-order protection for the 422-revert truth: a per-key sequence number is taken
   // when a save is SENT; a successful save advances server truth for a key only when its
@@ -465,10 +459,25 @@ export function SkemaPage() {
   const hydrationEpochRef = useRef(0)
 
   const workTimeDirtyRef = useRef<Set<string>>(new Set())
+  // Days whose period rows were all removed (and not re-entered since): posted as removals.
+  const workTimeRemovedRef = useRef<Set<string>>(new Set())
+  // Re-seeds the open day panel's rows for reverted days (set once the panel state exists below).
+  const reseedPanelRef = useRef<(dates: string[], exceptSeq?: number) => void>(() => {})
+  // Per day, EVERY unanswered work-time save, keyed by its sequence (a removal sends []). The grid
+  // must end up equal to the server once saves settle, so a restore goes to the newest save still
+  // outstanding and to server truth only when none is. A save settling removes only its own entry.
+  const workTimeInFlightRef = useRef<Map<string, Map<number, WorkTimeDay['intervals']>>>(new Map())
+  // Days whose open panel holds only half-typed rows: such a day sends nothing, even on a retry.
+  const halfTypedDaysRef = useRef<Set<string>>(new Set())
+
+  // The removal announcement: one polite live region (always mounted), spoken once per save that
+  // removed something really saved. The count changes the text's trailing character each time,
+  // so a second identical announcement is still a change a screen reader speaks.
+  const [removalAnnouncements, setRemovalAnnouncements] = useState(0)
+  const announceRemoval = useCallback(() => setRemovalAnnouncements((n) => n + 1), [])
   const workTimeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // S147 / QUAL-241 — rehydrate ALL editable local state (cells, work intervals, manual
-  // hours) from the served data DURING RENDER ("adjust state while rendering": React
+  // S147 / QUAL-241 — rehydrate ALL editable local state (cells, work intervals) from the served data DURING RENDER ("adjust state while rendering": React
   // discards this render and re-renders at once, before anything is committed). This used
   // to be three effects, which left one committed render in which the grid and every day
   // trigger were live while local state was still empty (first load) or still the previous
@@ -481,7 +490,6 @@ export function SkemaPage() {
     setHydratedFrom(data)
     setLocalCells(cellsFromData)
     setLocalWorkIntervals(workIntervalsFromData)
-    setLocalManualHours(manualHoursFromData)
   }
 
   // The ref-side of hydration (server truth for the 422 revert, the pending-save queues, the
@@ -502,13 +510,16 @@ export function SkemaPage() {
     dataMonthRef.current = data ? { year: data.year, month: data.month } : null
     serverCellsRef.current = new Map(cellsFromData)
     serverWorkIntervalsRef.current = new Map(workIntervalsFromData)
-    serverManualHoursRef.current = new Map(manualHoursFromData)
     pendingChangesRef.current = []
     workTimeDirtyRef.current = new Set()
+    workTimeRemovedRef.current = new Set()
+    workTimeInFlightRef.current = new Map()
+    halfTypedDaysRef.current = new Set()
+    setRemovalAnnouncements(0) // a removal is not news in the next month
     cellAdvancedSeqRef.current = new Map()
     workTimeAdvancedSeqRef.current = new Map()
     hydrationEpochRef.current += 1
-  }, [data, hydratedFrom, cellsFromData, workIntervalsFromData, manualHoursFromData])
+  }, [data, hydratedFrom, cellsFromData, workIntervalsFromData])
 
   // S147 / QUAL-241 fix-up 1 — the edit surfaces are locked while the displayed month and
   // the held `data` disagree. useSkema keeps the PREVIOUS month's data on screen while the
@@ -538,9 +549,8 @@ export function SkemaPage() {
   }, [])
 
 
-  // Debounced work-time save (intervals + the preserved manual hours). The
-  // payload ALWAYS builds through the hook's buildWorkTimePayload — the single
-  // R16/R7 owner (manualHours carry-forward is enforced and tested THERE).
+  // Debounced work-time save (clock intervals). The payload ALWAYS builds
+  // through the hook's buildWorkTimePayload — the single R16 owner.
 
   /** Serial save queue. Every save carries its own fully classified payload and month (fixed when
       it was queued), so a save made in March still goes to March, classified as it was then. A
@@ -607,20 +617,74 @@ export function SkemaPage() {
     }
   }, [reportUnanswered])
 
+  /** What a day's grid value should be: the newest unanswered save (other than `exceptSeq`) that is
+      not SUPERSEDED, else server truth. A save is superseded once a newer save for the day has
+      been acknowledged (200): it can only be older than what the server holds. */
+  const restoreTarget = useCallback((d: string, exceptSeq?: number, newerThan = -1) => {
+    let newest = -1
+    let target: WorkTimeDay['intervals'] | undefined
+    const acknowledged = workTimeAdvancedSeqRef.current.get(d) ?? 0
+    for (const [q, intervals] of workTimeInFlightRef.current.get(d) ?? []) {
+      if (q !== exceptSeq && q > newerThan && q > acknowledged && q > newest) {
+        newest = q
+        target = intervals
+      }
+    }
+    return target ?? serverWorkIntervalsRef.current.get(d)
+  }, [])
+
+  /** `newerThan`: only a save sent AFTER that one counts (a settled save's own answer). */
+  const restoreWorkTimeDays = useCallback((dates: string[], exceptSeq?: number, newerThan?: number) => {
+    const targets = dates.map((d): [string, WorkTimeDay['intervals'] | undefined] => [d, restoreTarget(d, exceptSeq, newerThan)])
+    // The ref mirrors the grid one render late; patch it now so a decision made in the same tick
+    // reads the restored day.
+    const mirror = new Map(workIntervalsRef.current)
+    for (const [d, target] of targets) {
+      if (target && target.length > 0) mirror.set(d, target)
+      else mirror.delete(d)
+    }
+    workIntervalsRef.current = mirror
+    setLocalWorkIntervals((prev) => {
+      const next = new Map(prev)
+      for (const [d, target] of targets) {
+        if (target && target.length > 0) next.set(d, target.map((iv) => ({ ...iv })))
+        else next.delete(d)
+      }
+      return next
+    })
+  }, [restoreTarget])
+
   /** Send work-time rows under their own month (the month on screen when they were queued). On
       FAILURE: while that month is still the data on screen the dates go back to the dirty set
       (the local refs still hold the edits, so a retry rebuilds from live state); once it has
       left the screen the save is DROPPED (the hook's persistent, month-labelled alert tells the
       person) — it is never replayed. */
-  const sendWorkTime = useCallback((env: MonthEnv, payload: WorkTimeDay[]): Promise<boolean> => {
-    if (payload.length === 0) return Promise.resolve(true)
-    const dates = payload.map((r) => r.date)
+  const sendWorkTime = useCallback((env: MonthEnv, payload: WorkTimeDay[], clearedDates: string[] = []): Promise<boolean> => {
+    if (payload.length === 0 && clearedDates.length === 0) return Promise.resolve(true)
+    const dates = [...payload.map((r) => r.date), ...clearedDates]
     const epoch = hydrationEpochRef.current
     const seq = ++saveSeqRef.current
-    // What each date SENDS (the frozen rows), so a 422 revert can be overlap-guarded: revert a
-    // day ONLY when its CURRENT local work-time still equals what this save sent.
-    const sentByDate = new Map(payload.map((r) => [r.date, { intervals: r.intervals, manualHours: r.manualHours }]))
-    const save = saveSerial({ year: env.year, month: env.month, entries: null, absences: null, workTime: payload, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
+    // What each date SENDS (the frozen rows; a removed day sends none), so a 422 revert can be
+    // overlap-guarded: revert a day ONLY when its CURRENT local work-time still equals what this
+    // save sent.
+    const sentByDate = new Map<string, { intervals: WorkTimeDay['intervals'] }>([
+      ...payload.map((r): [string, { intervals: WorkTimeDay['intervals'] }] => [r.date, { intervals: r.intervals }]),
+      ...clearedDates.map((d): [string, { intervals: WorkTimeDay['intervals'] }] => [d, { intervals: [] }]),
+    ])
+    for (const d of dates) {
+      const outstanding = workTimeInFlightRef.current.get(d) ?? new Map()
+      outstanding.set(seq, sentByDate.get(d)!.intervals)
+      workTimeInFlightRef.current.set(d, outstanding)
+    }
+    const save = saveSerial({
+      year: env.year,
+      month: env.month,
+      entries: null,
+      absences: null,
+      workTime: payload,
+      cleared: { entries: null, absences: null, workTime: clearedDates.map((date) => ({ date })) },
+      isDropped: () => epoch !== hydrationEpochRef.current,
+    }).then((result) => {
       const current = dataMonthRef.current
       const here =
         current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current
@@ -630,7 +694,8 @@ export function SkemaPage() {
         return result.status !== 'failed'
       }
       if (result.status === 'rejected') {
-        // 422 — REVERT each affected day's work-time to server truth (mirror of
+        // 422 — REVERT each affected day's work-time to the newest save still outstanding, else
+        // server truth (mirror of
         // fireCellSave). The alert is already surfaced by the hook; the revert
         // is what makes "422 resolved" honest (the rejected edit no longer lingers
         // for a later preference flush / refetch to silently discard). Counts
@@ -639,71 +704,80 @@ export function SkemaPage() {
         for (const d of dates) {
           const sent = sentByDate.get(d)!
           // Overlap guard: skip a day a NEWER edit has changed since the send.
-          if (!workTimeDayEquals(
-            sent.intervals, sent.manualHours,
-            workIntervalsRef.current.get(d) ?? [],
-            manualHoursRef.current.get(d) ?? 0,
-          )) continue
+          if (!workTimeDayEquals(sent.intervals, workIntervalsRef.current.get(d) ?? [])) continue
           revertDates.push(d)
         }
         if (revertDates.length > 0) {
-          setLocalWorkIntervals((prev) => {
-            const next = new Map(prev)
-            for (const d of revertDates) {
-              const truth = serverWorkIntervalsRef.current.get(d)
-              if (truth && truth.length > 0) next.set(d, truth.map((iv) => ({ ...iv })))
-              else next.delete(d)
-            }
-            return next
-          })
-          setLocalManualHours((prev) => {
-            const next = new Map(prev)
-            for (const d of revertDates) {
-              const truth = serverManualHoursRef.current.get(d)
-              if (truth && truth !== 0) next.set(d, truth)
-              else next.delete(d)
-            }
-            return next
-          })
+          restoreWorkTimeDays(revertDates, seq)
+          reseedPanelRef.current(revertDates, seq)
         }
-        return true // resolved: reverted to server truth.
+        return true // resolved: reverted to the newest outstanding save, else server truth.
       }
       if (result.status === 'ok') {
         // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL save, so a later 422
         // reverts to the last KNOWN-GOOD server state, not the originally loaded one. Saves
         // settle strictly in send order (the serial queue); the per-day send-order number is a
         // belt-and-braces guard.
+        let removedSomething = false
         for (const d of dates) {
           const sent = sentByDate.get(d)!
+          // N-3: a removal is announced only when server truth held a value for the day.
+          if (clearedDates.includes(d) && (serverWorkIntervalsRef.current.get(d)?.length ?? 0) > 0) removedSomething = true
           if ((workTimeAdvancedSeqRef.current.get(d) ?? 0) > seq) continue
           workTimeAdvancedSeqRef.current.set(d, seq)
           if (sent.intervals.length > 0)
             serverWorkIntervalsRef.current.set(d, sent.intervals.map((iv) => ({ ...iv })))
           else serverWorkIntervalsRef.current.delete(d)
-          if (sent.manualHours !== 0)
-            serverManualHoursRef.current.set(d, sent.manualHours)
-          else serverManualHoursRef.current.delete(d)
         }
+        if (removedSomething) announceRemoval()
+        // The grid matches the server: a day with no newer unsent change shows the newest save sent
+        // after this one that is still outstanding, else server truth (which this save advanced).
+        const settled = dates.filter((d) => !workTimeDirtyRef.current.has(d))
+        if (settled.length > 0) restoreWorkTimeDays(settled, seq, seq)
         return true
       }
-      // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty
-      // dates (B2 retry; the local refs still hold the edits).
-      for (const d of dates) workTimeDirtyRef.current.add(d)
+      // status 'failed' (400/401/403/404/409/5xx/network) — re-queue the dirty dates (B2 retry;
+      // the local refs still hold the edits), EXCEPT a day whose panel is half-typed: that day
+      // sends nothing, and the grid goes back to what is in flight or stored.
+      // A SUPERSEDED save (a newer one for the day was acknowledged) is simply dropped: it can
+      // only hold older times than the server, so re-queueing it would overwrite them.
+      const halfTyped = dates.filter((d) => halfTypedDaysRef.current.has(d))
+      for (const d of dates) {
+        if (halfTyped.includes(d) || (workTimeAdvancedSeqRef.current.get(d) ?? 0) > seq) continue
+        workTimeDirtyRef.current.add(d)
+        // A removal that failed while the grid shows the day empty is retried as a removal (a
+        // half-typed withdrawal may have dropped its mark).
+        if (clearedDates.includes(d) && (workIntervalsRef.current.get(d)?.length ?? 0) === 0) workTimeRemovedRef.current.add(d)
+      }
+      if (halfTyped.length > 0) {
+        for (const d of halfTyped) workTimeRemovedRef.current.delete(d)
+        restoreWorkTimeDays(halfTyped, seq)
+      }
       return false
     })
     workTimeSavesInFlightRef.current.set(save, env)
     void save.finally(() => {
       workTimeSavesInFlightRef.current.delete(save)
+      for (const d of dates) {
+        const outstanding = workTimeInFlightRef.current.get(d)
+        outstanding?.delete(seq)
+        if (outstanding?.size === 0) workTimeInFlightRef.current.delete(d)
+      }
     })
     return save
-  }, [saveSerial])
+  }, [saveSerial, announceRemoval, restoreWorkTimeDays])
 
   /** Fire a workTime save for the given dirty dates (the month on screen; the payload is built
-      from the live refs NOW). */
+      from the live refs NOW). A day with intervals is posted; a day whose period rows were all
+      removed (marked by `handleWorkIntervalsChange`) is posted as a removal; any other day with
+      no interval is posted as NOTHING — the server refuses an empty posted day (400
+      `skema_work_time_day_empty`), and a stale or half-typed day is not an intent to remove. */
   const fireWorkTimeSave = useCallback((dates: string[]): Promise<boolean> => {
     const env = dataMonthRef.current
     if (!env) return Promise.resolve(true)
-    return sendWorkTime(env, buildWorkTimePayload(dates, workIntervalsRef.current, manualHoursRef.current))
+    const posted = dates.filter((d) => (workIntervalsRef.current.get(d)?.length ?? 0) > 0)
+    const removed = dates.filter((d) => !posted.includes(d) && workTimeRemovedRef.current.has(d))
+    return sendWorkTime(env, buildWorkTimePayload(posted, workIntervalsRef.current), removed)
   }, [sendWorkTime])
 
   /** Bound a WHOLE flush (the in-flight saves it awaits AND the saves it fires itself). On timeout
@@ -775,9 +849,13 @@ export function SkemaPage() {
     }, 1000)
   }, [fireWorkTimeSave])
 
+  /** `intervals` is the day's valid set; an empty set is an explicit removal of the day (the
+      caller guarantees every row of the day panel is blank). */
   const handleWorkIntervalsChange = useCallback(
     (date: string, intervals: WorkInterval[]) => {
       if (editLocked) return
+      if (intervals.length === 0) workTimeRemovedRef.current.add(date)
+      else workTimeRemovedRef.current.delete(date)
       setLocalWorkIntervals(prev => {
         const next = new Map(prev)
         if (intervals.length === 0) {
@@ -815,9 +893,12 @@ export function SkemaPage() {
         re-queue/retry posture (returns false). 401/403 are credential-shaped — a
         mid-edit session expiry must never discard typed cells. For the month still on
         screen the re-queue rebuilds FROM LIVE LOCAL STATE (Step-7a c2/c3), never the
-        stale captured delta, and never over a NEWER pending entry (a cleared cell, live
-        undefined, is not re-queued — the R17 inherited limitation). For any other month
+        stale captured delta, and never over a NEWER pending entry. An emptied cell (live
+        undefined) is re-queued as a removal, like any edit. For any other month
         (the person navigated on) the save is DROPPED and the hook's alert says so.
+
+      An emptied or 0 cell is posted under `cleared` (ADR-043 cell clearing), never dropped; on a
+      200 it is recorded absent, and a removal of a value server truth held is announced.
 
       A change set is split by month; each group is one POST under its own envelope, with
       the classification (absence vs project) fixed when the edit was queued. */
@@ -827,12 +908,17 @@ export function SkemaPage() {
     const seq = ++saveSeqRef.current
     const entries: NonNullable<SaveBatch['entries']> = []
     const absences: NonNullable<SaveBatch['absences']> = []
+    const clearedEntries: { date: string; projectCode: string }[] = []
+    const clearedAbsences: { date: string; absenceType: string }[] = []
     for (const c of changes) {
-      if (c.hours == null || c.hours === 0) continue
-      if (c.isAbsence) absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
+      if (c.hours == null || c.hours === 0) {
+        if (c.isAbsence) clearedAbsences.push({ date: c.date, absenceType: c.rowKey })
+        else clearedEntries.push({ date: c.date, projectCode: c.rowKey })
+      } else if (c.isAbsence) absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
       else entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
     }
-    const save = saveSerial({ year: env.year, month: env.month, entries, absences, workTime: null, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
+    const cleared = { entries: clearedEntries, absences: clearedAbsences, workTime: null }
+    const save = saveSerial({ year: env.year, month: env.month, entries, absences, workTime: null, cleared, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
       const current = dataMonthRef.current
       const here =
         current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current
@@ -846,14 +932,18 @@ export function SkemaPage() {
         // to the work-time fix), even when a newer local edit exists. Saves settle in send
         // order (the serial queue); the per-cell number is a belt-and-braces guard. A clear
         // (null/0) sets server truth to absent.
+        let removedSomething = false
         for (const c of changes) {
           const cellKey = `${c.rowKey}:${c.date}`
           const sent = c.hours === null || c.hours === 0 ? undefined : c.hours
+          // N-3: a removal is announced only when server truth held a value for the cell.
+          if (sent === undefined && serverCellsRef.current.has(cellKey)) removedSomething = true
           if ((cellAdvancedSeqRef.current.get(cellKey) ?? 0) > seq) continue
           cellAdvancedSeqRef.current.set(cellKey, seq)
           if (sent === undefined) serverCellsRef.current.delete(cellKey)
           else serverCellsRef.current.set(cellKey, sent)
         }
+        if (removedSomething) announceRemoval()
         return true
       }
       if (result.status === 'rejected') {
@@ -896,8 +986,7 @@ export function SkemaPage() {
         )
         if (hasNewer) continue
         const live = localCellsRef.current.get(`${c.rowKey}:${c.date}`)
-        if (live === undefined) continue
-        pendingChangesRef.current.push({ ...c, hours: live })
+        pendingChangesRef.current.push({ ...c, hours: live ?? null })
       }
       return false
     })
@@ -906,7 +995,7 @@ export function SkemaPage() {
       cellSavesInFlightRef.current.delete(save)
     })
     return save
-  }, [saveSerial])
+  }, [saveSerial, announceRemoval])
 
   const fireCellSave = useCallback((changes: PendingCell[]): Promise<boolean> => {
     const groups = new Map<string, PendingCell[]>()
@@ -928,7 +1017,9 @@ export function SkemaPage() {
       if (editLocked) return
       setLocalCells((prev) => {
         const next = new Map(prev)
-        if (hours === null) {
+        // 0 is an emptied cell, as null is: local state never holds a 0, so the 422 revert's
+        // overlap guard (live vs. sent-as-absent) sees a refused removal for what it is.
+        if (hours === null || hours === 0) {
           next.delete(`${rowKey}:${date}`)
         } else {
           next.set(`${rowKey}:${date}`, hours)
@@ -1006,8 +1097,8 @@ export function SkemaPage() {
       the refs as they are at this instant, each under the month on screen (its envelope and
       classification). Month navigation and unmount call it BEFORE the month changes: the
       debounce timers would otherwise fire after the next month hydrated, build the old day's
-      payload from refs that no longer hold it and send {intervals: [], manualHours: 0} — the
-      whole-day replace would wipe the stored times. (Unlike the flushes this does not first
+      payload from refs that no longer hold it — hydration clears the removed set, so such a day
+      would be read as nothing, never as the stored times. (Unlike the flushes this does not first
       await the in-flight POSTs: the awaits are what let the month change slip in before the
       read.) */
   const firePendingNow = useCallback(() => {
@@ -1059,6 +1150,26 @@ export function SkemaPage() {
   const [openDayDate, setOpenDayDate] = useState<string | null>(null)
   const [panelPeriods, setPanelPeriods] = useState<DayPanelPeriod[]>([])
   const panelIdRef = useRef(0)
+  // A work-time save the server refused reverts the day to server truth; the open panel's rows
+  // are separate state, so they are re-seeded from the restored intervals too. The open day is read
+  // from a ref (never a stale closure), and rows keep their ids by position so keyboard focus
+  // stays in the drawer. Accepted losses on a refusal: a half-typed extra row and half-typed text
+  // in the same row are replaced by the restored times (a few characters next to the message).
+  const openDayRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    openDayRef.current = openDayDate
+    halfTypedDaysRef.current = new Set() // a closed or switched panel holds no half-typed day
+  }, [openDayDate])
+  useEffect(() => {
+    reseedPanelRef.current = (dates, exceptSeq) => {
+      const open = openDayRef.current
+      if (open === null || !dates.includes(open)) return
+      const truth = restoreTarget(open, exceptSeq) ?? []
+      setPanelPeriods((prev) =>
+        truth.map((iv, i) => ({ id: prev[i]?.id ?? `srv-${++panelIdRef.current}`, from: iv.start, to: iv.end })),
+      )
+    }
+  }, [restoreTarget])
 
   const handleOpenDay = useCallback((date: string) => {
     // S147 / QUAL-241 — seed from the committed STATE (which the render-time hydration
@@ -1085,7 +1196,7 @@ export function SkemaPage() {
       // the panel and are excluded; the work-time save is a latest-wins whole-day
       // replace, so every change re-sends the full valid set). The save goes
       // through the existing debounced workTime path → the hook's
-      // buildWorkTimePayload (R16) which carries the day's manualHours (R7).
+      // buildWorkTimePayload (R16).
       const intervals: WorkInterval[] = []
       for (const p of periods) {
         if (periodHours(p) === null) continue
@@ -1093,9 +1204,25 @@ export function SkemaPage() {
         const end = toHHmm(p.to)
         if (start !== null && end !== null) intervals.push({ start, end })
       }
+      // No valid period: either the day holds no typed row at all (the panel always shows one
+      // blank row, so "every period removed" is rows that are all blank) — an explicit removal —
+      // or some row holds half-typed text, which sends NOTHING: the stored day stands until a
+      // valid set or a removal. The server refuses an empty posted day. A change still UNSENT
+      // (the day is dirty: a removal or a valid edit) is withdrawn: the day goes back to the newest
+      // save still outstanding, else server truth, and is no longer dirty, so the timer posts nothing. A change already sent is left
+      // alone — its answer decides, and the grid must not show what the server just removed.
+      if (intervals.length === 0 && periods.some((p) => p.from !== '' || p.to !== '')) {
+        halfTypedDaysRef.current.add(date)
+        if (workTimeDirtyRef.current.delete(date)) {
+          workTimeRemovedRef.current.delete(date)
+          restoreWorkTimeDays([date])
+        }
+        return
+      }
+      halfTypedDaysRef.current.delete(date)
       handleWorkIntervalsChange(date, intervals)
     },
-    [handleWorkIntervalsChange, editLocked],
+    [handleWorkIntervalsChange, restoreWorkTimeDays, editLocked],
   )
 
   const handlePanelAllocationChange = useCallback(
@@ -1235,7 +1362,7 @@ export function SkemaPage() {
   const absenceKeys = rowBasis.absenceKeys
 
   // R2: the Flex card's "Denne måned" computes over the SAME local month state
-  // the grid renders (cells + intervals + manual + served norms) — never from
+  // the grid renders (cells + intervals + served norms) — never from
   // /summary, never refetched.
   const monthFlexDelta = useMemo<number | null>(() => {
     if (!data) return null
@@ -1246,22 +1373,20 @@ export function SkemaPage() {
       projectKeys,
       absenceKeys,
       workIntervals: localWorkIntervals,
-      manualHours: localManualHours,
       dailyNorm,
     })
-  }, [data, year, month, localCells, projectKeys, absenceKeys, localWorkIntervals, localManualHours, dailyNorm])
+  }, [data, year, month, localCells, projectKeys, absenceKeys, localWorkIntervals, dailyNorm])
 
   const monthAbsenceUsage = useMemo(() => deriveMonthAbsenceUsage(data?.absences), [data])
 
   // S72 Step-7a W2 — the §J analysis must see locally-edited NEIGHBOR days:
   // the panel receives the LOCALLY-OVERLAID month workTime (the SAME merged
-  // view the save path reads — local intervals/manual edits over the served
+  // view the save path reads — local interval edits over the served
   // rows, built through the hook's payload builder), never raw data.workTime.
   // Editing day N's periods and opening day N+1 must reflect N's LOCAL state.
   const localMonthWorkTime = useMemo<WorkTimeDay[]>(() => {
-    const dates = new Set<string>([...localWorkIntervals.keys(), ...localManualHours.keys()])
-    return buildWorkTimePayload(dates, localWorkIntervals, localManualHours)
-  }, [localWorkIntervals, localManualHours])
+    return buildWorkTimePayload(localWorkIntervals.keys(), localWorkIntervals)
+  }, [localWorkIntervals])
 
   // ── Day panel derived props ──
   const panelProjectRows = useMemo<DayPanelProjectRow[]>(
@@ -1387,6 +1512,11 @@ export function SkemaPage() {
           <span role="status" className={styles.monthLoading}>
             {loadPending ? 'Indlæser…' : busy ? 'Gemmer…' : ''}
           </span>
+          {/* The removal announcement: its own always-mounted polite region, because the one above
+              speaks "Gemmer…" while a save runs and would overwrite it. */}
+          <span aria-live="polite" aria-atomic="true" data-testid="removal-announcement" className={styles.srOnly}>
+            {removalAnnouncements === 0 ? '' : `Registreringen er fjernet${removalAnnouncements % 2 === 0 ? ' ' : ''}`}
+          </span>
           <Button variant="ghost" size="sm" onClick={goToNextMonth}>
             Næste &rarr;
           </Button>
@@ -1426,7 +1556,8 @@ export function SkemaPage() {
 
       {/* S123 — daily-norm ABSENCE cap 422 (shape-discriminated, not the generic
           swallow). The cell reverted to server truth (all-422 revert path); this
-          alert explains why the day's summed absence exceeded the norm. */}
+          alert explains why the day's summed absence exceeded the norm, or why it broke
+          the paid-absence day bound (ADR-043 D2). */}
       {absenceCapError && (
         <Alert variant="error" onDismiss={clearAbsenceCapError}>
           {formatAbsenceCapError(absenceCapError)}
@@ -1468,7 +1599,6 @@ export function SkemaPage() {
         readOnly={isReadOnly}
         onCellChange={handleCellChange}
         workIntervals={localWorkIntervals}
-        manualHours={localManualHours}
         dailyNorm={dailyNorm}
         consumptionBasis={consumptionBasis}
         rowPreferences={effectivePrefs}
@@ -1494,7 +1624,6 @@ export function SkemaPage() {
           open
           date={openDayDate}
           periods={panelPeriods}
-          manualHours={localManualHours.get(openDayDate) ?? 0}
           projectRows={panelProjectRows}
           allocations={panelAllocations}
           dailyNorm={dailyNorm.get(openDayDate) ?? null}

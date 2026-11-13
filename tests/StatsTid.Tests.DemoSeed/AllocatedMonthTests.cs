@@ -12,7 +12,7 @@ namespace StatsTid.Tests.DemoSeed;
 /// <list type="bullet">
 ///   <item><b>Coverage</b> — expected workday := weekday AND not in <c>danish_public_holidays</c>;
 ///     covered := at least one time entry OR one absence on that date.</item>
-///   <item><b>Allocation</b> — worked(day) := interval hours + manual hours from
+///   <item><b>Allocation</b> — worked(day) := interval hours from
 ///     <c>work_time_projection</c>; allocated(day) := summed hours of NORMAL entries with a non-null
 ///     TaskId; balanced := <c>|round(worked,2) − round(allocated,2)| &lt; 0.005</c>.</item>
 /// </list>

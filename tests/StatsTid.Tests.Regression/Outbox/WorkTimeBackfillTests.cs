@@ -69,7 +69,6 @@ public sealed class WorkTimeBackfillTests : IAsyncLifetime
                 EmployeeId = employeeId,
                 Date = new DateOnly(2026, 5, 4).AddDays(i),
                 Intervals = new[] { new WorkInterval { Start = "08:00", End = "16:00" } },
-                ManualHours = 0m,
             };
             await SeedWorkTimeEventAsync(evt, streamId, streamVersion: i + 1);
         }
@@ -116,7 +115,6 @@ public sealed class WorkTimeBackfillTests : IAsyncLifetime
         {
             EmployeeId = employeeId, Date = date,
             Intervals = new[] { new WorkInterval { Start = "09:00", End = "17:00" } },
-            ManualHours = 3m,
         };
         await using (var conn = _harness.Factory.Create())
         {
@@ -132,7 +130,6 @@ public sealed class WorkTimeBackfillTests : IAsyncLifetime
         {
             EmployeeId = employeeId, Date = date,
             Intervals = new[] { new WorkInterval { Start = "00:00", End = "01:00" } },
-            ManualHours = 99m,
         };
         await SeedWorkTimeEventAsync(stale, streamId, streamVersion: 1, outboxId: 5);
 
@@ -142,8 +139,9 @@ public sealed class WorkTimeBackfillTests : IAsyncLifetime
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(employeeId, date, date);
         var row = Assert.Single(rows);
-        Assert.Equal(3m, row.ManualHours); // newer live row survived
-        Assert.Equal("09:00", Assert.Single(row.Intervals).Start);
+        var standing = Assert.Single(row.Intervals);
+        Assert.Equal("09:00", standing.Start);
+        Assert.Equal("17:00", standing.End); // S148 S0-5: the interval alone discriminates now that manual hours are gone
     }
 
     /// <summary>

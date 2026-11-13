@@ -116,12 +116,14 @@ public class DefaultEntitlementConfigTests
     }
 
     [Fact]
-    public void ChildSick_AC_Has1DayPerEpisode()
+    public void ChildSick_AC_Ok24_Has2DaysPerIllness()
     {
         var configs = DefaultEntitlementConfigs.GetConfigsForAgreement("AC", "OK24");
         var childSick = configs.Single(c => c.EntitlementType == "CHILD_SICK");
 
-        Assert.Equal(1m, childSick.AnnualQuota);
+        // S148 S0-2 (QUAL-236): 1 -> 2 (renamed from ChildSick_AC_Has1DayPerEpisode). Kind F (fails on the base,
+        // where AC's compiled OK24 default is 1). The config now gives the days per illness: OK24 2 for every agreement.
+        Assert.Equal(2m, childSick.AnnualQuota);
         Assert.True(childSick.IsPerEpisode);
         Assert.False(childSick.ProRateByPartTime);
     }

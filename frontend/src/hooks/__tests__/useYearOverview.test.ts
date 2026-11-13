@@ -18,7 +18,7 @@ const { mockGet, OVERVIEW_2025, OVERVIEW_2026 } = vi.hoisted(() => {
     header: { employeeName: 'Anna Berg', agreementCode: 'AC', okVersion: 'OK26', weeklyNormHours: 37, fullDayNormHours: 7.4 },
     tiles: {
       flexBalance: null, flexBalanceMonth: null, ferieRemaining: 0, careDayRemaining: 0, seniorDayRemaining: null,
-      sickDaysYtd: 0, childSickRemaining: null, childSickEligible: false, seniorDayEligible: false,
+      sickDaysYtd: 0, childSickDaysPerIllness: null, childSickCallHomeDay: false, childSickEligible: false, seniorDayEligible: false,
     },
     months: [],
     categories: [],

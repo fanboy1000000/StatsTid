@@ -13,6 +13,7 @@ namespace StatsTid.Tools.DemoSeed.Loading;
 public sealed class ApiClient : IDisposable
 {
     private readonly string _baseUrl;
+    private readonly HttpMessageHandler? _handler;
     private readonly HttpClient _http;
     private string? _token;
 
@@ -25,6 +26,23 @@ public sealed class ApiClient : IDisposable
     }
 
     /// <summary>
+    /// A client over a caller-supplied handler (an in-process host's handler, for the pay-unchanged pin),
+    /// with the same base address and timeout as <see cref="ApiClient(string)"/>. The handler belongs to the
+    /// caller: no <see cref="ApiClient"/> disposes it, because the loader disposes its sibling clients at the
+    /// end of every load while the caller keeps using its own client and the shared handler.
+    /// </summary>
+    public ApiClient(string baseUrl, HttpMessageHandler handler)
+    {
+        _baseUrl = baseUrl;
+        _handler = handler;
+        _http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri(baseUrl),
+            Timeout = TimeSpan.FromSeconds(120),
+        };
+    }
+
+    /// <summary>
     /// S147 / TASK-14704 (SEC-053, four-eyes) — a NEW, not-yet-authenticated client on the same API,
     /// for a second signer. The loader used to sign a month twice under one login (send, then approve
     /// or reject); the API now refuses the second signature from whoever made the first, so the
@@ -32,7 +50,7 @@ public sealed class ApiClient : IDisposable
     /// <see cref="HttpClient"/> per login, because the token lives on the client's default headers.
     /// The caller logs it in and disposes it.
     /// </summary>
-    public ApiClient CreateSibling() => new(_baseUrl);
+    public ApiClient CreateSibling() => _handler is null ? new(_baseUrl) : new(_baseUrl, _handler);
 
     public async Task LoginAsync(string username, string password, CancellationToken ct)
     {

@@ -134,7 +134,8 @@ app.MapPost("/api/rules/check-compliance", (CheckComplianceRequest request) =>
     var config = StatsTid.RuleEngine.Api.Config.AgreementConfigProvider.GetConfig(
         request.Profile.AgreementCode, request.Profile.OkVersion, request.Profile.Position);
     var result = RestPeriodRule.Evaluate(
-        request.Profile, request.Entries, request.PeriodStart, request.PeriodEnd, config);
+        request.Profile, request.Entries, request.PeriodStart, request.PeriodEnd, config,
+        request.WorkIntervals);
     return Results.Ok(result);
 }).RequireAuthorization("Authenticated");
 

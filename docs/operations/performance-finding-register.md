@@ -2,6 +2,10 @@
 
 **Status**: living document. Created 2026-08-03 (S126) to give the F-series a durable home.
 
+**Shortcuts (2026-11-08, [PAT-032](../knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md)).**
+A performance limit an agent accepts on purpose is a `shortcut(F<n>): <the limit>; upgrade when <trigger>` comment
+in the code, pointing at its row here; `tools/check_docs.py` check 5 fails CI when the id has no row.
+
 ## Why this file exists
 
 The original F1–F6 performance analysis was produced during S125 and **never written to a file**. It
@@ -29,6 +33,7 @@ window away from being unrecoverable.
 | F5 | Flex-balance full-stream replay on the consolidated `employee-{id}` stream | **DONE** S126 — see below |
 | F6 | Loading-flash perception | **OPEN — the S126 measurement was RETRACTED** (harness measured full page loads, and its stop condition was true before the route mounted). Chunk sizes valid; durations and the 250 ms threshold are not. |
 | F7 | One extra single-row read per admitted manager–employee pair on the my-reports list and Teamoversigt (S147, TASK-14725) | **OPEN — accepted, revisit** (S147 Step 7a fix; Fable's TASK-14725 review, NOTE 6). See below |
+| F8 | The holiday-balance seed's sum runs on every save that touches an entitlement type, even when the balance row exists (S148, TASK-14842) | **OPEN — accepted, revisit** (both TASK-14842 5a lenses: no merge blocker). See below |
 
 ---
 
@@ -303,6 +308,21 @@ organisation-wide fan-out. Not measured.
 **Disposition: accepted, revisit.** The tidy option: let the pair's existing read, `SameOrganisationAsync`
 (`DesignatedApproverAuthorizer.cs:706`), carry the end date, so the pair costs one read instead of two. Revisit if a
 team grows large, or if one of these lists moves onto a hot path.
+
+## F8 — the balance seed's sum on every save (S148, recorded 2026-11-12)
+
+**What it is.** TASK-14842 (QUAL-196) seeds a missing holiday-balance row from the sum of the employee's current
+bookings for that type and holiday year (`EntitlementBalanceRepository.SumCurrentFeriedageAsync`). The sum runs
+before the ensure-row insert, so it runs on every save that touches an entitlement type, even when the row already
+exists and the result is thrown away: one extra indexed read of one employee's year of absence rows per holiday type
+per save, inside the per-employee lock. The year-end carryover also makes two to three config reads for its seed.
+
+**Size.** One read per type per save, bounded by one employee's year. Not the F1 class. Not measured.
+
+**Disposition: accepted, revisit.** Both TASK-14842 5a lenses rated it no merge blocker (Codex cycle 1, NOTE; Fable
+cycle 1, N-3). The tidy option, recommended by Codex: compute the sum inside the insert itself
+(`INSERT … SELECT … WHERE NOT EXISTS`, keeping `ON CONFLICT` and the lock), so it runs only when the row is created.
+Revisit if Skema saves measure slow, or the next time the repository's writers are opened.
 
 ## Standing convention
 

@@ -398,8 +398,10 @@ public sealed class HrFollowUpApprovalEndpointTests : IAsyncLifetime
 
     /// <summary>HRP-013 pin: an orphan (no structural PRIMARY edge either way — the default shape of
     /// a freshly-seeded employee, since <see cref="RegressionSeed"/> writes no reporting-line rows)
-    /// appears for their own org's HR and not for a foreign org's. RED if the orphan roll-up's
-    /// <c>NOT EXISTS</c> pair were narrowed to only the "no approver" half.</summary>
+    /// appears for their own org's HR and not for a foreign org's. The roll-up classifies the
+    /// in-scope population through the shared predicate (<c>ApproverCoverage</c>); an employee with no line is
+    /// uncovered and nobody's approver, so an orphan. RED if the roll-up stopped listing an uncovered, unreferenced
+    /// employee.</summary>
     [Fact]
     public async Task UncoveredApprovers_Orphan_ScopedToOwnOrg_NotForeign()
     {

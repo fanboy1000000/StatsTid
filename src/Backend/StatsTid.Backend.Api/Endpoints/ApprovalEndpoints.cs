@@ -1193,13 +1193,16 @@ public static class ApprovalEndpoints
                         DateOnly.FromDateTime(reader.GetDateTime(1)))] = reader.GetDecimal(2);
             }
 
-            // (2d) worked(intervals + manual_hours) per (employee, date) from work_time_projection.
+            // (2d) worked(interval hours) per (employee, date) from work_time_projection: a day's
+            // clock periods are its only work-time record (ADR-043 D10, D-2.4). Current days only:
+            // a cleared day is kept with cleared_by_outbox_id set and counts nothing (addendum A1 D-4).
             var workedByEmployeeDay = new Dictionary<(string, DateOnly), decimal>();
             await using (var cmd = new NpgsqlCommand(
                 """
-                SELECT employee_id, date, intervals, manual_hours
+                SELECT employee_id, date, intervals
                 FROM work_time_projection
                 WHERE employee_id = ANY(@ids) AND date >= @start AND date <= @end
+                  AND cleared_by_outbox_id IS NULL
                 """, conn))
             {
                 cmd.Parameters.AddWithValue("ids", employeeIds);
@@ -1211,10 +1214,9 @@ public static class ApprovalEndpoints
                     var empId = reader.GetString(0);
                     var date = DateOnly.FromDateTime(reader.GetDateTime(1));
                     var intervalsJson = reader.GetString(2);
-                    var manual = reader.GetDecimal(3);
                     var intervals = System.Text.Json.JsonSerializer.Deserialize<List<WorkInterval>>(
                         intervalsJson, TeamOverviewIntervalsJsonOptions) ?? new List<WorkInterval>();
-                    var worked = SumIntervalHours(intervals) + manual;
+                    var worked = SumIntervalHours(intervals);
                     var key = (empId, date);
                     workedByEmployeeDay[key] = workedByEmployeeDay.TryGetValue(key, out var ex) ? ex + worked : worked;
                 }
@@ -1619,13 +1621,16 @@ public static class ApprovalEndpoints
                     allocatedByDay[DateOnly.FromDateTime(reader.GetDateTime(0))] = reader.GetDecimal(1);
             }
 
-            // (b) worked(intervals + manual_hours) per DAY from work_time_projection — same as :932-957.
+            // (b) worked(interval hours) per DAY from work_time_projection — the same read as the team
+            // overview's (2d): a day's clock periods are its only work-time record (ADR-043 D10, D-2.4),
+            // current days only (a cleared day counts nothing, addendum A1 D-4).
             var workedByDay = new Dictionary<DateOnly, decimal>();
             await using (var cmd = new NpgsqlCommand(
                 """
-                SELECT date, intervals, manual_hours
+                SELECT date, intervals
                 FROM work_time_projection
                 WHERE employee_id = @id AND date >= @start AND date <= @end
+                  AND cleared_by_outbox_id IS NULL
                 """, conn))
             {
                 cmd.Parameters.AddWithValue("id", employeeId);
@@ -1636,10 +1641,9 @@ public static class ApprovalEndpoints
                 {
                     var date = DateOnly.FromDateTime(reader.GetDateTime(0));
                     var intervalsJson = reader.GetString(1);
-                    var manual = reader.GetDecimal(2);
                     var intervals = System.Text.Json.JsonSerializer.Deserialize<List<WorkInterval>>(
                         intervalsJson, TeamOverviewIntervalsJsonOptions) ?? new List<WorkInterval>();
-                    var workedDay = SumIntervalHours(intervals) + manual;
+                    var workedDay = SumIntervalHours(intervals);
                     workedByDay[date] = workedByDay.TryGetValue(date, out var ex) ? ex + workedDay : workedDay;
                 }
             }
@@ -2550,20 +2554,20 @@ public static class ApprovalEndpoints
 
         // ── (5e) ALLOCATION-RECONCILIATION GATE (TASK-5604; the owner's reported defect) ─────────
         // HARD precondition ALONGSIDE coverage: for EVERY day in the month, recorded worked hours
-        // (work_time_projection: interval hours + manual_hours) must match allocated project hours
+        // (work_time_projection: interval hours alone, ADR-043 D10, D-2.4) must match allocated project hours
         // (NORMAL time entries with a non-null TaskId) within rounding tolerance. Deterministic and
         // read-only over projections — no events, no rule-engine call (P2). Absences are excluded
         // (they are not time_entries). The NORMAL + non-null-TaskId allowlist mirrors the grid's
         // allocation predicate so this gate and the frontend "Ikke fordelt" row agree (historical
         // activity_type='timer' and null-TaskId rows excluded).
 
-        // worked(day): interval hours + manual_hours from work_time_projection.
+        // worked(day): interval hours from work_time_projection.
         var workTimeRows = await svc.WorkTimeRepo.GetByEmployeeAndDateRangeAsync(
             employeeId, monthStart, monthEnd, ct);
         var workedByDay = new Dictionary<DateOnly, decimal>();
         foreach (var row in workTimeRows)
         {
-            var worked = SumIntervalHours(row.Intervals) + row.ManualHours;
+            var worked = SumIntervalHours(row.Intervals);
             workedByDay[row.Date] = workedByDay.TryGetValue(row.Date, out var existingWorked)
                 ? existingWorked + worked
                 : worked;

@@ -3,8 +3,8 @@
 // builder and the panel's period arithmetic). No DOM — everything here is a
 // plain module-level function.
 //
-//   R7 — buildWorkTimePayload preserves the day's EXISTING manualHours through
-//        a latest-wins write (THE pin lives in the hook, per R16).
+//   buildWorkTimePayload emits each day as exactly { date, intervals } — clock
+//        time only (manual hours are retired, ADR-043 D10).
 //   R6 — analyzeRestPeriods: the §J adjacent-day 11-hour analysis, incl. the
 //        served boundary days at month edges and the January year-boundary;
 //        plus the 9t intra-day trigger threshold.
@@ -16,7 +16,6 @@ import {
   buildWorkTimePayload,
   computeDayDiffs,
   computeMonthDiffTotal,
-  dayWorkedHours,
   deriveSkemaRowBasis,
   overlappingPeriodIndices,
   periodHours,
@@ -25,50 +24,31 @@ import {
 } from '../useSkema'
 import type { WorkTimeDay } from '../../types'
 
-const wt = (date: string, intervals: { start: string; end: string }[], manualHours = 0): WorkTimeDay => ({
+const wt = (date: string, intervals: { start: string; end: string }[]): WorkTimeDay => ({
   date,
   intervals,
-  manualHours,
 })
 
-describe('buildWorkTimePayload — R7 manualHours preservation (the hook-level pin)', () => {
-  it('R7: a periods write for a day with EXISTING manualHours preserves the value in the payload (latest-wins write must not clobber it)', () => {
+describe('buildWorkTimePayload — the clock-time-only payload shape', () => {
+  it('emits one entry per dirty date, each exactly { date, intervals } (a date without intervals sends an empty list)', () => {
     const intervals = new Map([['2026-03-09', [{ start: '08:00', end: '12:00' }]]])
-    const manual = new Map([['2026-03-09', 2.5]])
-    const payload = buildWorkTimePayload(['2026-03-09'], intervals, manual)
+    const payload = buildWorkTimePayload(['2026-03-09', '2026-03-11'], intervals)
     expect(payload).toEqual([
-      {
-        date: '2026-03-09',
-        intervals: [{ start: '08:00', end: '12:00' }],
-        manualHours: 2.5,
-      },
+      { date: '2026-03-09', intervals: [{ start: '08:00', end: '12:00' }] },
+      { date: '2026-03-11', intervals: [] },
     ])
-  })
-
-  it('R7: a day WITHOUT manualHours sends 0 (the save contract\'s "absent" value, unchanged from the shipped page)', () => {
-    const intervals = new Map([['2026-03-10', [{ start: '09:00', end: '17:00' }]]])
-    const payload = buildWorkTimePayload(['2026-03-10'], intervals, new Map())
-    expect(payload[0].manualHours).toBe(0)
-  })
-
-  it('emits one entry per dirty date — a manual-only day round-trips its manualHours with empty intervals', () => {
-    const intervals = new Map([['2026-03-09', [{ start: '08:00', end: '12:00' }]]])
-    const manual = new Map([['2026-03-11', 7.4]])
-    const payload = buildWorkTimePayload(['2026-03-09', '2026-03-11'], intervals, manual)
-    expect(payload).toHaveLength(2)
-    expect(payload[1]).toEqual({ date: '2026-03-11', intervals: [], manualHours: 7.4 })
   })
 
   it('copies interval objects into the payload (no shared references with the live map)', () => {
     const source = { start: '08:00', end: '12:00' }
     const intervals = new Map([['2026-03-09', [source]]])
-    const payload = buildWorkTimePayload(['2026-03-09'], intervals, new Map())
+    const payload = buildWorkTimePayload(['2026-03-09'], intervals)
     expect(payload[0].intervals[0]).toEqual(source)
     expect(payload[0].intervals[0]).not.toBe(source)
   })
 })
 
-describe('periodHours / periodsTotalHours / dayWorkedHours — R5 exact arithmetic', () => {
+describe('periodHours / periodsTotalHours — R5 exact arithmetic', () => {
   it('computes single-period hours at exact 2 decimals (10:27–13:03 = 2.6)', () => {
     expect(periodHours({ from: '10:27', to: '13:03' })).toBe(2.6)
   })
@@ -111,15 +91,10 @@ describe('periodHours / periodsTotalHours / dayWorkedHours — R5 exact arithmet
     expect(periodsTotalHours(periods)).toBe(4)
   })
 
-  it('dayWorkedHours adds the day\'s existing manual hours to the period total (D-B: manual hours keep counting in worked totals)', () => {
-    expect(dayWorkedHours([{ from: '08:00', to: '12:00' }], 2.5)).toBe(6.5)
-    expect(dayWorkedHours([], 7.4)).toBe(7.4)
-  })
-
   it('R6: the 9t intra-day trigger fires strictly ABOVE 9 worked hours (9,0 is quiet)', () => {
-    expect(dayWorkedHours([{ from: '08:00', to: '17:00' }], 0)).toBe(9)
-    expect(dayWorkedHours([{ from: '08:00', to: '17:00' }], 0) > LONG_DAY_WARNING_HOURS).toBe(false)
-    expect(dayWorkedHours([{ from: '08:00', to: '17:06' }], 0) > LONG_DAY_WARNING_HOURS).toBe(true)
+    expect(periodsTotalHours([{ from: '08:00', to: '17:00' }])).toBe(9)
+    expect(periodsTotalHours([{ from: '08:00', to: '17:00' }]) > LONG_DAY_WARNING_HOURS).toBe(false)
+    expect(periodsTotalHours([{ from: '08:00', to: '17:06' }]) > LONG_DAY_WARNING_HOURS).toBe(true)
   })
 })
 
@@ -226,7 +201,7 @@ describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', (
   it('R6 no-data days: null when this day has no intervals (nothing to anchor)', () => {
     const month = [
       wt('2026-03-08', [{ start: '12:00', end: '23:59' }]),
-      wt('2026-03-09', [], 7.4), // manual-only day — no clock anchor
+      wt('2026-03-09', []), // a day without intervals — no clock anchor
     ]
     expect(analyzeRestPeriods(month, [], '2026-03-09')).toBeNull()
     expect(analyzeRestPeriods(month, [], '2026-03-10')).toBeNull() // entirely unserved day
@@ -318,7 +293,6 @@ describe('computeDayDiffs / computeMonthDiffTotal — the R2 single computation 
     projectKeys: new Set(['DRIFT']),
     absenceKeys: new Set(['VACATION']),
     workIntervals: new Map(),
-    manualHours: new Map(),
     dailyNorm: new Map<string, number | null>([
       ['2026-03-02', 7.4],
       ['2026-03-03', 7.4],
@@ -341,12 +315,11 @@ describe('computeDayDiffs / computeMonthDiffTotal — the R2 single computation 
     expect(computeMonthDiffTotal(diffs)).toBe(0)
   })
 
-  it('R2: worked = intervals + manualHours against the served norm, 2-decimal', () => {
+  it('R2: worked = clock intervals against the served norm, 2-decimal', () => {
     const diffs = computeDayDiffs({
       ...base,
       cellValues: new Map(),
-      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '15:00' }]]]), // 7.0
-      manualHours: new Map([['2026-03-02', 1.0]]), // worked 8.0 vs 7.4 → +0.6
+      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '16:00' }]]]), // worked 8.0 vs 7.4 → +0.6
     })
     expect(diffs.get('2026-03-02')).toBe(0.6)
     expect(computeMonthDiffTotal(diffs)).toBe(0.6)

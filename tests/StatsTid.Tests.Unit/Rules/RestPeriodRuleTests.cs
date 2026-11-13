@@ -1,3 +1,4 @@
+using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Models;
@@ -76,20 +77,38 @@ public class RestPeriodRuleTests
         OkVersion = "OK24",
     };
 
+    // S148 S0-3 (P-12): the rest checks read the Skema clock intervals, not clock times on time
+    // entries, so the rest facts below carry their clock times as intervals and their project
+    // hours as hours-only entries.
+    private static ComplianceWorkInterval CreateInterval(
+        DateOnly date, TimeOnly startTime, TimeOnly endTime) => new(date, startTime, endTime);
+
     // ---------------------------------------------------------------
     // 1. Daily rest: gap below minimum → VIOLATION
     // ---------------------------------------------------------------
+    /// <summary>
+    /// Kind <b>R</b> (the rest arithmetic kept). S148 S0-3 (P-12): the clock times moved from the
+    /// entries to intervals on the same dates; the hours stay as hours-only entries; the expected
+    /// values are unchanged. Red conditions: a rest check that reads no intervals finds no DAILY_REST
+    /// and fails the <c>Assert.Contains</c> / <c>Assert.False</c>.
+    /// </summary>
     [Fact]
     public void DailyRest_BelowMinimum_ReturnsViolation()
     {
         // Day 1 ends at 22:00, Day 2 starts at 07:00 → rest = 9h (< 11h)
         var entries = new List<TimeEntry>
         {
-            CreateTimedEntry(Monday, 8m, new TimeOnly(14, 0), new TimeOnly(22, 0)),
-            CreateTimedEntry(Monday.AddDays(1), 8m, new TimeOnly(7, 0), new TimeOnly(15, 0)),
+            CreateHoursOnlyEntry(Monday, 8m),
+            CreateHoursOnlyEntry(Monday.AddDays(1), 8m),
+        };
+        // S148 S0-3 (P-12): the clock times are intervals now
+        var intervals = new[]
+        {
+            CreateInterval(Monday, new TimeOnly(14, 0), new TimeOnly(22, 0)),
+            CreateInterval(Monday.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
 
         Assert.False(result.Success);
         Assert.Equal(RestPeriodRule.RuleId, result.RuleId);
@@ -101,17 +120,30 @@ public class RestPeriodRuleTests
     // ---------------------------------------------------------------
     // 2. Daily rest: gap above minimum → no violation
     // ---------------------------------------------------------------
+    /// <summary>
+    /// Kind <b>R</b>. S148 S0-3 (P-12): clock times moved from entries to intervals; expected
+    /// unchanged. Red conditions: a rest check that reports a DAILY_REST for this 14 h rest (a
+    /// threshold above 14 h, or the wrong pair of instants) fails both <c>Assert.DoesNotContain</c>
+    /// calls. It is a negative pin: its positive twin on the same shape is
+    /// <c>DailyRest_BelowMinimum_ReturnsViolation</c> (9 h), so the intervals are demonstrably read.
+    /// </summary>
     [Fact]
     public void DailyRest_AboveMinimum_NoViolation()
     {
         // Day 1 ends at 17:00, Day 2 starts at 07:00 → rest = 14h (>= 11h)
         var entries = new List<TimeEntry>
         {
-            CreateTimedEntry(Monday, 8m, new TimeOnly(9, 0), new TimeOnly(17, 0)),
-            CreateTimedEntry(Monday.AddDays(1), 8m, new TimeOnly(7, 0), new TimeOnly(15, 0)),
+            CreateHoursOnlyEntry(Monday, 8m),
+            CreateHoursOnlyEntry(Monday.AddDays(1), 8m),
+        };
+        // S148 S0-3 (P-12): the clock times are intervals now
+        var intervals = new[]
+        {
+            CreateInterval(Monday, new TimeOnly(9, 0), new TimeOnly(17, 0)),
+            CreateInterval(Monday.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
 
         Assert.DoesNotContain(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST);
@@ -122,6 +154,14 @@ public class RestPeriodRuleTests
     // ---------------------------------------------------------------
     // 3. Voluntary unsocial hours → skips rest check
     // ---------------------------------------------------------------
+    /// <summary>
+    /// Kind <b>R</b>. S148 S0-3 (P-12, 14813 BC-3 ruled (b)): the exemption is read at day level, from
+    /// the day's project entries, because intervals carry no flag; the clock times moved to intervals;
+    /// expected unchanged. Red conditions: an engine that ignores the flag reports the 6 h DAILY_REST
+    /// and fails both <c>Assert.DoesNotContain</c> calls. Its contrast, where a second NON-voluntary
+    /// entry on Day 2 makes the 6 h finding appear, is
+    /// <c>RestPeriodRuleIntervalTests.VoluntaryDay_WithOneNonVoluntaryEntry_IsNotExempt</c>.
+    /// </summary>
     [Fact]
     public void DailyRest_VoluntaryUnsocial_SkipsRestCheck()
     {
@@ -129,11 +169,25 @@ public class RestPeriodRuleTests
         // But Day 2 is voluntary unsocial → rest check skipped
         var entries = new List<TimeEntry>
         {
-            CreateTimedEntry(Monday, 8m, new TimeOnly(15, 0), new TimeOnly(23, 0)),
-            CreateTimedEntry(Monday.AddDays(1), 4m, new TimeOnly(5, 0), new TimeOnly(9, 0), voluntaryUnsocial: true),
+            CreateHoursOnlyEntry(Monday, 8m),
+            new TimeEntry
+            {
+                EmployeeId = "EMP001",
+                Date = Monday.AddDays(1),
+                Hours = 4m,
+                AgreementCode = "AC",
+                OkVersion = "OK24",
+                VoluntaryUnsocialHours = true,
+            },
+        };
+        // S148 S0-3 (P-12, BC-3 (b)): clock times are intervals; the flag stays on the day's only entry
+        var intervals = new[]
+        {
+            CreateInterval(Monday, new TimeOnly(15, 0), new TimeOnly(23, 0)),
+            CreateInterval(Monday.AddDays(1), new TimeOnly(5, 0), new TimeOnly(9, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
 
         Assert.DoesNotContain(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST);
@@ -174,18 +228,25 @@ public class RestPeriodRuleTests
     // ---------------------------------------------------------------
     // 5. Weekly rest: all 7 days worked → VIOLATION
     // ---------------------------------------------------------------
+    /// <summary>
+    /// Kind <b>R</b>. S148 S0-3 (P-12): the clock times moved from the entries to intervals (7.4 h
+    /// hours-only entries kept); expected unchanged. Red conditions: a weekly-rest check that
+    /// counts fewer than seven worked days finds no WEEKLY_REST and fails the
+    /// <c>Assert.Contains</c>.
+    /// </summary>
     [Fact]
     public void WeeklyRest_AllSevenDaysWorked_ReturnsViolation()
     {
         var entries = new List<TimeEntry>();
+        var intervals = new List<ComplianceWorkInterval>();
         for (int i = 0; i < 7; i++)
         {
-            entries.Add(CreateTimedEntry(
-                Monday.AddDays(i), 7.4m,
-                new TimeOnly(8, 0), new TimeOnly(15, 24)));
+            entries.Add(CreateHoursOnlyEntry(Monday.AddDays(i), 7.4m));
+            // S148 S0-3 (P-12): the clock times are intervals now
+            intervals.Add(CreateInterval(Monday.AddDays(i), new TimeOnly(8, 0), new TimeOnly(15, 24)));
         }
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
 
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.WEEKLY_REST);
@@ -353,9 +414,36 @@ public class RestPeriodRuleTests
             v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS);
     }
 
+    /// <summary>
+    /// Kind <b>F</b> (Unit; fix-up 2, adjudication ruling 1). The weekly average is shown to one decimal
+    /// with halves rounded up, and the message says the same figure. Mon-Fri 8.0 h and Sat 8.25 h is
+    /// 48.25 h in one 7-day week: <c>ActualValue</c> 48.3. The expected message is built in the test from
+    /// the value (this machine's culture prints a decimal comma). Red conditions: with fix-up 2 reverted
+    /// the value is rounded to even, 48.2, so <c>Assert.Equal(48.3m, ...)</c> fails.
+    /// </summary>
+    [Fact]
+    public void WeeklyMaxHours_MidpointAverage_ValueAndMessageAgree()
+    {
+        var entries = new List<TimeEntry>();
+        for (int i = 0; i < 5; i++)
+            entries.Add(CreateHoursOnlyEntry(Monday.AddDays(i), 8.0m));
+        entries.Add(CreateHoursOnlyEntry(Monday.AddDays(5), 8.25m));
+
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+
+        var finding = Assert.Single(result.Violations, v => v.ViolationType == ComplianceViolationType.WEEKLY_MAX_HOURS);
+        Assert.Equal(48.3m, finding.ActualValue);
+        Assert.Contains($"arbejdstid {finding.ActualValue:F1}t overstiger", finding.Message);
+    }
+
     // ---------------------------------------------------------------
     // 9. Derogation allowed → rest breach is WARNING, not VIOLATION
     // ---------------------------------------------------------------
+    /// <summary>
+    /// Kind <b>R</b>. S148 S0-3 (P-12): clock times moved from entries to intervals; expected
+    /// unchanged. Red conditions: a derogation that is ignored makes the 9 h rest a VIOLATION and
+    /// fails <c>Assert.Contains(Warnings…)</c>.
+    /// </summary>
     [Fact]
     public void Derogation_Allowed_ReturnsWarning()
     {
@@ -363,12 +451,18 @@ public class RestPeriodRuleTests
         // derogation = true → WARNING
         var entries = new List<TimeEntry>
         {
-            CreateTimedEntry(Monday, 8m, new TimeOnly(14, 0), new TimeOnly(22, 0)),
-            CreateTimedEntry(Monday.AddDays(1), 8m, new TimeOnly(7, 0), new TimeOnly(15, 0)),
+            CreateHoursOnlyEntry(Monday, 8m),
+            CreateHoursOnlyEntry(Monday.AddDays(1), 8m),
+        };
+        // S148 S0-3 (P-12): the clock times are intervals now
+        var intervals = new[]
+        {
+            CreateInterval(Monday, new TimeOnly(14, 0), new TimeOnly(22, 0)),
+            CreateInterval(Monday.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
         var config = CreateConfig(derogation: true);
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config, intervals);
 
         // Should be a WARNING, not a VIOLATION
         Assert.Contains(result.Warnings, v =>
@@ -383,18 +477,29 @@ public class RestPeriodRuleTests
     // ---------------------------------------------------------------
     // 10. Derogation not allowed → rest breach is VIOLATION
     // ---------------------------------------------------------------
+    /// <summary>
+    /// Kind <b>R</b>. S148 S0-3 (P-12): clock times moved from entries to intervals; expected
+    /// unchanged. Red conditions: a derogation applied when the config forbids it makes the 9 h rest
+    /// a WARNING and fails <c>Assert.Contains(Violations…)</c>.
+    /// </summary>
     [Fact]
     public void Derogation_NotAllowed_ReturnsViolation()
     {
         // Same scenario as above but derogation = false → VIOLATION
         var entries = new List<TimeEntry>
         {
-            CreateTimedEntry(Monday, 8m, new TimeOnly(14, 0), new TimeOnly(22, 0)),
-            CreateTimedEntry(Monday.AddDays(1), 8m, new TimeOnly(7, 0), new TimeOnly(15, 0)),
+            CreateHoursOnlyEntry(Monday, 8m),
+            CreateHoursOnlyEntry(Monday.AddDays(1), 8m),
+        };
+        // S148 S0-3 (P-12): the clock times are intervals now
+        var intervals = new[]
+        {
+            CreateInterval(Monday, new TimeOnly(14, 0), new TimeOnly(22, 0)),
+            CreateInterval(Monday.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
         var config = CreateConfig(derogation: false);
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config, intervals);
 
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST &&
@@ -410,7 +515,8 @@ public class RestPeriodRuleTests
     [Fact]
     public void HoursOnly_SkipsRestCheck_StillChecksDailyMax()
     {
-        // No StartTime/EndTime → rest gap check skipped, but daily max still enforced
+        // S148 S0-3 (P-12): no intervals → no work period, so the rest gap check measures nothing,
+        // but daily max (project hours) is still enforced
         var entries = new List<TimeEntry>
         {
             CreateHoursOnlyEntry(Monday, 14m), // exceeds 13h daily max
@@ -422,7 +528,7 @@ public class RestPeriodRuleTests
         // Daily max should fire
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS);
-        // Daily rest should NOT fire (no time-of-day data)
+        // Daily rest should NOT fire (no intervals, so no time-of-day data)
         Assert.DoesNotContain(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST);
         Assert.DoesNotContain(result.Warnings, v =>

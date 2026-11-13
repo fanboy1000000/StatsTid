@@ -33,6 +33,12 @@ export interface DroppedSaveNotice {
   message: string
 }
 
+export interface SaveBatchCleared {
+  entries: { date: string; projectCode: string }[] | null
+  absences: { date: string; absenceType: string }[] | null
+  workTime: { date: string }[] | null
+}
+
 /** A fully classified save: what to POST, and for which month. Built when the edit is QUEUED. */
 export interface SaveBatch {
   year: number
@@ -40,6 +46,9 @@ export interface SaveBatch {
   entries: { date: string; projectCode: string; hours: number }[] | null
   absences: { date: string; absenceType: string; hours: number }[] | null
   workTime: WorkTimeDay[] | null
+  /** The removals of the save (an emptied cell or day), each kind null when it has none. Absent =
+      no removal. A cell or day is never both posted and cleared in one batch. */
+  cleared?: SaveBatchCleared | null
   /** Asked when the save FAILS: true when the page has meanwhile dropped this save's edits (the
       data it was sent under has been replaced), so the failure gets a persistent notice instead of
       the clearable slot. Absent = not dropped. */
@@ -89,6 +98,11 @@ export interface AbsenceCapError {
   date?: string
   totalHours: number
   maxHours: number
+  /** Present only on the paid-absence day bound's 422 (`kind: 'paid-absence-day-bound'`);
+   *  the all-types cap bodies carry none of the three (ADR-043). */
+  kind?: string
+  plannedHours?: number
+  workedHours?: number
 }
 
 /**
@@ -206,6 +220,9 @@ function batchDates(batch: SaveBatch): string[] {
   for (const e of batch.entries ?? []) set.add(e.date)
   for (const a of batch.absences ?? []) set.add(a.date)
   for (const w of batch.workTime ?? []) set.add(w.date)
+  for (const e of batch.cleared?.entries ?? []) set.add(e.date)
+  for (const a of batch.cleared?.absences ?? []) set.add(a.date)
+  for (const w of batch.cleared?.workTime ?? []) set.add(w.date)
   return [...set].sort()
 }
 
@@ -409,6 +426,15 @@ export function useSkema(
       setAbsenceRuleError(null)
       setAbsenceCapError(null)
 
+      const c = batch.cleared
+      const cleared =
+        c && ((c.entries?.length ?? 0) > 0 || (c.absences?.length ?? 0) > 0 || (c.workTime?.length ?? 0) > 0)
+          ? {
+              entries: c.entries && c.entries.length > 0 ? c.entries : null,
+              absences: c.absences && c.absences.length > 0 ? c.absences : null,
+              workTime: c.workTime && c.workTime.length > 0 ? c.workTime : null,
+            }
+          : undefined
       const result = await apiClient.post('/api/skema/{employeeId}/save', {
         params: { path: { employeeId } },
         body: {
@@ -417,6 +443,7 @@ export function useSkema(
           entries: batch.entries && batch.entries.length > 0 ? batch.entries : null,
           absences: batch.absences && batch.absences.length > 0 ? batch.absences : null,
           workTime: batch.workTime && batch.workTime.length > 0 ? batch.workTime : null,
+          cleared,
         },
       })
       if (result.ok) {
@@ -460,6 +487,9 @@ export function useSkema(
               date: body.date,
               totalHours: body.totalHours,
               maxHours: body.maxHours,
+              kind: body.kind,
+              plannedHours: body.plannedHours,
+              workedHours: body.workedHours,
             })
           } else {
             failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
@@ -489,15 +519,28 @@ export function useSkema(
       // their key sets and their order are byte-identical to the legacy build.
       const entries: { date: string; projectCode: string; hours: number }[] = []
       const absences: { date: string; absenceType: string; hours: number }[] = []
+      // An emptied or 0 cell is a removal (`cleared`), never dropped.
+      const clearedEntries: { date: string; projectCode: string }[] = []
+      const clearedAbsences: { date: string; absenceType: string }[] = []
       for (const c of cells) {
-        if (c.hours == null || c.hours === 0) continue
-        if (absenceTypeSet.has(c.rowKey)) {
+        const isAbsence = absenceTypeSet.has(c.rowKey)
+        if (c.hours == null || c.hours === 0) {
+          if (isAbsence) clearedAbsences.push({ date: c.date, absenceType: c.rowKey })
+          else clearedEntries.push({ date: c.date, projectCode: c.rowKey })
+        } else if (isAbsence) {
           absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
         } else {
           entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
         }
       }
-      return saveBatch({ year, month, entries, absences, workTime: workTime ?? null })
+      return saveBatch({
+        year,
+        month,
+        entries,
+        absences,
+        workTime: workTime ?? null,
+        cleared: { entries: clearedEntries, absences: clearedAbsences, workTime: null },
+      })
     },
     [saveBatch, year, month],
   )
@@ -610,33 +653,24 @@ export function useSkema(
 // owner of the workTime payload builder and the day panel's period arithmetic).
 // Everything below is a PURE module-level export — unit-testable without DOM.
 //
-// NOTE (R16 transition): SkemaPage.tsx still carries its own private
-// buildWorkTimePayload callback; that file is 7205-owned and must compile
-// UNCHANGED this sprint, so the hook export below is the PARALLEL single owner
-// that 7205 swaps the page onto. The R7 pin (manualHours carry-forward) lives
-// and is tested HERE.
+// R16: useSkema is the single owner of the workTime payload builder. Every day
+// is clock time only — manual hours are retired (ADR-028, ADR-043 D10 / D-2.4).
+// A day with no interval is not a payload day: the server refuses it (400
+// skema_work_time_day_empty). An emptied day is sent as `cleared.workTime` by the page.
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * R7 — manualHours preservation. The ADR-028 work-time save is a latest-wins
- * whole-day replace (`{date, intervals, manualHours}`), so EVERY write that
- * round-trips a day's workTime MUST carry the day's EXISTING manualHours or the
- * write silently clobbers it. This builder is the one place that contract is
- * enforced: callers pass the dirty dates plus the CURRENT (server-hydrated)
- * interval/manual maps, and each emitted day carries
- * `manualHours: <the day's existing value>` (0 when the day has none — the save
- * contract's "absent" value, byte-identical to the shipped page behavior; R5/R17
- * freeze the contract itself).
+ * The ADR-028 work-time save is a latest-wins whole-day replace, so each
+ * emitted day is exactly `{ date, intervals }`: callers pass the dirty dates
+ * plus the CURRENT (server-hydrated) interval map.
  */
 export function buildWorkTimePayload(
   dates: Iterable<string>,
   workIntervals: ReadonlyMap<string, readonly WorkTimeInterval[]>,
-  manualHours: ReadonlyMap<string, number>,
 ): WorkTimeDay[] {
   return [...dates].map((date) => ({
     date,
     intervals: (workIntervals.get(date) ?? []).map((iv) => ({ start: iv.start, end: iv.end })),
-    manualHours: manualHours.get(date) ?? 0,
   }))
 }
 
@@ -704,15 +738,6 @@ export function periodsTotalHours(periods: readonly ClockPeriod[]): number {
 }
 
 /**
- * The day's worked total = clock periods + the day's existing manual hours
- * (owner ruling D-B: the manual-entry UI is dropped but existing manual_hours
- * keep counting in worked totals). Same basis as the grid's workedPerDay.
- */
-export function dayWorkedHours(periods: readonly ClockPeriod[], manualHours: number): number {
-  return round2(periodsTotalHours(periods) + manualHours)
-}
-
-/**
  * S58 mirror — indices of period rows that OVERLAP another valid row. Touching
  * boundaries (next.from === prev.to) are allowed; invalid/reversed rows are
  * ignored (they are flagged "ugyldig" separately). Mirrors the backend guard;
@@ -743,13 +768,13 @@ export function overlappingPeriodIndices(periods: readonly ClockPeriod[]): Set<n
   return out
 }
 
-/** One §J adjacent-day rest violation (R6 trigger ii). */
+/** One rest the 11-hour rule judged too short (R6 trigger ii). */
 export interface RestPeriodWarning {
   /** The exact rest gap in hours (2-decimal). */
   gapHours: number
-  /** The earlier day — whose LAST interval end starts the rest gap ("YYYY-MM-DD"). */
+  /** The earlier group's day: the day the shift whose end starts the rest began ("YYYY-MM-DD"). */
   fromDate: string
-  /** The later day — whose FIRST interval start ends the rest gap ("YYYY-MM-DD"). */
+  /** The later group's day: the day whose first start ends the rest ("YYYY-MM-DD"). */
   toDate: string
 }
 
@@ -762,35 +787,72 @@ function addDays(date: string, delta: number): string {
   return `${y}-${m}-${dd}`
 }
 
-/** First interval start / last interval end (minutes) over a day's VALID intervals. */
-function dayClockBounds(wt: WorkTimeDay | undefined): { firstStart: number; lastEnd: number } | null {
-  if (!wt) return null
-  let firstStart = Infinity
-  let lastEnd = -Infinity
-  for (const iv of wt.intervals ?? []) {
-    const s = parseClockTime(iv.start)
-    const e = parseClockTime(iv.end)
-    if (s !== null && e !== null && e > s) {
-      if (s < firstStart) firstStart = s
-      if (e > lastEnd) lastEnd = e
+/** Whole days since the epoch for a "YYYY-MM-DD" date (UTC, so DST never shifts it). */
+function dayNumber(date: string): number {
+  return Math.round(Date.parse(date + 'T00:00:00Z') / 86_400_000)
+}
+
+/** One shift: valid intervals joined across midnight, on a continuous minute clock. */
+interface RestShift {
+  startDate: string
+  startMin: number
+  endDate: string
+  endMin: number
+}
+
+const LAST_CLOCK_MINUTE = 23 * 60 + 59
+
+/**
+ * Joins every day's VALID intervals (both ends parse, end after start) into shifts, as the engine
+ * does: an interval ending at 23:59 or later on day D and one starting at exactly 00:00 on D + 1
+ * are one shift, and the join repeats, so a chain over several midnights is one shift. Nothing
+ * else joins.
+ */
+function joinShifts(byDate: ReadonlyMap<string, WorkTimeDay>): RestShift[] {
+  const intervals: Array<{ date: string; s: number; e: number }> = []
+  for (const [date, wt] of byDate) {
+    for (const iv of wt.intervals ?? []) {
+      const s = parseClockTime(iv.start)
+      const e = parseClockTime(iv.end)
+      if (s !== null && e !== null && e > s) intervals.push({ date, s, e })
     }
   }
-  return firstStart === Infinity ? null : { firstStart, lastEnd }
+  intervals.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.s - b.s || a.e - b.e))
+
+  const shifts: RestShift[] = []
+  // date -> the shift whose latest interval ends on that date at 23:59 or later
+  const reachesMidnight = new Map<string, RestShift>()
+  for (const { date, s, e } of intervals) {
+    const base = dayNumber(date) * 1440
+    const joined = s === 0 ? reachesMidnight.get(addDays(date, -1)) : undefined
+    const shift: RestShift = joined ?? { startDate: date, startMin: base + s, endDate: date, endMin: base + e }
+    shift.endDate = date
+    shift.endMin = base + e
+    if (!joined) shifts.push(shift)
+    if (e >= LAST_CLOCK_MINUTE) reachesMidnight.set(date, shift)
+  }
+  return shifts
 }
 
 /**
- * R6 (trigger ii) — the SYSTEM_TARGET §J adjacent-day 11-hour rest analysis,
- * client-side and WARNING-ONLY (the rule engine stays definitive; the in-context
- * VoluntaryUnsocialHours choice is a recorded follow-up, deliberately absent).
+ * R6 (trigger ii) — the SYSTEM_TARGET §J 11-hour rest analysis, client-side and WARNING-ONLY: it
+ * gives the instant warning on unsaved edits while the rule engine stays the authority and runs the
+ * same algorithm, which the shared scenario table (`rest-parity-scenarios.json`, `restParity.test.ts`
+ * and the engine's `RestParityTableTests`) keeps honest.
  *
- * Checks the gap between the PREVIOUS calendar day's last interval end and the
- * given day's first interval start, and symmetrically toward the NEXT day. At
- * month edges the adjacent day resolves from the served `boundaryWorkTime`
- * (prev-month last day / next-month first day — month entries win on duplicate
- * dates). Days with no interval data impose no constraint; a day with no own
- * intervals returns null (nothing to anchor).
+ * Shifts are joined at midnight (Skema cannot type 24:00, so a night shift is 22:00–23:59 plus
+ * 00:00–06:00), grouped by the day they START, and each group is compared with the next: the rest
+ * runs from the earlier group's latest end to the later group's earliest start. `fromDate` is the
+ * earlier group's day and `toDate` the later group's. At month edges the adjacent day resolves from
+ * the served `boundaryWorkTime` (month entries win on duplicate dates). The minimum is the fixed
+ * `REST_MINIMUM_HOURS`; the served one is a later task's. The screen does not apply the engine's
+ * voluntary-unsocial-hours exemption or its derogation severity, and uses the fixed minimum; the
+ * table proves the rest computation only. An overlap never shows a negative rest: the shown gap is
+ * clamped at 0 while the comparison stays on the true value.
  *
- * Returns the violations (1–2 entries, previous-gap first) or null when none.
+ * For the open `date`, returns each too-short rest for which `date` is the later group's day, the
+ * earlier group's day, or a day the earlier group's shift runs on past its start day (earlier rest
+ * first), or null when there is none.
  */
 export function analyzeRestPeriods(
   monthWorkTime: readonly WorkTimeDay[],
@@ -800,32 +862,39 @@ export function analyzeRestPeriods(
   const byDate = new Map<string, WorkTimeDay>()
   for (const wt of boundaryWorkTime ?? []) byDate.set(wt.date, wt)
   for (const wt of monthWorkTime) byDate.set(wt.date, wt) // month entries win
-  const today = dayClockBounds(byDate.get(date))
-  if (!today) return null
+
+  const groups = new Map<string, { startMin: number; endMin: number; runsOn: Set<string> }>()
+  for (const shift of joinShifts(byDate)) {
+    let g = groups.get(shift.startDate)
+    if (!g) {
+      g = { startMin: shift.startMin, endMin: shift.endMin, runsOn: new Set() }
+      groups.set(shift.startDate, g)
+    }
+    g.startMin = Math.min(g.startMin, shift.startMin)
+    g.endMin = Math.max(g.endMin, shift.endMin)
+    for (let d = addDays(shift.startDate, 1); d <= shift.endDate; d = addDays(d, 1)) g.runsOn.add(d)
+  }
+  const ordered = [...groups.entries()].sort((a, b) => a[1].startMin - b[1].startMin)
 
   const warnings: RestPeriodWarning[] = []
-  const minutesInDay = 24 * 60
-  const restMinimumMinutes = REST_MINIMUM_HOURS * 60
-
-  const prevDate = addDays(date, -1)
-  const prev = dayClockBounds(byDate.get(prevDate))
-  if (prev) {
-    const gapMin = minutesInDay - prev.lastEnd + today.firstStart
-    if (gapMin < restMinimumMinutes) {
-      warnings.push({ gapHours: round2(gapMin / 60), fromDate: prevDate, toDate: date })
+  for (let i = 0; i + 1 < ordered.length; i++) {
+    const [fromDate, earlier] = ordered[i]
+    const [toDate, later] = ordered[i + 1]
+    const gapMin = later.startMin - earlier.endMin
+    if (gapMin >= REST_MINIMUM_HOURS * 60) continue
+    if (date === toDate || date === fromDate || earlier.runsOn.has(date)) {
+      warnings.push({ gapHours: round2(Math.max(0, gapMin) / 60), fromDate, toDate })
     }
   }
-
-  const nextDate = addDays(date, 1)
-  const next = dayClockBounds(byDate.get(nextDate))
-  if (next) {
-    const gapMin = minutesInDay - today.lastEnd + next.firstStart
-    if (gapMin < restMinimumMinutes) {
-      warnings.push({ gapHours: round2(gapMin / 60), fromDate: date, toDate: nextDate })
-    }
-  }
-
   return warnings.length > 0 ? warnings : null
+}
+
+/**
+ * A rest as shown: one decimal, halves rounded up, as the server's value and message round it.
+ * (`toFixed` works on the binary value and shows 8,45 as 8,4.) Works on the 2-decimal `gapHours`.
+ */
+export function restGapDisplayHours(gapHours: number): number {
+  return Math.round(Math.round(gapHours * 100) / 10) / 10
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -926,14 +995,13 @@ export interface MonthDiffInputs {
   /** ALL served absence-type keys (R3). */
   absenceKeys: ReadonlySet<string>
   workIntervals: ReadonlyMap<string, readonly WorkTimeInterval[]>
-  manualHours: ReadonlyMap<string, number>
   /** Served per-day norm (null = academic ANNUAL_ACTIVITY → the day is skipped, R1). */
   dailyNorm: ReadonlyMap<string, number | null>
 }
 
 /**
- * S72 Step-7a W1 — R2's SINGLE computation owner. Diff(day) = (workTime periods
- * + manualHours + absence hours) − served norm. A day is ABSENT from the result
+ * S72 Step-7a W1 — R2's SINGLE computation owner. Diff(day) = (workTime clock periods
+ * + absence hours) − served norm. A day is ABSENT from the result
  * (renders BLANK) when its norm is null/missing (R1) or when it carries NO
  * registration at all — no workTime, no absence, no allocation (the R2 pinned
  * pro-handoff change). Per-day values round to 2 decimals. The grid's Diff row,
@@ -949,10 +1017,7 @@ export function computeDayDiffs(inputs: MonthDiffInputs): Map<string, number> {
     const norm = inputs.dailyNorm.get(dateKey)
     if (norm === null || norm === undefined) continue
     const intervals = inputs.workIntervals.get(dateKey) ?? []
-    const worked = round2(
-      periodsTotalHours(intervals.map((iv) => ({ from: iv.start, to: iv.end }))) +
-        (inputs.manualHours.get(dateKey) ?? 0),
-    )
+    const worked = periodsTotalHours(intervals.map((iv) => ({ from: iv.start, to: iv.end })))
     let absence = 0
     for (const key of inputs.absenceKeys) {
       absence += inputs.cellValues.get(`${key}:${dateKey}`) ?? 0

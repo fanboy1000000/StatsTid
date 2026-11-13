@@ -27,8 +27,9 @@ function parseToday(today: string): { year: number; monthIndex: number } {
 
 /** Per-tile descriptor. `kind` selects the days/hours display model (S123):
  *  - 'flex'          : value is HOURS (over/under-norm) → hours-first `H (D dage)`
- *  - 'hoursFirstDays': value is DAYS, hours-addable (ferie, barns sygedag) → `H (D dage)`
- *  - 'daysOnly'      : value is DAYS, full-day-only (omsorg, senior, sygedage) → `X dage`
+ *  - 'hoursFirstDays': value is DAYS, hours-addable (ferie) → `H (D dage)`
+ *  - 'daysOnly'      : value is DAYS, shown as `X dage` (omsorg, senior, sygedage, and barns
+ *                      sygedag's per-illness allowance)
  * Ineligible entitlements are OMITTED from the list entirely (owner OQ-1: show
  * nothing) — a remaining `value: null` is only a defensive graceful em-dash. */
 type TileKind = 'flex' | 'hoursFirstDays' | 'daysOnly'
@@ -117,7 +118,14 @@ function buildTiles(data: YearOverview): TileSpec[] {
   }
   tiles.push({ label: 'Sygedage', value: t.sickDaysYtd, kind: 'daysOnly', sub: 'i år' })
   if (t.childSickEligible) {
-    tiles.push({ label: BALANCE_LABELS.CHILD_SICK, value: t.childSickRemaining, kind: 'hoursFirstDays', sub: 'saldo' })
+    // The child's sick days are counted per illness with no yearly cap (QUAL-236): the server's
+    // allowance, never a remainder. The call-home day is the rest of the day the child fell ill.
+    tiles.push({
+      label: BALANCE_LABELS.CHILD_SICK,
+      value: t.childSickDaysPerIllness,
+      kind: 'daysOnly',
+      sub: t.childSickCallHomeDay ? 'pr. sygdomsforløb + hjemkaldelsesdag' : 'pr. sygdomsforløb',
+    })
   }
   return tiles
 }
@@ -224,7 +232,8 @@ export function ArsoversigtPage() {
         </div>
       </div>
 
-      {/* Current-balance tiles (ineligible entitlements are omitted, not em-dashed) */}
+      {/* Balance and allowance tiles — Barns sygedag is a per-illness allowance, not a balance
+          (ineligible entitlements are omitted, not em-dashed) */}
       <div className={styles.statRow}>
         {tiles.map((tile) => {
           const disp = tileDisplay(tile, fullDayNorm)

@@ -1,29 +1,31 @@
+using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
-using StatsTid.SharedKernel.Normalization;
 
 namespace StatsTid.Tests.Unit.Rules;
 
 /// <summary>
-/// S147 TASK-14706-T (QUAL-234 interim, refinement T7, AC-234i-1 server half) - the rest check names
-/// the days it could not measure.
+/// S147 TASK-14706-T (QUAL-234, refinement T7, AC-234i-1 server half), as narrowed by S148 S0-3
+/// (P-12, owner ruling R-22) - the rest check names the days it could not fully measure.
 ///
 /// <para>
-/// <b>Plain language.</b> The 11-hour rest check measures a gap between two clock times. A day
-/// registered in Skema has hours but no clock times, so nothing can be measured. Before S147 such a
-/// day passed silently, so the team overview showed "no breach" for days nobody checked. Now the
-/// result also carries <see cref="ComplianceCheckResult.RestNotCheckedDays"/>: the dates with
-/// registered hours and no entry carrying both clock times. It is informational only: success,
-/// violations and warnings are unchanged by it.
+/// <b>Plain language.</b> The 11-hour rest check measures a gap between clock times, which Skema
+/// stores as work intervals. A day counts as measured only when its clock hours cover its project
+/// hours, to the hundredth of an hour. A day with more project hours than clock hours (or project
+/// hours and no intervals at all) is listed in <see cref="ComplianceCheckResult.RestNotCheckedDays"/>,
+/// so the team overview never shows "no breach" for hours nobody put on the clock. The list is
+/// informational only: success, violations and warnings are unchanged by it, and it stays (R-22).
 /// </para>
 ///
 /// <para>
-/// <b>Expected values come from the refinement (T7: "each date in the period on which the employee
-/// has registered work (hours) but no entry with both clock times"), not from the code.</b>
-/// Every fact below is kind <b>N</b> (names the member this sprint creates) except the marker pin
-/// (kind R), and every N fact carries at least one POSITIVE date assertion, so the one named
-/// mutation - "FindRestNotCheckedDays returns an empty list" - fails each of them on an
-/// exact-value assertion (RED evidence is in the task report). A compile error is not RED.
+/// <b>Expected values come from the refinement (S0-3: "a day is analysed when its interval hours
+/// cover its project hours (to the hundredth)"), not from the code.</b> Each fact's own docstring
+/// names its kind: those first written in S147 against the list are kind R here (re-pinned by S148),
+/// the one moved value and the unchanged boundary facts are kind N (the member is new), and the marker
+/// pin is kind R; each list fact carries a POSITIVE date assertion, so the one named mutation "FindRestNotCheckedDays returns an empty
+/// list" fails it on an exact-value assertion. The moved value of
+/// <c>Evaluate_DayWithIntervalHoursBelowProjectHours_IsListed</c> is proved by mutation M-25
+/// (any kept interval makes a day analysed), run at the S148 wave-3 gate. A compile error is not RED.
 /// </para>
 /// </summary>
 public class RestPeriodNotCheckedTests
@@ -76,40 +78,42 @@ public class RestPeriodNotCheckedTests
         ActivityType = activity,
     };
 
-    private static TimeEntry Timed(DateOnly date, decimal hours, TimeOnly start, TimeOnly end) => new()
-    {
-        EmployeeId = "EMP001",
-        Date = date,
-        Hours = hours,
-        StartTime = start,
-        EndTime = end,
-        AgreementCode = "AC",
-        OkVersion = "OK24",
-    };
+    private static ComplianceWorkInterval Interval(DateOnly date, TimeOnly start, TimeOnly end) =>
+        new(date, start, end);
 
     /// <summary>
-    /// The brief's shape: two hours-only weekdays (Mon 2, Tue 3) and two timed weekdays (Thu 5
-    /// 14:00-22:00, Fri 6 06:00-14:00) whose gap is exactly 8 hours.
+    /// The brief's shape: two hours-only weekdays (Mon 2, Tue 3) and two clocked weekdays (Thu 5
+    /// 14:00-22:00, Fri 6 06:00-14:00, each with 8 project hours) whose gap is exactly 8 hours.
+    /// S148 S0-3 (P-12): the clock times are intervals now, the hours are hours-only entries.
     /// </summary>
-    private static List<TimeEntry> TwoHoursOnlyTwoTimedEightHourGap() => new()
-    {
-        HoursOnly(Mon2),
-        HoursOnly(Tue3),
-        Timed(Thu5, 8m, new TimeOnly(14, 0), new TimeOnly(22, 0)),
-        Timed(Fri6, 8m, new TimeOnly(6, 0), new TimeOnly(14, 0)),
-    };
+    private static (List<TimeEntry> Entries, List<ComplianceWorkInterval> Intervals)
+        TwoHoursOnlyTwoClockedEightHourGap() => (
+        new List<TimeEntry>
+        {
+            HoursOnly(Mon2),
+            HoursOnly(Tue3),
+            HoursOnly(Thu5, 8m),
+            HoursOnly(Fri6, 8m),
+        },
+        new List<ComplianceWorkInterval>
+        {
+            Interval(Thu5, new TimeOnly(14, 0), new TimeOnly(22, 0)),
+            Interval(Fri6, new TimeOnly(6, 0), new TimeOnly(14, 0)),
+        });
 
     /// <summary>
-    /// Kind <b>N</b>. AC-234i-1 server half. Red conditions: <c>Assert.Equal([Mon2, Tue3],
-    /// RestNotCheckedDays)</c> fails under the mutation "return an empty list" (actual: empty).
-    /// The 8-hour gap is still a DAILY_REST VIOLATION with ActualValue 8.0 / ThresholdValue 11.0:
-    /// the new member must not hide, replace or soften a real breach on timed days.
+    /// Kind <b>R</b> (S148 re-pin; first written as N in S147). AC-234i-1 server half. S148 S0-3 (P-12): the two clocked days' clock times moved
+    /// from timed entries to intervals (same project hours); expected values unchanged. Red conditions:
+    /// <c>Assert.Equal([Mon2, Tue3], RestNotCheckedDays)</c> fails under the mutation "return an empty
+    /// list" (actual: empty). The 8-hour gap is still a DAILY_REST VIOLATION with ActualValue 8.0 /
+    /// ThresholdValue 11.0: the list must not hide, replace or soften a real breach on clocked days.
     /// </summary>
     [Fact]
     public void Evaluate_TwoHoursOnlyDays_AreReported_AndTheEightHourGapIsStillADailyRestFinding()
     {
+        var (entries, intervals) = TwoHoursOnlyTwoClockedEightHourGap();
         var result = RestPeriodRule.Evaluate(
-            Profile(), TwoHoursOnlyTwoTimedEightHourGap(), PeriodStart, PeriodEnd, Config());
+            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals);
 
         Assert.Equal(new[] { Mon2, Tue3 }, result.RestNotCheckedDays);
 
@@ -120,40 +124,28 @@ public class RestPeriodNotCheckedTests
     }
 
     /// <summary>
-    /// Kind <b>N</b>. Red conditions: the positive <c>[Mon2, Tue3]</c> from the single daily-rest
-    /// entry point (<see cref="RestPeriodRule.EvaluateDailyRest"/>, the registry's per-check path)
-    /// fails under the "empty list" mutation. EvaluateWeeklyRest keeps an empty list (a different
-    /// check; the implementer's report) - asserted as the contrast.
-    /// </summary>
-    [Fact]
-    public void EvaluateDailyRest_FillsTheList_EvaluateWeeklyRest_KeepsItEmpty()
-    {
-        var entries = TwoHoursOnlyTwoTimedEightHourGap();
-
-        var daily = RestPeriodRule.EvaluateDailyRest(Profile(), entries, PeriodStart, PeriodEnd, Config());
-        var weekly = RestPeriodRule.EvaluateWeeklyRest(Profile(), entries, PeriodStart, PeriodEnd, Config());
-
-        Assert.Equal(new[] { Mon2, Tue3 }, daily.RestNotCheckedDays);
-        Assert.Empty(weekly.RestNotCheckedDays);
-    }
-
-    /// <summary>
-    /// Kind <b>N</b>. Red conditions: <c>Assert.Equal([Tue3], ...)</c> fails under the "empty list"
-    /// mutation. A fully timed period reports none (the negative half) while Tue 3, a lone
-    /// hours-only day added to it, is reported (the discriminating half).
+    /// Kind <b>R</b> (S148 re-pin; first written as N in S147). S148 S0-3 (P-12): the timed days' clock times moved to intervals (8 project
+    /// hours = 8 clock hours); expected values unchanged. Red conditions: <c>Assert.Equal([Tue3],
+    /// ...)</c> fails under the "empty list" mutation. A fully clocked period reports none (the
+    /// negative half) while Tue 3, a lone hours-only day added to it, is reported (the discriminating
+    /// half).
     /// </summary>
     [Fact]
     public void Evaluate_FullyTimedPeriod_ReportsNone_AddingOneHoursOnlyDayReportsExactlyThatDay()
     {
-        var timed = new List<TimeEntry>
+        var clocked = new List<TimeEntry> { HoursOnly(Mon2, 8m), HoursOnly(Thu5, 8m) };
+        // S148 S0-3 (P-12): the clock times are intervals now
+        var intervals = new List<ComplianceWorkInterval>
         {
-            Timed(Mon2, 8m, new TimeOnly(8, 0), new TimeOnly(16, 0)),
-            Timed(Thu5, 8m, new TimeOnly(8, 0), new TimeOnly(16, 0)),
+            Interval(Mon2, new TimeOnly(8, 0), new TimeOnly(16, 0)),
+            Interval(Thu5, new TimeOnly(8, 0), new TimeOnly(16, 0)),
         };
-        Assert.Empty(RestPeriodRule.Evaluate(Profile(), timed, PeriodStart, PeriodEnd, Config()).RestNotCheckedDays);
+        Assert.Empty(RestPeriodRule.Evaluate(
+            Profile(), clocked, PeriodStart, PeriodEnd, Config(), intervals).RestNotCheckedDays);
 
-        var withOneUntimed = new List<TimeEntry>(timed) { HoursOnly(Tue3) };
-        var result = RestPeriodRule.Evaluate(Profile(), withOneUntimed, PeriodStart, PeriodEnd, Config());
+        var withOneUnclocked = new List<TimeEntry>(clocked) { HoursOnly(Tue3) };
+        var result = RestPeriodRule.Evaluate(
+            Profile(), withOneUnclocked, PeriodStart, PeriodEnd, Config(), intervals);
 
         Assert.Equal(new[] { Tue3 }, result.RestNotCheckedDays);
     }
@@ -193,24 +185,36 @@ public class RestPeriodNotCheckedTests
     }
 
     /// <summary>
-    /// Kind <b>N</b>. Boundary: a day with one timed entry plus an hours-only entry counts as
-    /// checked (the timed entry bounds the day's gap); a day with only an hours-only entry does not.
-    /// Red conditions: the positive <c>[Tue3]</c> fails under the "empty list" mutation; Mon 2
-    /// (timed + hours-only) must not be listed.
+    /// Kind <b>N</b>. <b>The one intentional moved value.</b> Renamed from
+    /// <c>Evaluate_DayWithOneTimedEntryPlusHoursOnlyEntries_CountsAsChecked</c>, which said a day with
+    /// one clocked part counts as checked. S148 S0-3 (P-12, owner ruling R-22): a day is analysed only
+    /// when its clock hours cover its project hours (to the hundredth), so Mon 2, with an interval
+    /// 08:00-12:00 (4.0 h) and project hours 4.0 + 3.4 = 7.4, is now LISTED. Expected:
+    /// <c>[Tue3]</c> becomes <c>[Mon2, Tue3]</c>.
+    ///
+    /// Red conditions: proved by mutation M-25 (any kept interval makes a day analysed, whatever its
+    /// hours), run at the S148 wave-3 gate: the list is then <c>[Tue3]</c>, so
+    /// <c>Assert.Equal([Mon2, Tue3], ...)</c> fails. Also fails under the "empty list" mutation.
     /// </summary>
     [Fact]
-    public void Evaluate_DayWithOneTimedEntryPlusHoursOnlyEntries_CountsAsChecked()
+    public void Evaluate_DayWithIntervalHoursBelowProjectHours_IsListed()
     {
+        // S148 S0-3 (P-12, R-22): a partly clocked day is listed
         var entries = new List<TimeEntry>
         {
-            Timed(Mon2, 4m, new TimeOnly(8, 0), new TimeOnly(12, 0)),
+            HoursOnly(Mon2, 4m),
             HoursOnly(Mon2, 3.4m),
             HoursOnly(Tue3),
         };
+        var intervals = new List<ComplianceWorkInterval>
+        {
+            Interval(Mon2, new TimeOnly(8, 0), new TimeOnly(12, 0)),
+        };
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, PeriodStart, PeriodEnd, Config());
+        var result = RestPeriodRule.Evaluate(
+            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals);
 
-        Assert.Equal(new[] { Tue3 }, result.RestNotCheckedDays);
+        Assert.Equal(new[] { Mon2, Tue3 }, result.RestNotCheckedDays);
     }
 
     /// <summary>
@@ -250,25 +254,33 @@ public class RestPeriodNotCheckedTests
     }
 
     /// <summary>
-    /// Kind <b>N</b>. Boundary: a midnight-crossing TIMED shift (Mon 2 22:00 to 02:00), split by the
-    /// shared normalizer as the Backend does before calling the rule, puts a timed post-midnight half on Tue 3, so Tue 3 is checked even though an hours-only entry also sits on
-    /// it; Wed 4, hours-only, is reported. Red conditions: the positive <c>[Wed4]</c> fails under
-    /// the "empty list" mutation.
+    /// Kind <b>R</b> (S148 re-pin; first written as N in S147). Boundary: a night shift typed as Skema's two halves (Mon 2 22:00-23:59 with
+    /// project hours 1.98, Tue 3 00:00-02:00 with project hours 2.0) has every hour on the clock on
+    /// both days, so neither is listed; Wed 4, hours-only, is reported. S148 S0-3 (P-12): the old
+    /// fixture's crossing is now its two halves as intervals, and its separate 3 h hours-only entry
+    /// on Tue 3 is gone (it would leave Tue 3 partly clocked, which
+    /// <c>Evaluate_DayWithIntervalHoursBelowProjectHours_IsListed</c> covers); expected unchanged.
+    /// Red conditions: the positive <c>[Wed4]</c> fails under the "empty list" mutation, and Mon 2 or
+    /// Tue 3 would appear if a half's hours were not counted on its own day.
     /// </summary>
     [Fact]
     public void Evaluate_DayReceivingAMidnightCrossingHalf_CountsAsChecked()
     {
+        // S148 S0-3 (P-12): the crossing is Skema's two halves, as intervals
         var entries = new List<TimeEntry>
         {
-            Timed(Mon2, 4m, new TimeOnly(22, 0), new TimeOnly(2, 0)),
-            HoursOnly(Tue3, 3m),
+            HoursOnly(Mon2, 1.98m),
+            HoursOnly(Tue3, 2m),
             HoursOnly(Wed4),
         };
+        var intervals = new List<ComplianceWorkInterval>
+        {
+            Interval(Mon2, new TimeOnly(22, 0), new TimeOnly(23, 59)),
+            Interval(Tue3, new TimeOnly(0, 0), new TimeOnly(2, 0)),
+        };
 
-        // The Backend splits a crossing shift BEFORE the rule sees it (ADR-039; the rule itself does
-        // not split), so feed the rule the real normalized view.
         var result = RestPeriodRule.Evaluate(
-            Profile(), MidnightCrossingNormalizer.Normalize(entries), PeriodStart, PeriodEnd, Config());
+            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals);
 
         Assert.Equal(new[] { Wed4 }, result.RestNotCheckedDays);
     }
@@ -278,13 +290,16 @@ public class RestPeriodNotCheckedTests
     /// arithmetic). TASK-14706 moved no marker: this fact held <c>weekly-timeline-v1</c> green at
     /// its merge (<c>48a1ba25</c>). TASK-14708 then moved the marker to <c>weekly-timeline-v2</c>
     /// in the same wave, as planned (RR-1; its own pin is <c>ConfigFingerprintTests.cs:268</c>), so
-    /// the expected value is updated at that merge (Orchestrator merge fix-up). Red conditions: any
+    /// the expected value is updated at that merge (Orchestrator merge fix-up). S148's TASK-14811 then
+    /// moved it to <c>weekly-timeline-v3</c> (the call-home day is credited; its own pin is
+    /// <c>ConfigFingerprintTests.Timeline_EvaluationModel_IsWeeklyTimelineV3</c>); re-pointed here,
+    /// kind F (the "v3" string fails on the base). Red conditions: any
     /// change of the constant fails the exact-string assertion. The "a calculated month's lines are
     /// identical" half is carried by the existing golden payroll facts; 14706 changes no payroll code.
     /// </summary>
     [Fact]
-    public void ReplayMarker_IsWeeklyTimelineV2_RestCheckMovedNone()
+    public void ReplayMarker_IsWeeklyTimelineV3_RestCheckMovedNone()
     {
-        Assert.Equal("weekly-timeline-v2", WeeklyTimelineCore.EvaluationModel);
+        Assert.Equal("weekly-timeline-v3", WeeklyTimelineCore.EvaluationModel); // S148 S0-2 (R-24): v2 -> v3
     }
 }

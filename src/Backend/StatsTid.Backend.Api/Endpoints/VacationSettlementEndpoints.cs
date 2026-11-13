@@ -368,6 +368,9 @@ public static class VacationSettlementEndpoints
             IAuditProjectionMapper<FeriehindringTransferred> feriehindringAuditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
+            // QUAL-196 (owner Q4; cycle-3 ruling R1) — year N+1's year-start quota for a next-year
+            // balance row the §22 rescue's carryover creates (the YEAR_END close's own chain).
+            VacationSettlementService settlementService,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -422,7 +425,8 @@ public static class VacationSettlementEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the in-lock re-reads, the carryover's balance seed among them, must see the lock winner's commit.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // S71 / TASK-7103 (SPRINT-71 R12) — ONE employee advisory lock across ALL settlement
@@ -850,15 +854,43 @@ public static class VacationSettlementEndpoints
                     // close if > 0; this overwrite RE-STATES §21 + §22 idempotently (WriteCarryoverInAsync
                     // is a SET, not a +=). Skip only when the combined sum is zero (nothing to write —
                     // never clobber an independent producer's row with 0; the §21-zero/§22-positive case
-                    // still writes). seedQuota = the snapshot's annual quota (the §21 path's convention).
+                    // still writes). A next-year row this creates is seeded as the YEAR_END close seeds
+                    // it (QUAL-196; owner Q4; cycle-3 ruling R1): total_quota = next year's OWN
+                    // year-start quota (VacationSettlementService.ResolveCarryoverSeedQuotaAsync, with
+                    // its logged OA-5 fallback to the settled year's quota), used = the Σ already
+                    // booked into next year; an existing row keeps both.
                     var feriehindringSnapshot = DeserializeSnapshot(rescued.SnapshotJson);
                     var combinedCarryover = rescued.TransferDays + impededDays; // §21 (persisted) + §22 (rescued)
                     if (combinedCarryover > 0m)
                     {
+                        // The seed is keyed by the snapshot's reset_month and falls back to its quota; a
+                        // PENDING_REVIEW YEAR_END row always carries both, so an unreadable snapshot is a
+                        // corrupt row: fail loud (rollback) rather than create a row at quota 0.
+                        if (feriehindringSnapshot is not { ResetMonth: >= 1 and <= 12 })
+                            throw new InvalidOperationException(
+                                $"FERIEHINDRING carryover: the settlement row for {employeeId}/{entitlementType}/" +
+                                $"{entitlementYear} has an unreadable snapshot, so year {entitlementYear + 1}'s " +
+                                "balance seed (reset_month, quota) cannot be resolved; rolling back the rescue.");
+                        // The employee's live agreement code: the chain's fallback operand when no dated
+                        // agreement row covers year N+1's start, as the YEAR_END close passes it.
+                        // Terminated-inclusive (a leaver's row is the normal case here) through the
+                        // standalone read this resolve surface is allowlisted for (UserRepository, R9c);
+                        // committed state, like the chain's own config and agreement reads.
+                        var carryoverUser = await userRepo.GetByIdIncludingTerminatedAsync(employeeId, ct)
+                            ?? throw new InvalidOperationException(
+                                $"FERIEHINDRING carryover: employee {employeeId} could not be read.");
+                        var seedQuota = await settlementService.ResolveCarryoverSeedQuotaAsync(
+                            employeeId, entitlementType, entitlementYear + 1, feriehindringSnapshot.ResetMonth,
+                            carryoverUser.AgreementCode, settledYearQuota: feriehindringSnapshot.AnnualQuota, ct);
+                        var seedAbsenceTypes = EntitlementMapping.AbsenceToEntitlementType
+                            .Where(m => string.Equals(m.Value, entitlementType, StringComparison.Ordinal))
+                            .Select(m => m.Key)
+                            .ToArray();
                         await balanceRepo.WriteCarryoverInAsync(
                             conn, tx, employeeId, entitlementType, entitlementYear + 1,
                             carryoverDays: combinedCarryover,
-                            seedQuota: feriehindringSnapshot?.AnnualQuota ?? 0m, ct);
+                            seedQuota: seedQuota,
+                            seedResetMonth: feriehindringSnapshot.ResetMonth, seedAbsenceTypes: seedAbsenceTypes, ct);
                     }
 
                     // (3a) FeriehindringTransferred — the §22 rescue fact + the durable reason (R1/R3).

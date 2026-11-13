@@ -76,52 +76,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/time-entries": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest"];
-                };
-            };
-            responses: {
-                /** @description Created */
-                201: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse"];
-                    };
-                };
-                /** @description Conflict */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/time-entries/{employeeId}": {
         parameters: {
             query?: never;
@@ -6375,22 +6329,6 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
-        "StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest": {
-            employeeId: string;
-            /** Format: date */
-            date: string;
-            /** Format: double */
-            hours: number;
-            /** Format: time */
-            startTime?: string | null;
-            /** Format: time */
-            endTime?: string | null;
-            taskId?: string | null;
-            activityType?: string | null;
-            agreementCode: string;
-            /** @deprecated */
-            okVersion?: string;
-        };
         "StatsTid.Backend.Api.Contracts.RemoveWithReassignmentResponse": {
             removed: string;
             /** Format: int32 */
@@ -6678,8 +6616,6 @@ export interface components {
             /** Format: date */
             date: string;
             intervals: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow"][];
-            /** Format: double */
-            manualHours: number;
         };
         "StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow": {
             /** Format: uuid */
@@ -6762,11 +6698,6 @@ export interface components {
             count: number;
             /** Format: date */
             today: string;
-        };
-        "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
-            /** Format: uuid */
-            eventId: string;
-            streamId: string;
         };
         "StatsTid.Backend.Api.Contracts.TransferAgreementResponse": {
             employeeId: string;
@@ -7045,8 +6976,9 @@ export interface components {
             seniorDayRemaining: number | null;
             /** Format: int32 */
             sickDaysYtd: number;
-            /** Format: double */
-            childSickRemaining: number | null;
+            /** Format: int32 */
+            childSickDaysPerIllness: number | null;
+            childSickCallHomeDay: boolean;
             childSickEligible: boolean;
             seniorDayEligible: boolean;
         };
@@ -7448,6 +7380,7 @@ export interface components {
             entries?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaEntry"][] | null;
             absences?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaAbsence"][] | null;
             workTime?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkTimeDay"][] | null;
+            cleared?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared"];
         };
         "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaAbsence": {
             /** Format: date */
@@ -7455,6 +7388,25 @@ export interface components {
             absenceType: string;
             /** Format: double */
             hours: number;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaCleared": {
+            entries?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry"][] | null;
+            absences?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence"][] | null;
+            workTime?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay"][] | null;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedAbsence": {
+            /** Format: date */
+            date: string;
+            absenceType: string;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedEntry": {
+            /** Format: date */
+            date: string;
+            projectCode: string;
+        };
+        "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaClearedWorkTimeDay": {
+            /** Format: date */
+            date: string;
         };
         "StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaEntry": {
             /** Format: date */
@@ -7471,8 +7423,6 @@ export interface components {
             /** Format: date */
             date: string;
             intervals?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkInterval"][] | null;
-            /** Format: double */
-            manualHours?: number;
         };
         "StatsTid.Backend.Api.Endpoints.TerminationPayoutRequestEndpoints.CreateTerminationPayoutRequestBody": {
             entitlementType?: string | null;

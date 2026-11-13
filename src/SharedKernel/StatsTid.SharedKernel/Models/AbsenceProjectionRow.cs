@@ -42,7 +42,7 @@ public sealed class AbsenceProjectionRow
     public string Source { get; init; } = HoursSource.TimePost;
 
     /// <summary>
-    /// S145 / A0 — <c>superseded_by_outbox_id</c> column: the <c>outbox_id</c> of the Skema re-save
+    /// S145 / A0 — <c>superseded_by_outbox_id</c> column: the <c>outbox_id</c> of the Skema re-save or clear
     /// that replaced this row, or null while it is the current value of its cell. A superseded row
     /// is retained for replay and audit; the vacation settlement and every quota total count
     /// current rows only.

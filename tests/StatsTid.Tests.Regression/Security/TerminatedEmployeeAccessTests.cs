@@ -41,7 +41,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// register row + the endpoint comment before "fixing" either.</para>
 ///
 /// <para><b>S136 / TASK-13603 amendment (SEC-046, ADR-040 D3):</b> the two REGISTRATION WRITERS
-/// (<c>POST /api/time-entries</c>, <c>POST /api/skema/{id}/save</c>) joined the R9c allowlist —
+/// (<c>POST /api/time-entries</c>, retired in S148 R-20, and <c>POST /api/skema/{id}/save</c>) joined the R9c allowlist —
 /// terminated-inclusive validator + terminated-inclusive subject read + an explicit D3 role
 /// floor. The old accidents this replaces: the time-entry POST had NO subject read at all, so a
 /// terminated employee's live token could WRITE (SEC-046's live surface); the skema save 404'd a
@@ -516,24 +516,6 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
     //     not exempt, on the leaver whose window makes the case real).
     // ════════════════════════════════════════════════════════════════════════
 
-    /// <summary>SEC-046, writer #1: a terminated employee's OWN still-valid JWT can no longer
-    /// register time — 403, and the refused POST leaves ZERO projection rows / outbox events
-    /// (TOTAL counts, unfiltered). RED-on-old: pre-S136 this exact call was 201 for any date.
-    /// The subject's window is NULL-unbounded here, so the 403 proves the D3 ROLE floor fires
-    /// on deactivation alone — independent of the window gate.</summary>
-    [Fact]
-    public async Task TimeEntry_TerminatedSelf_LiveToken_Is403_AndWritesNothing()
-    {
-        var employeeId = await SeedTerminatedEmployeeAsync();
-
-        var rsp = await PostTimeEntryAsync(
-            ClientWith(EmployeeToken(employeeId, OrgId)), employeeId, new DateOnly(2026, 3, 10));
-
-        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
-        Assert.Equal(0L, await CountTimeEntryRowsTotalAsync(employeeId));
-        Assert.Equal(0L, await CountEmployeeStreamOutboxTotalAsync(employeeId));
-    }
-
     /// <summary>SEC-046, writer #2: the same terminated-self token on the skema save → 403.
     /// DELIBERATE STATUS CHANGE: pre-S136 this was a 404 ("Employee not found") — the
     /// active-only subject read hiding the leaver by accident. The refusal is now the explicit
@@ -548,21 +530,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
         Assert.Equal(0L, await CountTimeEntryRowsTotalAsync(employeeId));
-    }
-
-    /// <summary>The positive half, writer #1: in-subtree HR registers an IN-WINDOW-dated time
-    /// entry for a deactivated leaver → 201 (was 403 at the active-only validator pre-S136).
-    /// Window [2026-01-01, 2026-03-15]; the entry is dated 2026-03-10.</summary>
-    [Fact]
-    public async Task TimeEntry_DeactivatedLeaver_HrInScope_InWindowDate_Is201()
-    {
-        var employeeId = await SeedTerminatedEmployeeAsync();
-        await SetEmploymentWindowAsync(employeeId, new DateOnly(2026, 1, 1), new DateOnly(2026, 3, 15));
-
-        var rsp = await PostTimeEntryAsync(HrClient(CoveringOrg), employeeId, new DateOnly(2026, 3, 10));
-
-        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
-        Assert.Equal(1L, await CountTimeEntryRowsTotalAsync(employeeId));
+        Assert.Equal(0L, await CountEmployeeStreamOutboxTotalAsync(employeeId));
     }
 
     /// <summary>The positive half, writer #2: in-subtree HR saves an IN-WINDOW-dated skema
@@ -594,18 +562,13 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         await SetEmploymentWindowAsync(employeeId, new DateOnly(2026, 1, 1), new DateOnly(2026, 3, 15));
         var probedDate = new DateOnly(2026, 3, 20); // after the end, inside the save month
 
-        var teRsp = await PostTimeEntryAsync(HrClient(CoveringOrg), employeeId, probedDate);
-        var teBody = await teRsp.Content.ReadAsStringAsync();
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, teRsp.StatusCode);
-        Assert.Contains("outside_employment_period", teBody);
-        Assert.DoesNotContain("2026-03-20", teBody);
-        Assert.DoesNotContain("20-03-2026", teBody);
-
         var skRsp = await PostSkemaEntrySaveAsync(HrClient(CoveringOrg), employeeId, probedDate);
         var skBody = await skRsp.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.UnprocessableEntity, skRsp.StatusCode);
-        // ONE construction site — the two writers' bodies are byte-identical by construction.
-        Assert.Equal(teBody, skBody);
+        // S148 R-20: the date-free asserts moved here from the retired time-entry leg.
+        Assert.Contains("outside_employment_period", skBody);
+        Assert.DoesNotContain("2026-03-20", skBody);
+        Assert.DoesNotContain("20-03-2026", skBody);
 
         Assert.Equal(0L, await CountTimeEntryRowsTotalAsync(employeeId));
         Assert.Equal(0L, await CountEmployeeStreamOutboxTotalAsync(employeeId));
@@ -620,9 +583,6 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         var employeeId = await SeedTerminatedEmployeeAsync();
         await SetEmploymentWindowAsync(employeeId, new DateOnly(2026, 1, 1), new DateOnly(2026, 3, 15));
         var leader = ClientWith(LeaderToken("ldr_s136_wr", OrgId));
-
-        var teRsp = await PostTimeEntryAsync(leader, employeeId, new DateOnly(2026, 3, 10));
-        Assert.Equal(HttpStatusCode.Forbidden, teRsp.StatusCode);
 
         var skRsp = await PostSkemaEntrySaveAsync(leader, employeeId, new DateOnly(2026, 3, 10));
         Assert.Equal(HttpStatusCode.Forbidden, skRsp.StatusCode);
@@ -641,7 +601,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
     /// whereas this writes in-window registration FACTS the window itself still bounds.
     ///
     /// <para><b>S147 RE-DECISION (OQ-2 / R-30) — renamed from
-    /// <c>TimeEntry_DeactivatedHrActor_OwnInWindowFact_Is201_AdjudicatedAccepted</c>.</b> The owner re-decided
+    /// <c>TimeEntry_DeactivatedHrActor_OwnInWindowFact_Is201_AdjudicatedAccepted</c>, then (S148 R-20, the route retired) to this name.</b> The owner re-decided
     /// the S136 residual: the leaver's OWN access ends the day after the last day, whatever the role. The
     /// shared organisation-scope check now refuses a departed actor acting on their OWN record, before its HR
     /// gate (<c>DepartedSubject</c>). So the same call now answers 403 with the clause's date-free reason, and
@@ -650,13 +610,15 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
     /// <para>Kind F. Red conditions: <c>Assert 403</c> and the zero-row assert — until S147 the HR gate
     /// admitted the deactivated HR self and the entry was written (201).</para></summary>
     [Fact]
-    public async Task TimeEntry_DeactivatedHrActor_OwnInWindowFact_Is403_ReDecidedS147()
+    public async Task SkemaSave_DeactivatedHrActor_OwnInWindowFact_Is403_ReDecidedS147()
     {
         // The deactivated subject IS the actor: an HR person whose own employment ended.
         var hrActor = await SeedTerminatedEmployeeAsync();
         await SetEmploymentWindowAsync(hrActor, new DateOnly(2026, 1, 1), new DateOnly(2026, 3, 15));
 
-        var rsp = await PostTimeEntryAsync(
+        // S148 R-20 re-point: the own write is a Skema save (POST /api/time-entries is retired); the
+        // 403, the DenyReason and the zero-row asserts below are unchanged.
+        var rsp = await PostSkemaEntrySaveAsync(
             ClientWith(HrToken(hrActor, OrgId)), hrActor, new DateOnly(2026, 3, 10));
 
         // S147 OQ-2 / R-30: was Assert.Equal(HttpStatusCode.Created, ...) and a count of 1.
@@ -930,13 +892,6 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
     }
 
     // ── S136 / TASK-13603 — registration-writer helpers (the SEC-046 section) ───────────────
-
-    /// <summary>The direct time-entry POST (SEC-046's live surface), fixture-dimension body
-    /// (org STY01 / agreement AC).</summary>
-    private static Task<HttpResponseMessage> PostTimeEntryAsync(
-        HttpClient client, string employeeId, DateOnly date, decimal hours = 7.4m)
-        => client.PostAsJsonAsync("/api/time-entries",
-            new { employeeId, date, hours, taskId = (string?)null, activityType = "NORMAL", agreementCode = "AC" });
 
     /// <summary>An Entries-only skema save for the date's month — one project entry, no
     /// absences (keeps the rule-engine/entitlement machinery out of these ACCESS pins).</summary>

@@ -31,11 +31,18 @@
 # convention as sprint-close-guard.ps1. The gate is about routing, not about
 # stopping work when the hook itself is confused.
 #
-# Test seam: pipe a PreToolUse payload on stdin, e.g.
+# Test seam: pipe a PreToolUse payload on stdin, FROM A SCRATCH FOLDER with the guard's absolute path (the
+# log goes to <cwd>/.claude/telemetry; with CLAUDE_PROJECT_DIR exported it would go to the live log), e.g.
 #   '{"tool_name":"Agent","tool_input":{"subagent_type":"reviewer","model":"sonnet"}}'
-#   | powershell -File .claude/hooks/model-routing-guard.ps1 ; echo $LASTEXITCODE
+#   | powershell -File C:\Users\b200895\source\repos\StatsTid\.claude\hooks\model-routing-guard.ps1 ; echo $LASTEXITCODE
 
 $ErrorActionPreference = 'Stop'
+
+# S147 post-close (FAIL-009): run from the project root when Claude Code starts the hook. The session's
+# working directory follows a persisted Bash `cd` into a subfolder or a worktree, and the telemetry log below
+# is a relative path that must not follow it (lines written in a worktree were deleted with the worktree).
+# CLAUDE_PROJECT_DIR is set only for hook commands, so a hand-run seam test keeps its own scratch folder.
+if ($env:CLAUDE_PROJECT_DIR -and (Test-Path -LiteralPath $env:CLAUDE_PROJECT_DIR)) { Set-Location -LiteralPath $env:CLAUDE_PROJECT_DIR }
 
 $rawInput = [Console]::In.ReadToEnd()
 if ([string]::IsNullOrWhiteSpace($rawInput)) { exit 0 }
@@ -111,7 +118,7 @@ if ($ReviewRoles -contains $type) {
 # pass too, so this check runs for EVERY type except `reviewer` (handled above), the read-only pass
 # list and `fork` (both exit before reaching here). Signature = the placeholder instruction
 # `reviewed-by-model: <...>` or a self-granted floor clause.
-# A literal id (`reviewed-by-model: claude-fable-5-1`, e.g. a harness fixture edit) does not match.
+# A literal id (`reviewed-by-model: claude-fable-5-2`, e.g. a harness fixture edit) does not match.
 # Detection of a signature, not a closed door: a brief avoiding both phrases still passes.
 $prompt = ''
 if ($in.PSObject.Properties['prompt'] -and $in.prompt) { $prompt = [string]$in.prompt }

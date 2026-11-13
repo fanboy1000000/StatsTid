@@ -7,6 +7,7 @@ using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
@@ -44,24 +45,39 @@ public static class SkemaEndpoints
     ];
 
     /// <summary>
-    /// Returns the absence types available for a given agreement code.
-    /// Child sick days vary: AC=1, HK=2, PROSA=3.
+    /// The absence types the catalogue lists for an agreement at a date: the base list in its
+    /// order, with the child's-sick slot (<see cref="AbsenceTypes.ChildSick1"/>'s place) replaced
+    /// by <paramref name="childSickCodesOffered"/>, the codes that agreement's dated CHILD_SICK
+    /// config offers at that date (<see cref="ChildSickCodesOfferedAsync"/>): OK24 day 1 and 2;
+    /// OK26 the call-home day and day 1 to 3; none without a dated row (QUAL-236).
     /// </summary>
-    private static HashSet<string> GetAbsenceTypesForAgreement(string agreementCode)
+    private static List<string> GetAbsenceTypesForAgreement(IReadOnlyList<string> childSickCodesOffered)
     {
-        var types = new HashSet<string>(BaseAbsenceTypes, StringComparer.Ordinal);
-
-        // HK gets 2 child sick days, PROSA gets 3
-        // (S147 / TASK-14708: the codes read the constants; WHICH agreements get day 2 and day 3
-        // is unchanged here — that is QUAL-236's, S148.)
-        if (agreementCode is "HK" or "PROSA")
-            types.Add(AbsenceTypes.ChildSick2);
-
-        if (agreementCode is "PROSA")
-            types.Add(AbsenceTypes.ChildSick3);
-
+        var types = new List<string>(BaseAbsenceTypes.Length + childSickCodesOffered.Count);
+        foreach (var type in BaseAbsenceTypes)
+        {
+            if (string.Equals(type, AbsenceTypes.ChildSick1, StringComparison.Ordinal))
+                types.AddRange(childSickCodesOffered);
+            else
+                types.Add(type);
+        }
         return types;
     }
+
+    /// <summary>
+    /// The child's-sick codes <paramref name="agreementCode"/> offers on <paramref name="date"/>:
+    /// the CHILD_SICK row dated at that date under that date's OK version (the dated read gate (c)
+    /// of <see cref="ComputeAbsenceCatalogAsync"/> makes for SPECIAL_HOLIDAY), turned into codes by
+    /// <c>DefaultEntitlementConfigs.ChildSickCodesOffered</c> (day 1 up to min(whole quota, 3), and
+    /// the call-home day where its OK version grants it). The one read the catalogue (at its
+    /// anchor), the save's per-code check (at the row's own date) and the illness chain (at day
+    /// 1's date) share, so the three cannot disagree (QUAL-236; ADR-021, ADR-014).
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> ChildSickCodesOfferedAsync(
+        EntitlementConfigRepository entitlementConfigRepo, string agreementCode, DateOnly date, CancellationToken ct)
+        => StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodesOffered(
+            await entitlementConfigRepo.GetByTypeAtAsync(
+                "CHILD_SICK", agreementCode, OkVersionResolver.ResolveVersion(date), date, ct));
 
     // ── Absence type → entitlement type mapping + StandardDayHours ──
     // S65 / TASK-6502 — promoted to the shared Backend.Api EntitlementMapping so the new
@@ -279,8 +295,8 @@ public static class SkemaEndpoints
             // S34 / TASK-3411 — ADR-023 D2 binding cutover for agreement_code on past-month
             // queries. The absence-types list shown for a past month must reflect the
             // agreement that was in effect at the START of that month (e.g. a user who
-            // switched AC → HK today should still see only 1 child-sick-day option when
-            // viewing September; HK's CHILD_SICK_DAY_2 should NOT appear retroactively).
+            // switched AC → HK today should still see, when viewing September, the absence
+            // types AC's dated entitlement configs gave, not HK's, applied retroactively).
             //
             // ADR-023 D3 (Skema = graceful-fallback consumer on the GET path): null dated
             // lookup falls through to live `user.AgreementCode`. Defensive only — the
@@ -374,8 +390,7 @@ public static class SkemaEndpoints
             var workTime = workTimeRows
                 .Select(w => new SkemaWorkTimeDayRow(
                     Date: w.Date,
-                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList(),
-                    ManualHours: w.ManualHours))
+                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList()))
                 .ToList();
 
             // ── TASK-5603 per-day norm (dailyNorm) — S65 / TASK-6502 extraction ──
@@ -473,24 +488,6 @@ public static class SkemaEndpoints
                     .Select(c => new SkemaAbsenceTypeRow(c.Type, c.Label, c.FullDayOnly))
                     .ToList());
 
-            // ── S72 / TASK-7201 — boundary-day workTime (SPRINT-72 R6 input) ──
-            // EXACTLY two extra days — the last day of the previous month and the first day
-            // of the next month — so the client-side §J 11-hour rest analysis has the
-            // adjacent registrations at month edges. Same row shape as `workTime`; days
-            // without a registration serve no row (consistent with the month array).
-            var prevBoundaryDay = monthStart.AddDays(-1);
-            var nextBoundaryDay = monthEnd.AddDays(1);
-            var prevBoundaryRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                employeeId, prevBoundaryDay, prevBoundaryDay, ct);
-            var nextBoundaryRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                employeeId, nextBoundaryDay, nextBoundaryDay, ct);
-            var boundaryWorkTime = prevBoundaryRows.Concat(nextBoundaryRows)
-                .Select(w => new SkemaWorkTimeDayRow(
-                    Date: w.Date,
-                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList(),
-                    ManualHours: w.ManualHours))
-                .ToList();
-
             // ── S72 / TASK-7201 — R10 fullDayNormAtMonthEnd scalar ──
             // The employee's WEEKDAY full-day norm (WeeklyNorm × fraction / 5, 2 decimals)
             // resolved via the dated profile + config at the viewed month's LAST day,
@@ -553,6 +550,38 @@ public static class SkemaEndpoints
                     return ApprovalReadTier.MonthNotSubmittedForbidden();
                 }
             }
+
+            // ── S72 / TASK-7201 — boundary-day workTime (SPRINT-72 R6 input) ──
+            // EXACTLY two extra days — the last day of the previous month and the first day
+            // of the next month — so the client-side §J 11-hour rest analysis has the
+            // adjacent registrations at month edges. Same row shape as `workTime`; days
+            // without a registration serve no row (consistent with the month array).
+            // Each boundary day belongs to its own month, and a manager sees nothing of a month
+            // the employee has not submitted (RES-002): for a leader-tier read a boundary row is
+            // served only when its month is submitted, by the month gate's own predicate
+            // (ApprovalVisibility.IsSubmittedToManager, above). The employee and HR-or-above get both.
+            // Read after the month gate above, so a leader refused there costs none of these reads.
+            var prevBoundaryDay = monthStart.AddDays(-1);
+            var nextBoundaryDay = monthEnd.AddDays(1);
+            var servePrevBoundary = !leaderTierRead || ApprovalVisibility.IsSubmittedToManager(
+                (await approvalRepo.GetByEmployeeAndPeriodAsync(
+                    employeeId, monthStart.AddMonths(-1), prevBoundaryDay, ct))?.Status);
+            var serveNextBoundary = !leaderTierRead || ApprovalVisibility.IsSubmittedToManager(
+                (await approvalRepo.GetByEmployeeAndPeriodAsync(
+                    employeeId, nextBoundaryDay, nextBoundaryDay.AddMonths(1).AddDays(-1), ct))?.Status);
+            var prevBoundaryRows = servePrevBoundary
+                ? await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, prevBoundaryDay, prevBoundaryDay, ct)
+                : Array.Empty<WorkTimeProjectionRow>();
+            var nextBoundaryRows = serveNextBoundary
+                ? await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, nextBoundaryDay, nextBoundaryDay, ct)
+                : Array.Empty<WorkTimeProjectionRow>();
+            var boundaryWorkTime = prevBoundaryRows.Concat(nextBoundaryRows)
+                .Select(w => new SkemaWorkTimeDayRow(
+                    Date: w.Date,
+                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList()))
+                .ToList();
 
             SkemaApprovalInfo? approval = period is not null
                 ? new SkemaApprovalInfo(
@@ -633,6 +662,12 @@ public static class SkemaEndpoints
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             AbsenceProjectionRepository absenceProjectionRepo,
             WorkTimeProjectionRepository workTimeProjectionRepo,
+            // S148 / TASK-14840 (addendum A1 D-5, NR-A5) — one audit_projection row per cell clear,
+            // written in this save's transaction (ADR-026 D2 endpoint-direct dispatch).
+            IAuditProjectionMapper<TimeEntryCleared> timeEntryClearedAuditMapper,
+            IAuditProjectionMapper<AbsenceCleared> absenceClearedAuditMapper,
+            IAuditProjectionMapper<WorkTimeCleared> workTimeClearedAuditMapper,
+            AuditProjectionRepository auditRepo,
             // S60 / TASK-6005 — dated employment profile for the part_time_fraction used in
             // the MONTHLY_ACCRUAL earned-to-date / bookableLimit computation.
             IEmploymentProfileResolver profileResolver,
@@ -788,22 +823,31 @@ public static class SkemaEndpoints
             if (ApprovalPeriodSaveLock.IsPeriodLockedForSave(period))
                 return ApprovalPeriodSaveLock.PeriodLockedForSaveConflict(period!);
 
-            // ── S145 / TASK-14507 (A0, R24 + the Step-5a ProjectCode finding) — cell shape ──
-            // A Skema save REPLACES each posted cell (see the insert loops below), so every cell
-            // must carry a real value. Two shapes are refused with a plain 400, for EVERY cell of
-            // the save BEFORE anything else happens (before the rule-engine call, the advisory lock
-            // and the transaction), so one bad cell fails the whole save and nothing is written:
-            //   (1) hours <= 0, for an entry or an absence. Mirrors the `hours <= 0` half of
-            //       RequestValidator.ValidateTimeEntry (the additive route's rule). Why: clearing a
-            //       cell is out of S145 (SPRINT-72 R17 stays open), and a 0-hour CURRENT row would be
+            // The cells this save empties (request.Cleared; owner Q2, addendum A1 D-1). Each passes
+            // every gate the save has, in the save's order, before any write (D-2): the checks below,
+            // the employment-window gate and the approval re-read inside the lock.
+            var clearedEntries = request.Cleared?.Entries ?? Array.Empty<SkemaClearedEntry>();
+            var clearedAbsences = request.Cleared?.Absences ?? Array.Empty<SkemaClearedAbsence>();
+            var clearedWorkTime = request.Cleared?.WorkTime ?? Array.Empty<SkemaClearedWorkTimeDay>();
+
+            // ── Cell shape (S145 A0, R24; owner Q2) ──
+            // A Skema save REPLACES each posted cell (see the insert loops below), and EMPTIES each
+            // cleared one, so every posted cell must carry a real value and every cell must have one
+            // meaning. These shapes are refused with a plain 400, for EVERY cell of the save BEFORE
+            // anything else happens (before the rule-engine call, the advisory lock and the
+            // transaction), so one bad cell fails the whole save and nothing is written:
+            //   (1) posted hours <= 0, for an entry or an absence. A 0-hour CURRENT row would be
             //       counted by the strand check, served by the GETs and emitted as a 0-hour
-            //       NORMAL_HOURS line. The grid already drops empty and zero cells before posting
-            //       (useSkema.ts), so this refuses only a hand-built request. The storage design still
-            //       allows a later retraction (mark the current row superseded, insert nothing).
-            //   (2) an entry whose projectCode is null, empty or whitespace (IsNullOrWhiteSpace, the
-            //       RequestValidator idiom). `required string` only demands that the property is
-            //       PRESENT, so an explicit JSON null passes model binding and would become a NULL
-            //       task_id, i.e. a cell keyed by no task at all.
+            //       NORMAL_HOURS line, so a cell never stores 0: emptying it is a clear (the
+            //       Cleared member), which inserts no row at all. 0 never means "remove" here, so a
+            //       hand-built or stale request carrying 0 cannot delete silently.
+            //   (2) an entry, posted or cleared, whose projectCode is null, empty or whitespace
+            //       (IsNullOrWhiteSpace). `required string` only demands that the property is
+            //       PRESENT, so an explicit JSON null passes model binding and would key a cell by
+            //       no task at all.
+            //   (3) a cell both posted and cleared, or cleared twice, in one save
+            //       (skema_cell_cleared_and_posted, skema_cell_cleared_twice), naming the date and
+            //       the cell key: one save says one thing about a cell.
             // The cell date echoed back is the request's own registration date, never an
             // employment date (ADR-040 D7).
             foreach (var entry in request.Entries ?? Array.Empty<SkemaEntry>())
@@ -837,6 +881,62 @@ public static class SkemaEndpoints
                         message = $"Timer for {absence.Date:dd-MM-yyyy} skal være større end 0."
                     });
             }
+            foreach (var cleared in clearedEntries)
+            {
+                if (string.IsNullOrWhiteSpace(cleared.ProjectCode))
+                    return Results.BadRequest(new
+                    {
+                        error = "skema_entry_project_code_missing",
+                        date = cleared.Date,
+                        message = $"Registreringen for {cleared.Date:dd-MM-yyyy} mangler en projektkode."
+                    });
+            }
+
+            // (3) One meaning per cell. The sets built here are the cleared cells every later step
+            // keys on (the replaced-feriedage read, the bound, the child's-sick judge, the clears).
+            var postedEntryCells = new HashSet<(DateOnly Date, string ProjectCode)>(
+                (request.Entries ?? Array.Empty<SkemaEntry>()).Select(e => (e.Date, e.ProjectCode)));
+            var clearedEntryCells = new HashSet<(DateOnly Date, string ProjectCode)>();
+            foreach (var cleared in clearedEntries)
+            {
+                var cell = (cleared.Date, cleared.ProjectCode);
+                if (postedEntryCells.Contains(cell) || !clearedEntryCells.Add(cell))
+                    return Results.BadRequest(new
+                    {
+                        error = postedEntryCells.Contains(cell) ? "skema_cell_cleared_and_posted" : "skema_cell_cleared_twice",
+                        date = cleared.Date,
+                        projectCode = cleared.ProjectCode,
+                        message = $"Projektet {cleared.ProjectCode} den {cleared.Date:dd-MM-yyyy} må kun gemmes eller fjernes én gang pr. gemning."
+                    });
+            }
+            var postedAbsenceCells = new HashSet<(DateOnly Date, string AbsenceType)>(
+                (request.Absences ?? Array.Empty<SkemaAbsence>()).Select(a => (a.Date, a.AbsenceType)));
+            var clearedAbsenceCells = new HashSet<(DateOnly Date, string AbsenceType)>();
+            foreach (var cleared in clearedAbsences)
+            {
+                var cell = (cleared.Date, cleared.AbsenceType);
+                if (postedAbsenceCells.Contains(cell) || !clearedAbsenceCells.Add(cell))
+                    return Results.BadRequest(new
+                    {
+                        error = postedAbsenceCells.Contains(cell) ? "skema_cell_cleared_and_posted" : "skema_cell_cleared_twice",
+                        date = cleared.Date,
+                        absenceType = cleared.AbsenceType,
+                        message = $"Fraværet {cleared.AbsenceType} den {cleared.Date:dd-MM-yyyy} må kun gemmes eller fjernes én gang pr. gemning."
+                    });
+            }
+            var postedWorkTimeDates = new HashSet<DateOnly>(
+                (request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>()).Select(d => d.Date));
+            var clearedWorkTimeDates = new HashSet<DateOnly>();
+            foreach (var cleared in clearedWorkTime)
+            {
+                if (postedWorkTimeDates.Contains(cleared.Date) || !clearedWorkTimeDates.Add(cleared.Date))
+                    return Results.BadRequest(new
+                    {
+                        error = postedWorkTimeDates.Contains(cleared.Date) ? "skema_cell_cleared_and_posted" : "skema_cell_cleared_twice",
+                        date = cleared.Date,
+                        message = $"Arbejdstiden den {cleared.Date:dd-MM-yyyy} må kun gemmes eller fjernes én gang pr. gemning."
+                    });
+            }
 
             // ── Entry/absence date-range validation (S145 / Step 7a B-1, R-128) ──
             // The sibling of the S56 work-time check below, for the same reason: the approval-lock
@@ -849,24 +949,21 @@ public static class SkemaEndpoints
             // already APPROVED or exported September, whose recorded hours payroll reads (R14).
             // Refused here, before the rule-engine call, the advisory lock and the transaction, so
             // nothing is written and no event is emitted. With the work-time check below, all three
-            // arrays (Entries, Absences, WorkTime) are now month-bounded. The date in the message is
-            // the request's own registration date, never an employment date (ADR-040 D7).
-            foreach (var entry in request.Entries ?? Array.Empty<SkemaEntry>())
+            // arrays (Entries, Absences, WorkTime) are now month-bounded. A clear retires with the
+            // same unbounded mark, so every cleared date is held to the month too, one code for all
+            // three cleared arrays (addendum A1 D-1 rule 1). The date in the message is the request's
+            // own registration date, never an employment date (ADR-040 D7).
+            foreach (var cellDate in (request.Entries ?? Array.Empty<SkemaEntry>()).Select(e => e.Date)
+                .Concat((request.Absences ?? Array.Empty<SkemaAbsence>()).Select(a => a.Date))
+                .Concat(clearedEntries.Select(c => c.Date))
+                .Concat(clearedAbsences.Select(c => c.Date))
+                .Concat(clearedWorkTime.Select(c => c.Date)))
             {
-                if (entry.Date < monthStart || entry.Date > monthEnd)
+                if (cellDate < monthStart || cellDate > monthEnd)
                     return Results.BadRequest(new
                     {
                         error = "skema_cell_date_out_of_range",
-                        message = $"Skema date {entry.Date:yyyy-MM-dd} is outside the requested period {request.Year}-{request.Month:D2}."
-                    });
-            }
-            foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
-            {
-                if (absence.Date < monthStart || absence.Date > monthEnd)
-                    return Results.BadRequest(new
-                    {
-                        error = "skema_cell_date_out_of_range",
-                        message = $"Skema date {absence.Date:yyyy-MM-dd} is outside the requested period {request.Year}-{request.Month:D2}."
+                        message = $"Skema date {cellDate:yyyy-MM-dd} is outside the requested period {request.Year}-{request.Month:D2}."
                     });
             }
 
@@ -892,24 +989,14 @@ public static class SkemaEndpoints
                     // Authoritative guard mirroring the inline absence "exceed norm day"
                     // cap below: a physical input invariant (24h/day), NOT an agreement/OK
                     // rule, so it stays in the Backend endpoint — no rule-engine hop.
-                    // Three checks, in order: (1) manual hours cannot be negative — without
-                    // this, large interval hours could net under 24 via a negative manual
-                    // value while still persisting >24 worked hours; (2) intervals on a day
-                    // cannot overlap (each interval would otherwise double-count); (3) the
-                    // day's total worked time (interval hours + manual hours) cannot exceed
-                    // 24h. Exactly 24,0 t is allowed. Interval-hour computation mirrors the
+                    // A day's worked time is its clock periods alone (ADR-043 D10, D-2.4), so
+                    // two checks, in order: (2) intervals on a day cannot overlap (each
+                    // interval would otherwise double-count); (3) the day's interval hours
+                    // cannot exceed 24h. Exactly 24,0 t is allowed. There is no check (1):
+                    // it guarded manual hours, which are retired; the labels are kept so
+                    // existing cites stay valid. Interval-hour computation mirrors the
                     // frontend calcIntervalHours (positive end>start diffs, total seconds
                     // rounded to 2 decimals) so UI and server agree.
-
-                    // (1) Negative manual hours.
-                    if (day.ManualHours < 0m)
-                        return Results.Json(new
-                        {
-                            error = "work_time_negative_manual_hours",
-                            date = day.Date,
-                            manualHours = day.ManualHours,
-                            message = $"Manuelt registrerede timer for {day.Date:dd-MM-yyyy} kan ikke være negative."
-                        }, statusCode: 422);
 
                     // Parse to (startSec, endSec) keeping only positive-duration intervals,
                     // matching the frontend's `if (diff > 0)` filter.
@@ -923,6 +1010,20 @@ public static class SkemaEndpoints
                             parsedIntervals.Add((startSec, endSec));
                         }
                     }
+
+                    // (W-a, owner Q2; addendum A1 D-1 rule 5, NR-A3) A posted day must hold at least
+                    // one positive-duration interval. A day is emptied by a clear (cleared.workTime),
+                    // never by posting it empty: an empty day is what a client sends by mistake (a
+                    // stale or mid-typing send), and the server does not read it as an intent to
+                    // remove. It is also the work-time form of the posted-hours <= 0 rule above: no
+                    // 0-hour day is ever stored.
+                    if (parsedIntervals.Count == 0)
+                        return Results.BadRequest(new
+                        {
+                            error = "skema_work_time_day_empty",
+                            date = day.Date,
+                            message = $"Arbejdstiden for {day.Date:dd-MM-yyyy} har ingen arbejdsperiode. En dag uden perioder fjernes, den gemmes ikke tom."
+                        });
 
                     // (2) Overlapping intervals: sort by start, reject if any interval starts
                     // strictly before the previous one ends. Touching boundaries (==) are OK.
@@ -938,10 +1039,13 @@ public static class SkemaEndpoints
                             }, statusCode: 422);
                     }
 
-                    // (3) Total worked hours > 24.
+                    // (3) Total worked hours > 24, on interval hours alone. A backstop that no
+                    // input and no test reaches today: TryParseTimeToSeconds accepts hours 0-23
+                    // only and check (2) refuses overlaps first, so a day's intervals top out at
+                    // 86 399 s, which rounds to 24,00. It guards the 24-hour rule in case the
+                    // interval parser changes.
                     var intervalSeconds = parsedIntervals.Sum(p => p.End - p.Start);
-                    var periodHours = Math.Round(intervalSeconds / 3600m, 2);
-                    var totalHours = Math.Round(periodHours + day.ManualHours, 2);
+                    var totalHours = Math.Round(intervalSeconds / 3600m, 2);
                     if (totalHours > 24m)
                         return Results.Json(new
                         {
@@ -964,16 +1068,54 @@ public static class SkemaEndpoints
             // codes it was served, so this refuses a hand-built or stale request. Refused here,
             // before any absence lookup, the rule-engine call, the advisory lock and the
             // transaction, so nothing is written. The body names the code, never a date (the gate
-            // is about the code, not the day).
-            foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
+            // is about the code, not the day). A cleared code passes the same gate, and only it: a
+            // clear is never refused because the agreement no longer offers the code (the per-code
+            // and eligibility checks below judge posted rows), addendum A1 D-1 rule 3.
+            foreach (var absenceType in (request.Absences ?? Array.Empty<SkemaAbsence>()).Select(a => a.AbsenceType)
+                .Concat(clearedAbsences.Select(c => c.AbsenceType)))
             {
-                if (!AbsenceClassification.IsKnown(absence.AbsenceType))
+                if (!AbsenceClassification.IsKnown(absenceType))
                     return Results.Json(new
                     {
                         error = "absence_type_unknown",
-                        absenceType = absence.AbsenceType,
-                        message = $"Fraværstypen '{absence.AbsenceType}' findes ikke."
+                        absenceType,
+                        message = $"Fraværstypen '{absenceType}' findes ikke."
                     }, statusCode: 422);
+            }
+
+            // ── The child's-sick per-code check (QUAL-236) ──
+            // A child's-sick code is saved only on a date whose own list offers it: the agreement
+            // this save validates against (dated at the month start, above) under that date's OK
+            // version, through the one read the catalogue makes (ChildSickCodesOfferedAsync). OK24
+            // offers day 1 and 2; OK26 the call-home day and day 1 to 3; an agreement with no dated
+            // CHILD_SICK row offers none. The grid posts only codes it was served, so this refuses a
+            // hand-built or stale request (HK's day 3 under OK24, a call-home day under OK24).
+            // After the vocabulary gate, so an unknown code still answers absence_type_unknown
+            // first; before every other absence check, the rule-engine calls, the lock and the
+            // transaction, so nothing is written. The body keeps the opt-in refusal's error and
+            // shape, so the screen shows its Danish message, and adds kind = "child-sick-not-offered"
+            // to tell the two apart; its date is the row's own registration date (ADR-040 D7).
+            {
+                var childSickOfferedByDate = new Dictionary<DateOnly, IReadOnlyList<string>>();
+                foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
+                {
+                    if (!StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Contains(absence.AbsenceType))
+                        continue;
+                    if (!childSickOfferedByDate.TryGetValue(absence.Date, out var offered))
+                    {
+                        offered = await ChildSickCodesOfferedAsync(entitlementConfigRepo, agreementCode, absence.Date, ct);
+                        childSickOfferedByDate[absence.Date] = offered;
+                    }
+                    if (!offered.Contains(absence.AbsenceType))
+                        return Results.Json(new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = absence.AbsenceType,
+                            date = absence.Date,
+                            message = $"{AbsenceTypeLabels.LabelFor(absence.AbsenceType)} kan ikke registreres den {absence.Date:dd-MM-yyyy}: overenskomsten giver ikke ret til den på denne dato.",
+                            kind = "child-sick-not-offered",
+                        }, statusCode: 422);
+                }
             }
 
             // ── Per-day absence validation (S47 TASK-2C) ──
@@ -1006,9 +1148,10 @@ public static class SkemaEndpoints
                 //   • ANNUAL_ACTIVITY (academic) ⇒ 7.4 × fraction (calculator fallback) — vacation
                 //     stays bookable;
                 //   • weekend (norm == 0) ⇒ entitlement-consuming rows are rejected (you cannot
-                //     consume a feriedag on a non-working day); NON-entitlement rows keep today's
-                //     legacy flat-7.4 behavior (a sick/leave hour on a Saturday is not gated by an
-                //     entitlement);
+                //     consume a feriedag on a non-working day); NON-entitlement rows are capped here
+                //     at the legacy flat 7.4 only (a sick/leave hour on a Saturday is not gated by an
+                //     entitlement) — the paid-absence day bound below then refuses every credit-class
+                //     hour on a zero-norm day (QUAL-240), so of these only unpaid leave is saved;
                 //   • no dated profile covering the day (null) ⇒ NOT enforced here — the existing
                 //     anchor-422 family below (employment_profile_missing) owns that rejection;
                 //     do NOT relax it.
@@ -1018,6 +1161,13 @@ public static class SkemaEndpoints
                 // folded into the lock) so the common reject path stays a cheap pre-tx 422,
                 // coherent with the sibling duplicate-type / day-norm / eligibility guards already
                 // here; no coherence is lost because the in-lock path is the source of truth.
+                // BESIDE this cap, not inside it, sits the paid-absence day bound (ADR-043 D2;
+                // FindPaidAbsenceDayBoundBreachAsync, after the quota pre-check): this cap sums only
+                // the request's own absences, of every type; the bound judges the day as it will
+                // stand after the save (stored rows plus posted ones) for credit-class absence
+                // against planned minus worked, on every date the save touches, absences or not.
+                // Both stay: the cap still guards the types the bound does not cover. The bound runs
+                // after every refusal here, so on a date both refuse this cap's body answers first.
                 {
                     var absencesByDate = request.Absences.GroupBy(a => a.Date);
                     foreach (var dayGroup in absencesByDate)
@@ -1169,10 +1319,12 @@ public static class SkemaEndpoints
                     {
                         var gateEntitlementType = GetEntitlementType(absence.AbsenceType);
 
-                        // (a) CHILD_SICK — Backend fact-gate (not rule-engine logic): reject if
-                        //     the employee is ineligible as-of THIS absence's date. Absent row ⇒
-                        //     ineligible (same opt-in default as the GET filter).
-                        if (string.Equals(gateEntitlementType, "CHILD_SICK", StringComparison.Ordinal))
+                        // (a) CHILD_SICK — Backend fact-gate (not rule-engine logic): reject a
+                        //     child's-sick code (DefaultEntitlementConfigs.ChildSickCodes, the
+                        //     call-home day included; the entitlement mapping sends none of them to a
+                        //     quota, QUAL-236) if the employee is ineligible as-of THIS absence's
+                        //     date. Absent row ⇒ ineligible (same opt-in default as the GET filter).
+                        if (StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Contains(absence.AbsenceType))
                         {
                             var eligible = (await eligibilityRepo
                                 .GetEligibleAsOfAsync(employeeId, "CHILD_SICK", absence.Date, ct)).Eligible;
@@ -1258,7 +1410,12 @@ public static class SkemaEndpoints
             // bookableLimit MINUS carryover (for IMMEDIATE types it equals the annual
             // effectiveQuota, so behavior is unchanged); SeedQuota seeds total_quota on a
             // first-INSERT with the annual entitlement (its invariant meaning, ADR-021 D6 / P3).
-            var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal GuardCap, decimal SeedQuota)>(StringComparer.Ordinal);
+            // ResetMonth (QUAL-196) is the reset_month that keyed EntitlementYear: it fixes the year's
+            // date window for the used-seed of a balance row the in-lock write creates.
+            // A null SeedQuota (and, for an IMMEDIATE type, a null GuardCap) marks a pro-rated type the
+            // save only clears whose dated profile could not be resolved (addendum A1 D-6, N-1): the
+            // balance pass then reads both from the existing row, and creates none.
+            var entitlementData = new Dictionary<string, (decimal RequestedDays, int EntitlementYear, decimal? GuardCap, decimal? SeedQuota, int ResetMonth)>(StringComparer.Ordinal);
 
             // S73 / TASK-7301 Step-7a B1 — resolve which absence rows are FULL-DAY-ONLY
             // (CARE_DAY / SENIOR_DAY under SPRINT-73 R2), so their consumption divides by the
@@ -1299,36 +1456,44 @@ public static class SkemaEndpoints
             }
 
             // ── S145 / TASK-14507 (A0, R23 as amended by W1) — the replaced cells' stored feriedage ──
-            // A Skema save REPLACES each posted absence cell (employee, date, absence type): the
-            // cell's CURRENT Skema row, if there is one, is marked superseded by the insert below.
-            // So the quota must move by the SIGNED change, per entitlement type:
-            //     delta = Σ new feriedage − Σ stored feriedage of the current rows this save replaces.
+            // A Skema save REPLACES each posted absence cell (employee, date, absence type) and EMPTIES
+            // each cleared one: the cell's CURRENT Skema row, if there is one, is marked superseded by
+            // the insert or by the clear below. So the quota must move by the SIGNED change, per
+            // entitlement type:
+            //     delta = Σ new feriedage − Σ stored feriedage of the current rows this save replaces
+            //             or clears.
             // "Stored" is absences_projection.feriedage, i.e. after any ADR-032 D4 revaluation: exactly
             // what entitlement_balances.used holds for those rows. An unchanged re-save therefore
-            // moves nothing, and a reduction gives days back. Read twice, like the valuation, and
+            // moves nothing, a reduction gives days back, and a clear gives back exactly what the row
+            // holds, never a recomputation (addendum A1 D-6). Read twice, like the valuation, and
             // both times on the caller's transaction: first in phase 2 of the pre-check, on its short
             // read-only REPEATABLE READ snapshot, which the pre-check's balance reads share, so the
             // advisory subtraction is over one real state; then the AUTHORITATIVE re-read under the
-            // consumption lock, which drives the balance write. A null stored feriedage counts 0,
-            // mirroring the `?? 0m` with which the replaced save added it to `used`. Additive
-            // (TIME_POST) rows are never replaced, so the repository read returns Skema rows only.
-            async Task<Dictionary<string, decimal>> ReadReplacedFeriedageByTypeAsync(
+            // consumption lock, before the first write, which drives the clears and the balance write.
+            // A null stored feriedage counts 0, mirroring the `?? 0m` with which the replaced save
+            // added it to `used`. Additive (TIME_POST) rows are never replaced or cleared, so the
+            // repository read returns Skema rows only.
+            async Task<IReadOnlyList<AbsenceProjectionRow>> ReadCurrentAbsenceCellsAsync(
                 NpgsqlConnection conn, NpgsqlTransaction tx)
             {
-                var byType = new Dictionary<string, decimal>(StringComparer.Ordinal);
-                if (request.Absences is not { Length: > 0 }
-                    || !request.Absences.Any(a => GetEntitlementType(a.AbsenceType) is not null))
-                    return byType; // nothing posted consumes quota: no replaced quota to read.
-                var postedCells = new HashSet<(DateOnly Date, string AbsenceType)>(
-                    request.Absences.Select(a => (a.Date, a.AbsenceType)));
-                var from = request.Absences.Min(a => a.Date);
-                var to = request.Absences.Max(a => a.Date);
+                var posted = request.Absences ?? Array.Empty<SkemaAbsence>();
+                if (clearedAbsenceCells.Count == 0 && !posted.Any(a => GetEntitlementType(a.AbsenceType) is not null))
+                    return Array.Empty<AbsenceProjectionRow>(); // nothing cleared, nothing posted consumes quota.
+                var cellDates = posted.Select(a => a.Date).Concat(clearedAbsenceCells.Select(c => c.Date)).ToList();
                 var currentRows = await absenceProjectionRepo.GetCurrentSkemaRowsAsync(
-                    conn, tx, employeeId, from, to, ct);
-                foreach (var row in currentRows)
+                    conn, tx, employeeId, cellDates.Min(), cellDates.Max(), ct);
+                // A current cell this save neither posts nor clears stays exactly as it is.
+                return currentRows
+                    .Where(r => postedAbsenceCells.Contains((r.Date, r.AbsenceType))
+                        || clearedAbsenceCells.Contains((r.Date, r.AbsenceType)))
+                    .ToList();
+            }
+
+            static Dictionary<string, decimal> ReplacedFeriedageByType(IEnumerable<AbsenceProjectionRow> replacedRows)
+            {
+                var byType = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                foreach (var row in replacedRows)
                 {
-                    if (!postedCells.Contains((row.Date, row.AbsenceType)))
-                        continue; // a current cell this save does not post stays exactly as it is.
                     if (!AbsenceToEntitlementType.TryGetValue(row.AbsenceType, out var replacedType) || replacedType is null)
                         continue; // non-entitlement absence types consume no quota.
                     byType[replacedType] = byType.GetValueOrDefault(replacedType) + (row.Feriedage ?? 0m);
@@ -1336,7 +1501,15 @@ public static class SkemaEndpoints
                 return byType;
             }
 
-            if (request.Absences is not null && request.Absences.Length > 0)
+            // The cleared absence cells that draw on an entitlement balance, by type: a type the save
+            // only clears still gets a quota plan (requested 0), so the in-lock balance pass can give
+            // its days back (addendum A1 D-6).
+            var clearedEntitlementTypes = clearedAbsences
+                .Select(c => AbsenceToEntitlementType.TryGetValue(c.AbsenceType, out var t) ? t : null)
+                .OfType<string>()
+                .ToHashSet(StringComparer.Ordinal);
+
+            if (request.Absences is { Length: > 0 } || clearedEntitlementTypes.Count > 0)
             {
                 // ── S66 / TASK-6603 — ADR-032 D2 PROVISIONAL per-row feriedage (pre-lock) ──
                 // requestedDays for the rule-engine advisory validation is now the Σ of PER-ROW
@@ -1347,16 +1520,20 @@ public static class SkemaEndpoints
                 // (the :910-area TOCTOU comment, extended below for the D2 two-phase contract).
                 // The full-day-only divisor consistency (B1) applies here too so the advisory
                 // requestedDays sees the same 1.0-per-full-day total the authoritative path will.
+                var postedForQuota = request.Absences ?? Array.Empty<SkemaAbsence>();
                 var provisionalFullDayOnly = await ResolveFullDayOnlyIndicesAsync(null, null);
-                var provisional = await consumptionCalculator.ComputeAsync(
-                    employeeId,
-                    request.Absences.Select(a => (a.Date, a.Hours)).ToList(),
-                    user.PrimaryOrgId, ct, provisionalFullDayOnly);
+                var provisional = postedForQuota.Length > 0
+                    ? await consumptionCalculator.ComputeAsync(
+                        employeeId,
+                        postedForQuota.Select(a => (a.Date, a.Hours)).ToList(),
+                        user.PrimaryOrgId, ct, provisionalFullDayOnly)
+                    : (IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>)
+                        Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>();
 
                 var requestedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
-                for (var i = 0; i < request.Absences.Length; i++)
+                for (var i = 0; i < postedForQuota.Length; i++)
                 {
-                    var absence = request.Absences[i];
+                    var absence = postedForQuota[i];
                     if (!AbsenceToEntitlementType.TryGetValue(absence.AbsenceType, out var entitlementType) || entitlementType is null)
                         continue;
                     // S66 / TASK-6603 FIX-FORWARD (B1 pre-tx mirror) — fail-CLOSED for entitlement
@@ -1379,6 +1556,14 @@ public static class SkemaEndpoints
                         requestedByEntitlementType[entitlementType] = 0m;
                     requestedByEntitlementType[entitlementType] += rowFeriedage;
                 }
+
+                // A type the save only clears joins the plans with 0 requested days, after the posted
+                // types (addendum A1 D-6). Its signed delta is then ≤ 0, so it never asks the quota
+                // rule and is never refused for quota; it is planned only so the in-lock balance pass
+                // has its year, caps and seed quota for the give-back.
+                var postedEntitlementTypes = new HashSet<string>(requestedByEntitlementType.Keys, StringComparer.Ordinal);
+                foreach (var clearedType in clearedEntitlementTypes)
+                    requestedByEntitlementType.TryAdd(clearedType, 0m);
 
                 // S73 / TASK-7300 (R1): the NAMED rule-engine client (see the senior-gate site
                 // above) — bearer + correlation forwarding live in the central handler.
@@ -1411,10 +1596,16 @@ public static class SkemaEndpoints
                 // ── Phase 1 ──────────────────────────────────────────────────────────────────────────
                 foreach (var (entitlementType, totalRequestedDays) in requestedByEntitlementType)
                 {
-                    var firstAbsenceDate = request.Absences
+                    // The type's anchor: its earliest posted or cleared row. A save is month-bounded and
+                    // every reset falls on a 1st, so posted and cleared rows of a type share one year.
+                    var firstAbsenceDate = postedForQuota
                         .Where(a => AbsenceToEntitlementType.TryGetValue(a.AbsenceType, out var et) && et == entitlementType)
                         .Select(a => a.Date)
+                        .Concat(clearedAbsences
+                            .Where(c => AbsenceToEntitlementType.TryGetValue(c.AbsenceType, out var et) && et == entitlementType)
+                            .Select(c => c.Date))
                         .Min();
+                    var clearsOnly = !postedEntitlementTypes.Contains(entitlementType);
 
                     // ── S30 TASK-3008 two-step pattern (ADR-021 D2 + ADR-016 D5b "fifth pattern") ──
                     // ── S81 / TASK-8102 (R1/R2) — dated-anchor correctness cutover ──
@@ -1503,8 +1694,14 @@ public static class SkemaEndpoints
                     // user_agreement_codes row), which would otherwise 500 those absences where
                     // pre-S60 the hard-coded 1.0 let them through. When the fraction DOES matter, a
                     // null OR a throw ⇒ a clean 422 (cannot validate the cap without the fraction).
+                    // A type the save only CLEARS validates no cap and is never refused for a missing
+                    // profile (addendum A1 D-6, N-1): its fraction matters only to the seed quota of a
+                    // balance row the give-back would create, i.e. for a pro-rated type. Unresolvable
+                    // there, the plan records that it has no seed quota, and the balance pass gives the
+                    // days back only into an existing row.
                     EmploymentProfile? datedProfile = null;
-                    if (fractionMatters)
+                    var seedQuotaUnresolved = false;
+                    if (clearsOnly ? config.ProRateByPartTime : fractionMatters)
                     {
                         try
                         {
@@ -1515,7 +1712,11 @@ public static class SkemaEndpoints
                         {
                             datedProfile = null;
                         }
-                        if (datedProfile is null)
+                        if (datedProfile is null && clearsOnly)
+                        {
+                            seedQuotaUnresolved = true;
+                        }
+                        else if (datedProfile is null)
                         {
                             // Recorded, not returned: phase 3 answers it at this type's turn, after any
                             // earlier type's rule-engine refusal, exactly as the single loop did. No
@@ -1622,6 +1823,7 @@ public static class SkemaEndpoints
                         IsMonthlyAccrual = isMonthlyAccrual,
                         AccruableCap = accruableCap,
                         GuardCap = guardCap,
+                        SeedQuotaUnresolved = seedQuotaUnresolved,
                     });
                 }
 
@@ -1650,7 +1852,8 @@ public static class SkemaEndpoints
                     await using (var readOnlyCmd = new NpgsqlCommand("SET TRANSACTION READ ONLY", preCheckConn, preCheckTx))
                         await readOnlyCmd.ExecuteNonQueryAsync(ct);
 
-                    provisionalReplacedByEntitlementType = await ReadReplacedFeriedageByTypeAsync(preCheckConn, preCheckTx);
+                    provisionalReplacedByEntitlementType = ReplacedFeriedageByType(
+                        await ReadCurrentAbsenceCellsAsync(preCheckConn, preCheckTx));
                     foreach (var plan in preCheckPlans)
                     {
                         if (plan.HasNoLiveConfig)
@@ -1674,7 +1877,11 @@ public static class SkemaEndpoints
                     var config = plan.Config!;
 
                     // S145 / TASK-14507 (R23, W1 ruling) — the signed change this save makes to the
-                    // type's quota: new feriedage minus the stored feriedage of the replaced cells.
+                    // type's quota: new feriedage minus the stored feriedage of the replaced and cleared
+                    // cells. A type the save only clears, or whose net change is ≤ 0, skips the rule
+                    // below: a clear is never refused for quota. A mixed request whose net is an
+                    // increase is checked like any increase, and a refusal refuses the whole save, the
+                    // clear with it (addendum A1 D-6, cycle-2 ruling R4).
                     var replacedDays = provisionalReplacedByEntitlementType.GetValueOrDefault(entitlementType);
                     var signedDelta = requestedDays - replacedDays;
 
@@ -1748,9 +1955,421 @@ public static class SkemaEndpoints
 
                     // GuardCap is carryover-EXCLUDED (CheckAndAdjustAsync re-adds carryover once);
                     // SeedQuota = annual effectiveQuota (seeds total_quota on a first-INSERT only).
-                    entitlementData[entitlementType] = (requestedDays, plan.EntitlementYear, plan.GuardCap, plan.EffectiveQuota);
+                    // ResetMonth = the live row's reset_month that keyed the year in phase 1: the year
+                    // starts on the 1st of that month (EntitlementPeriodResolver; SPECIAL_HOLIDAY's
+                    // window ignores it), so the month of EntitlementYearStart is that reset_month.
+                    // An unresolved seed quota (a clear-only pro-rated type, phase 1) leaves the seed, and
+                    // an IMMEDIATE type's fraction-scaled cap, to the existing row (the balance pass).
+                    entitlementData[entitlementType] = (requestedDays, plan.EntitlementYear,
+                        plan.SeedQuotaUnresolved && !plan.IsMonthlyAccrual ? null : plan.GuardCap,
+                        plan.SeedQuotaUnresolved ? null : plan.EffectiveQuota,
+                        plan.EntitlementYearStart.Month);
                 }
             }
+
+            // ── The paid-absence day bound (ADR-043 D2; QUAL-237, QUAL-240, QUAL-231's residual) ──
+            // A day of paid absence is worth the hours the person would have worked that day, and
+            // payroll credits paid absence as worked time; a day holding more would add flex hours
+            // nobody worked. So for EVERY date this save posts a cell on (a date of any posted entry,
+            // absence or work-time day) the day as it will stand after the save must hold
+            //     credit-class paid-absence hours <= max(0, planned - worked).
+            // "As it will stand" = the day's stored current rows that the save neither replaces nor
+            // clears, plus the posted rows. A posted absence replaces the current Skema row of its
+            // (date, type), a posted entry that of its (date, task), a posted work-time day the stored
+            // day (the writes below apply cells in posted order, so a cell posted twice ends at its
+            // later value); a cleared cell is gone, and a cleared work-time day counts 0 interval
+            // hours; TIME_POST rows are never replaced or cleared, so they always count (the
+            // repositories' MarkSupersededSkemaCellSql). A replaced cell is never counted beside its
+            // replacement, so re-saving one cell keeps passing, and a save that clears a mistaken sick
+            // day and posts the day's work is judged with the sick day gone.
+            // A date the save only CLEARS is not judged (addendum A1 D-8, NR-A6): a clear only lowers
+            // the day (it removes paid absence, or worked time, which only raises the room), so it can
+            // never create or worsen a breach, and judging it could only lock a day already over the
+            // bound, the day a person most needs to repair.
+            //   • Credit class: AbsenceClassification.IsCredit. Unpaid leave reduces the norm instead;
+            //     it is outside the bound and stays under the all-types cap above.
+            //   • Worked: the larger of the day's project hours (entries) and its interval hours, so
+            //     the check holds whichever of the two the employee fills in first. Interval hours
+            //     follow the work-time check above (positive-duration intervals, seconds to hours at
+            //     2 dp); a day's clock periods are its only work-time record (ADR-043 D10, D-2.4).
+            //   • Planned: the per-day amount the all-types cap uses (FullDayHoursAsync; 0 on a
+            //     zero-norm day), compared through RoundBasis like both caps, so an exact rounded full
+            //     day stays bookable. A null basis (no dated profile covers the day) is not bounded,
+            //     as both caps skip it.
+            // Why at the save rather than in payroll: the employee is told at once, before anything is
+            // saved, and no engine arithmetic changes (ADR-043 D2). A mistaken cell that blocks the
+            // day's work, a full-day care or senior day included, is emptied with a clear, alone or in
+            // the same save as the work.
+            // It runs twice. Here, after every other pre-transaction refusal, as the cheap advisory
+            // 422 on unlocked reads: every refusal decided before the transaction keeps today's
+            // answer, and on a date both refuse the all-types cap answers first. Two refusals decided
+            // only inside the lock do not take precedence over the bound: the employment-window gate
+            // and the authoritative quota guard. That is chosen, as for the month lock at the
+            // employment-window gate's comment in the transaction below: all of them refuse
+            // fail-closed, nothing is written either way, and the bound's body carries no employment
+            // date. Then AUTHORITATIVELY inside the per-employee lock, before any write, where two
+            // concurrent saves can no longer each judge the day without the other. The refusal keeps
+            // the all-types cap's error string and shape, so the grid still shows its absence alert,
+            // and adds kind = "paid-absence-day-bound", plannedHours and workedHours; its date is the
+            // request's own registration date (ADR-040 D7). Returns null when every touched date
+            // holds, else that 422 body. `basisAlreadyRead` lets the in-lock call reuse the per-date
+            // basis its authoritative consumption read under the same lock, instead of reading it twice.
+            async Task<object?> FindPaidAbsenceDayBoundBreachAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx,
+                IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption> basisAlreadyRead)
+            {
+                var postedEntries = request.Entries ?? Array.Empty<SkemaEntry>();
+                var postedAbsences = request.Absences ?? Array.Empty<SkemaAbsence>();
+                var postedWorkTime = request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>();
+                var touchedDates = new SortedSet<DateOnly>(
+                    postedEntries.Select(e => e.Date)
+                        .Concat(postedAbsences.Select(a => a.Date))
+                        .Concat(postedWorkTime.Select(d => d.Date)));
+                if (touchedDates.Count == 0)
+                    return null;
+
+                // Inside the lock the absence rows are read on the save's own (conn, tx); before the
+                // transaction on a pooled connection (advisory only). The entries and work time come
+                // from ReadStoredWorkAsync, on the same two paths.
+                var storedAbsences = conn is not null
+                    ? await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        conn, tx!, employeeId, touchedDates.Min, touchedDates.Max, ct)
+                    : await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        employeeId, touchedDates.Min, touchedDates.Max, ct);
+                var (storedEntries, storedWorkTime) = await ReadStoredWorkAsync(
+                    conn, tx, touchedDates.Min, touchedDates.Max);
+
+                var basisByDate = new Dictionary<DateOnly, decimal?>();
+                foreach (var consumption in basisAlreadyRead)
+                    basisByDate[consumption.Date] = consumption.FullDayHours;
+
+                foreach (var date in touchedDates)
+                {
+                    var postedAbsencesOfDay = postedAbsences.Where(a => a.Date == date).ToList();
+                    var paidAbsenceHours =
+                        postedAbsencesOfDay.Where(a => AbsenceClassification.IsCredit(a.AbsenceType)).Sum(a => a.Hours)
+                        + storedAbsences
+                            .Where(r => r.Date == date && AbsenceClassification.IsCredit(r.AbsenceType))
+                            .Where(r => !(r.Source == HoursSource.Skema
+                                && (postedAbsencesOfDay.Any(a => a.AbsenceType == r.AbsenceType)
+                                    || clearedAbsenceCells.Contains((r.Date, r.AbsenceType)))))
+                            .Sum(r => r.Hours);
+                    if (paidAbsenceHours <= 0m)
+                        continue; // no paid absence on the day: nothing to bound.
+
+                    var workedHours = WorkedHoursOnDay(date, storedEntries, storedWorkTime);
+
+                    // shortcut(QUAL-BF-001): the paid-absence bound reads the § 7 nr. 2 per-day norm
+                    // (FullDayHoursAsync), not the configured credit basis; upgrade when stage 1 serves
+                    // the one planned-hours figure (ADR-043 D2, S1-5)
+                    if (!basisByDate.TryGetValue(date, out var fullDayHours))
+                        fullDayHours = await consumptionCalculator.FullDayHoursAsync(
+                            employeeId, date, user.PrimaryOrgId, ct);
+                    if (fullDayHours is null)
+                        continue; // no dated profile covers the day: not bounded, as both caps skip it.
+
+                    var plannedHours = RoundBasis(fullDayHours)!.Value;
+                    var maxHours = Math.Max(0m, plannedHours - workedHours);
+                    if (paidAbsenceHours > maxHours)
+                        return new
+                        {
+                            error = "Total absence hours exceed norm day",
+                            date,
+                            totalHours = paidAbsenceHours,
+                            maxHours,
+                            kind = "paid-absence-day-bound",
+                            plannedHours,
+                            workedHours,
+                        };
+                }
+                return null;
+            }
+
+            // One work-time day's hours by the work-time check's convention above (positive-duration
+            // intervals only, seconds to hours at 2 dp), rounded as that check's 24-hour total is.
+            static decimal WorkTimeDayHours(IEnumerable<(string Start, string End)> intervals)
+            {
+                var seconds = 0;
+                foreach (var (start, end) in intervals)
+                {
+                    if (TryParseTimeToSeconds(start, out var startSec)
+                        && TryParseTimeToSeconds(end, out var endSec)
+                        && endSec > startSec)
+                        seconds += endSec - startSec;
+                }
+                return Math.Round(seconds / 3600m, 2);
+            }
+
+            // The stored project entries and work-time days of [from, to] that the save's worked figure
+            // reads. Inside the lock the entries are read on the save's own (conn, tx); before the
+            // transaction on a pooled connection (advisory only). Work time has only a self-connecting
+            // read: inside the lock it still sees every committed day, because every writer of
+            // work_time_projection but the offline backfill is this save, under this same lock (the
+            // ADR-032 D4 separate-connection rationale).
+            async Task<(IReadOnlyList<TimeEntryProjectionRow> Entries, IReadOnlyList<WorkTimeProjectionRow> WorkTime)> ReadStoredWorkAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx, DateOnly from, DateOnly to)
+            {
+                var storedEntries = conn is not null
+                    ? await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        conn, tx!, employeeId, from, to, ct)
+                    : await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        employeeId, from, to, ct);
+                var storedWorkTime = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, from, to, ct);
+                return (storedEntries, storedWorkTime);
+            }
+
+            // The hours worked on one date as the day will stand after this save: the one worked figure
+            // of the save, read by the paid-absence day bound and the call-home rule alike. It is the
+            // larger of the day's project hours and its interval hours, so a check holds whichever of
+            // the two the employee fills in first. Project hours: the posted entries (a cell posted twice
+            // ends at its later value) plus the stored entries no posted cell replaces and no cleared cell
+            // empties (a posted or cleared entry retires the current Skema row of its (date, task);
+            // TIME_POST rows always count). Interval hours: the posted work-time day, else 0 for a
+            // cleared day, else the stored one, by WorkTimeDayHours's convention.
+            decimal WorkedHoursOnDay(
+                DateOnly date, IReadOnlyList<TimeEntryProjectionRow> storedEntries,
+                IReadOnlyList<WorkTimeProjectionRow> storedWorkTime)
+            {
+                var postedHoursByTask = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                foreach (var entry in (request.Entries ?? Array.Empty<SkemaEntry>()).Where(e => e.Date == date))
+                    postedHoursByTask[entry.ProjectCode] = entry.Hours;
+                var projectHours = postedHoursByTask.Values.Sum()
+                    + storedEntries
+                        .Where(r => r.Date == date)
+                        .Where(r => !(r.Source == HoursSource.Skema && r.TaskId is not null
+                            && (postedHoursByTask.ContainsKey(r.TaskId) || clearedEntryCells.Contains((date, r.TaskId)))))
+                        .Sum(r => r.Hours);
+
+                var postedDay = (request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>()).LastOrDefault(d => d.Date == date);
+                var intervalHours = postedDay is not null
+                    ? WorkTimeDayHours(
+                        (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)))
+                    : clearedWorkTimeDates.Contains(date)
+                        ? 0m
+                        : storedWorkTime
+                            .Where(w => w.Date == date)
+                            .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End))));
+
+                return Math.Max(projectHours, intervalHours);
+            }
+
+            // ── The illness chain's resulting state (QUAL-236, R-3) ──
+            // The absence rows of [from, to] as they will stand after this save: the stored current
+            // rows the save neither replaces nor clears, plus the posted rows, built exactly as the
+            // paid-absence day bound builds a day (a posted absence replaces, and a cleared one
+            // removes, only the current Skema row of its own (date, type); TIME_POST rows are never
+            // replaced or cleared). Inside the lock the stored rows are read on the save's own
+            // (conn, tx), before the transaction on a pooled connection. The one place the chain's
+            // state is built (addendum A1 D-9).
+            async Task<List<(DateOnly Date, string AbsenceType)>> ChildSickChainResultingRowsAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx, DateOnly from, DateOnly to)
+            {
+                var postedAbsences = request.Absences ?? Array.Empty<SkemaAbsence>();
+                var storedAbsences = conn is not null
+                    ? await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(conn, tx!, employeeId, from, to, ct)
+                    : await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, from, to, ct);
+                var rows = storedAbsences
+                    .Where(r => !(r.Source == HoursSource.Skema
+                        && (postedAbsences.Any(a => a.Date == r.Date && a.AbsenceType == r.AbsenceType)
+                            || clearedAbsenceCells.Contains((r.Date, r.AbsenceType)))))
+                    .Select(r => (r.Date, r.AbsenceType))
+                    .ToList();
+                rows.AddRange(postedAbsences.Select(a => (a.Date, a.AbsenceType)));
+                return rows;
+            }
+
+            // ── The child's-sick judge: the illness chain, then rule A, then rule B (QUAL-236) ──
+            // Three rules on the same resulting state (ChildSickChainResultingRowsAsync), each refusing
+            // with the opt-in refusal's error and shape plus its own kind, naming a registration date
+            // (never an employment date, ADR-040 D7). They run in this order: on a save more than one
+            // refuses, the chain answers first, then rule A, then rule B.
+            //
+            // THE ILLNESS CHAIN (R-3, R-12; kind "child-sick-chain").
+            // A child's sick days are counted per illness, in calendar days from the first whole sick
+            // day: day 2 is the calendar day after day 1 and day 3 the one after day 2, working day or
+            // not (021-26, 020-26 and 027-26 § 14 remarks). So a CHILD_SICK_DAY_n on date x (n = 2, 3)
+            // needs, for each k < n, the day-k code on x − (n − k) in the resulting state, OR that day
+            // to have zero planned hours (a weekend: the day is used up and no row can be credited
+            // there, the paid-absence bound refuses one). A day whose planned hours are unknown (no
+            // dated profile, FullDayHoursAsync null) is not zero: it needs its row (fail-closed). A
+            // weekday public holiday keeps its norm until stage 1 (QUAL-222), so it needs its row too.
+            // The illness also keeps the OK version of its first whole sick day x − (n − 1): when the
+            // list as of that day (ChildSickCodesOfferedAsync, the save's agreement) does not offer
+            // day n, the row is refused even where its own date offers it (an illness from 30 March
+            // 2026 has OK24's two days, so a day 3 on 1 April is refused). The call-home day needs no
+            // partner day and is not part of the chain.
+            // Judged: every row of day 2 or 3 on a date holding a posted or cleared absence or within
+            // the two calendar days after one (the dates whose chain this save can change), on the
+            // resulting state, read across a month boundary (the stored rows of 30 and 31 March judge a
+            // 1 April save). So clearing day 1 while day 2 stands is refused, naming day 2: an illness
+            // is removed from its last day back (addendum A1 D-9). Entries and work time change no
+            // input of the chain, so their dates are not judged. The refusal names the dependent date
+            // (the day-n row's date).
+            //
+            // RULE A: AN ILLNESS DOES NOT START ON THE DAY AFTER A CHILD'S SICK DAY (owner ruling Q5,
+            // 2026-11-12; kind "child-sick-illness-start"). The circular defines day 1 as the first whole
+            // sick day and day 2 as the calendar day straight after it, and the call-home day as the day
+            // the child falls ill after the parent met for work (research :196-197). So a day directly
+            // after a child's sick day belongs to the same illness: a CHILD_SICK_DAY on date d is
+            // refused when d − 1 holds CHILD_SICK_DAY, _2 or _3 (day 1 straight after a call-home day is
+            // how an illness goes on, and is accepted), and a CHILD_SICK_CALL_HOME on d is refused when
+            // d − 1 holds any child's-sick code. Plain adjacency: no planned-hours exception here.
+            // Judged on the chain's dates, so a child row posted on d − 1 before a stored day 1 on d is
+            // caught when d is judged. Without it, day 1 registered on five days in a row would pay five.
+            //
+            // RULE B: A CALL-HOME DAY NEEDS REGISTERED WORK THE SAME DAY (owner ruling Q5; kind
+            // "child-sick-call-home-without-work"). The call-home day is the day the parent met for work
+            // and was called home, so a CHILD_SICK_CALL_HOME on date d is refused unless the hours worked
+            // on d, as the day will stand after the save (WorkedHoursOnDay, the paid-absence bound's own
+            // figure), are above 0. Judged on every date the save touches whose resulting state holds a
+            // call-home row: a posted or cleared absence, entry or work-time day, because entries and work
+            // time are this rule's inputs. A save brings a day's work to 0 only by clearing it (a posted
+            // project cell is always above 0, and a posted work-time day with no period is refused), so
+            // clearing the work of a stored call-home day is refused here.
+            //
+            // Runs like the paid-absence bound: advisory before the transaction, authoritatively inside
+            // the per-employee lock, each right after the bound (on a date both refuse, the bound answers
+            // first). Returns null when every rule holds, else the first 422 body.
+            // shortcut(QUAL-250): the illness chain reads this employee's rows only; the other parent's child's sick days are not modelled; upgrade when Phase B rules how the two parents' days combine (A-16, QUAL-236)
+            // shortcut(QUAL-BF-006): illnesses are told apart only by the day code chosen and calendar adjacency (days off and gap days are not checked against an earlier illness); upgrade when Phase B rules how an illness is identified
+            async Task<object?> FindChildSickChainBreachAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx,
+                IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption> basisAlreadyRead)
+            {
+                // The chain and rule A judge the posted and cleared absence dates and the two days after
+                // each; rule B every date the save touches, cleared cells included.
+                var absenceDates = new SortedSet<DateOnly>(
+                    (request.Absences ?? Array.Empty<SkemaAbsence>()).Select(a => a.Date)
+                        .Concat(clearedAbsences.Select(c => c.Date)));
+                var touchedDates = new SortedSet<DateOnly>(
+                    (request.Entries ?? Array.Empty<SkemaEntry>()).Select(e => e.Date)
+                        .Concat(absenceDates)
+                        .Concat((request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>()).Select(d => d.Date))
+                        .Concat(clearedEntries.Select(c => c.Date))
+                        .Concat(clearedWorkTime.Select(c => c.Date)));
+                if (touchedDates.Count == 0)
+                    return null;
+
+                var held = (await ChildSickChainResultingRowsAsync(
+                        conn, tx, touchedDates.Min.AddDays(-2), touchedDates.Max.AddDays(2)))
+                    .ToHashSet();
+                var judgedDates = new SortedSet<DateOnly>(
+                    absenceDates.SelectMany(d => new[] { d, d.AddDays(1), d.AddDays(2) }));
+
+                var plannedByDate = new Dictionary<DateOnly, decimal?>();
+                foreach (var consumption in basisAlreadyRead)
+                    plannedByDate[consumption.Date] = consumption.FullDayHours;
+
+                string[] dayCodes = [AbsenceTypes.ChildSick1, AbsenceTypes.ChildSick2, AbsenceTypes.ChildSick3];
+                foreach (var date in judgedDates)
+                {
+                    for (var n = 2; n <= 3; n++)
+                    {
+                        var dayNCode = dayCodes[n - 1];
+                        if (!held.Contains((date, dayNCode)))
+                            continue;
+
+                        // Each earlier day of the illness, nearest first.
+                        for (var k = n - 1; k >= 1; k--)
+                        {
+                            var dayK = date.AddDays(k - n);
+                            if (held.Contains((dayK, dayCodes[k - 1])))
+                                continue;
+                            if (!plannedByDate.TryGetValue(dayK, out var planned))
+                            {
+                                planned = await consumptionCalculator.FullDayHoursAsync(
+                                    employeeId, dayK, user.PrimaryOrgId, ct);
+                                plannedByDate[dayK] = planned;
+                            }
+                            if (planned == 0m)
+                                continue; // no planned hours: the day is used up and needs no row.
+                            return new
+                            {
+                                error = "absence_type_not_eligible",
+                                absenceType = dayNCode,
+                                date,
+                                message = $"{AbsenceTypeLabels.LabelFor(dayNCode)} den {date:dd-MM-yyyy} kræver {AbsenceTypeLabels.LabelFor(dayCodes[k - 1])} den {dayK:dd-MM-yyyy}: dagene i et sygdomsforløb er på hinanden følgende kalenderdage.",
+                                kind = "child-sick-chain",
+                            };
+                        }
+
+                        // The illness keeps the OK version of its first whole sick day.
+                        var dayOne = date.AddDays(1 - n);
+                        var offeredAtDayOne = await ChildSickCodesOfferedAsync(
+                            entitlementConfigRepo, agreementCode, dayOne, ct);
+                        if (!offeredAtDayOne.Contains(dayNCode))
+                            return new
+                            {
+                                error = "absence_type_not_eligible",
+                                absenceType = dayNCode,
+                                date,
+                                message = $"{AbsenceTypeLabels.LabelFor(dayNCode)} den {date:dd-MM-yyyy} kan ikke registreres: sygdomsforløbet begyndte den {dayOne:dd-MM-yyyy}, og overenskomsten gav på den dato ikke ret til den.",
+                                kind = "child-sick-chain",
+                            };
+                    }
+                }
+
+                // Rule A: no day 1 and no call-home day directly after a child's sick day.
+                foreach (var date in judgedDates)
+                {
+                    var dayBefore = date.AddDays(-1);
+                    if (held.Contains((date, AbsenceTypes.ChildSick1))
+                        && dayCodes.Any(code => held.Contains((dayBefore, code))))
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSick1,
+                            date,
+                            message = $"Barns 1. sygedag den {date:dd-MM-yyyy} kan ikke registreres: dagen før ({dayBefore:dd-MM-yyyy}) er registreret som barns sygdom, så dagen hører til samme sygdomsforløb.",
+                            kind = "child-sick-illness-start",
+                        };
+                    if (held.Contains((date, AbsenceTypes.ChildSickCallHome))
+                        && StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Any(code => held.Contains((dayBefore, code))))
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSickCallHome,
+                            date,
+                            message = $"Hjemkaldelsesdagen den {date:dd-MM-yyyy} kan ikke registreres: dagen før ({dayBefore:dd-MM-yyyy}) er registreret som barns sygdom, så dagen hører til samme sygdomsforløb.",
+                            kind = "child-sick-illness-start",
+                        };
+                }
+
+                // Rule B: a call-home day needs work above 0 the same day, on the save's worked figure.
+                var callHomeDates = touchedDates.Where(d => held.Contains((d, AbsenceTypes.ChildSickCallHome))).ToList();
+                if (callHomeDates.Count > 0)
+                {
+                    var (storedEntries, storedWorkTime) = await ReadStoredWorkAsync(
+                        conn, tx, callHomeDates[0], callHomeDates[^1]);
+                    foreach (var date in callHomeDates)
+                    {
+                        if (WorkedHoursOnDay(date, storedEntries, storedWorkTime) > 0m)
+                            continue;
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSickCallHome,
+                            date,
+                            message = $"Hjemkaldelsesdagen den {date:dd-MM-yyyy} kræver registreret arbejde samme dag: det er dagen, hvor barnet blev sygt, efter at du var mødt på arbejde.",
+                            kind = "child-sick-call-home-without-work",
+                        };
+                    }
+                }
+                return null;
+            }
+
+            var advisoryBoundBreach = await FindPaidAbsenceDayBoundBreachAsync(
+                conn: null, tx: null,
+                basisAlreadyRead: Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>());
+            if (advisoryBoundBreach is not null)
+                return Results.Json(advisoryBoundBreach, statusCode: 422);
+
+            var advisoryChainBreach = await FindChildSickChainBreachAsync(
+                conn: null, tx: null,
+                basisAlreadyRead: Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>());
+            if (advisoryChainBreach is not null)
+                return Results.Json(advisoryChainBreach, statusCode: 422);
 
             var streamId = $"employee-{employeeId}";
             var savedCount = 0;
@@ -1897,6 +2516,9 @@ public static class SkemaEndpoints
                     // ships (re-hire), gaps between spells make it wrong. The resolver call is a
                     // single-row indexed read on this tx's connection; a save carries at most 31
                     // distinct dates (all three arrays are month-bounded, see above).
+                    // A cleared cell's date is judged too (addendum A1 D-2): a clear writes on that
+                    // date (its event and the retired row's marker), so it answers the same date-free
+                    // 422 outside the window.
                     var registrationDates = new SortedSet<DateOnly>();
                     foreach (var entry in request.Entries ?? Array.Empty<SkemaEntry>())
                         registrationDates.Add(entry.Date);
@@ -1904,6 +2526,9 @@ public static class SkemaEndpoints
                         registrationDates.Add(absence.Date);
                     foreach (var day in request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>())
                         registrationDates.Add(day.Date);
+                    registrationDates.UnionWith(clearedEntries.Select(c => c.Date));
+                    registrationDates.UnionWith(clearedAbsences.Select(c => c.Date));
+                    registrationDates.UnionWith(clearedWorkTime.Select(c => c.Date));
                     foreach (var registrationDate in registrationDates)
                     {
                         var windowStatus = await employmentWindowResolver.GetStatusAsync(
@@ -1946,6 +2571,42 @@ public static class SkemaEndpoints
                         await tx.RollbackAsync(ct);
                         return ApprovalPeriodSaveLock.PeriodLockedForSaveConflict(inLockPeriod!);
                     }
+
+                    // ── THE IN-LOCK ORDER (addendum A1 D-4) ──────────────────────────────────────────
+                    // (1) one authoritative read of every cell the save posts or clears (here); (2) the
+                    // guards on the resulting state: the all-types cap, the full-day guard, the bound,
+                    // the child's-sick judge; (3) the clears; (4) the posted writes; (5) one balance pass
+                    // over the posted and cleared entitlement types. Nothing reads "current" rows after
+                    // the first retire or insert: the step-2 guards read before any write, and the
+                    // balance writer's seed sum in step 5 is a separate read of its own (QUAL-196).
+                    //
+                    // Step 1. On this (conn, tx), under the lock, so a save of the same employee that
+                    // committed while we waited is visible and none can interleave. Every value a clear
+                    // carries (the retired registration's event id, its hours, its feriedage) and the
+                    // replaced feriedage of the balance delta come from this read, never from the
+                    // advisory reads before the transaction. A cleared cell with no current row is a
+                    // no-op: no event, no audit row, no balance change.
+                    var currentAbsenceCells = await ReadCurrentAbsenceCellsAsync(conn, tx);
+                    var replacedByEntitlementType = ReplacedFeriedageByType(currentAbsenceCells);
+                    var absenceRowsToClear = currentAbsenceCells
+                        .Where(r => clearedAbsenceCells.Contains((r.Date, r.AbsenceType)))
+                        .ToDictionary(r => (r.Date, r.AbsenceType));
+                    var entryRowsToClear = new Dictionary<(DateOnly Date, string ProjectCode), TimeEntryProjectionRow>();
+                    if (clearedEntryCells.Count > 0)
+                    {
+                        var currentEntries = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                            conn, tx, employeeId, clearedEntryCells.Min(c => c.Date), clearedEntryCells.Max(c => c.Date), ct);
+                        foreach (var row in currentEntries)
+                        {
+                            // The clear retires Skema rows only (the shared mark's source = 'SKEMA').
+                            if (row.Source == HoursSource.Skema && row.TaskId is not null
+                                && clearedEntryCells.Contains((row.Date, row.TaskId)))
+                                entryRowsToClear[(row.Date, row.TaskId)] = row;
+                        }
+                    }
+                    var workTimeDaysToClear = (await workTimeProjectionRepo.GetCurrentDaysAsync(
+                            conn, tx, employeeId, clearedWorkTimeDates, ct))
+                        .ToDictionary(d => d.Date);
 
                     // THEN re-derive the AUTHORITATIVE per-row feriedage INSIDE the lock. This
                     // re-read is the whole point of D2's two phases: a profile PUT that committed
@@ -2015,6 +2676,11 @@ public static class SkemaEndpoints
                         // by B1 above, and a null on a purely non-entitlement date defers to the pre-tx
                         // anchor family (no in-lock cap to apply). fullDayHours is constant per date (cached
                         // in ComputeAsync), so the first row's value represents the date.
+                        // The in-lock paid-absence day bound (ADR-043 D2) runs after this block, outside
+                        // it, so it also judges saves with no absences; on a date both refuse, this cap's
+                        // body answers first. Of the non-entitlement rows the weekend branch admits up to
+                        // the flat 7.4, only unpaid leave is then saved: the bound refuses every
+                        // credit-class hour on a zero-norm day.
                         var authByDate = request.Absences
                             .Select((a, i) => (a.Date, a.AbsenceType, a.Hours, authoritativeConsumption[i].FullDayHours))
                             .GroupBy(r => r.Date);
@@ -2114,6 +2780,134 @@ public static class SkemaEndpoints
                         }
                     }
 
+                    // ── The paid-absence day bound, AUTHORITATIVE (ADR-043 D2) ──
+                    // The same rule as the advisory check before the transaction
+                    // (FindPaidAbsenceDayBoundBreachAsync), judged here on the day as committed while
+                    // this save holds the per-employee lock: a save of the same employee that committed
+                    // while we waited is visible (the ReadCommitted pin above), and none of our own rows
+                    // is written yet, so the replaced-cell exclusion sees exactly the rows this save
+                    // will replace. Outside the absences block, so a save with no absences (work added
+                    // to a day holding paid absence) is judged too; after B1-B3, so on a date both
+                    // refuse the all-types cap answers first. Planned reuses the basis the authoritative
+                    // consumption read under this lock. A breach throws, the catch below rolls the
+                    // whole save back, and the answer is the advisory check's 422 body. The bound is
+                    // judged before the writes, so it answers before the quota guard that runs with them.
+                    var lockedBoundBreach = await FindPaidAbsenceDayBoundBreachAsync(
+                        conn, tx, authoritativeConsumption);
+                    if (lockedBoundBreach is not null)
+                        throw new SkemaConsumptionValidationException(lockedBoundBreach);
+
+                    // ── The child's-sick judge, AUTHORITATIVE (QUAL-236; FindChildSickChainBreachAsync) ──
+                    // The same illness chain, rule A and rule B as the advisory check, judged on the
+                    // absence, entry and work-time rows as committed while this save holds the
+                    // per-employee lock, before any write, right after the bound (so on a date both
+                    // refuse, the bound answers first). Planned hours reuse the basis the authoritative
+                    // consumption read under this lock. A breach throws, the catch below rolls the save
+                    // back, and the answer is the advisory check's 422 body.
+                    var lockedChainBreach = await FindChildSickChainBreachAsync(
+                        conn, tx, authoritativeConsumption);
+                    if (lockedChainBreach is not null)
+                        throw new SkemaConsumptionValidationException(lockedChainBreach);
+
+                    // Step 3. THE CLEARS (owner Q2; addendum A1 D-3, D-4, D-5). For each cleared cell with
+                    // a current row from step 1: enqueue its …Cleared event FIRST (allocating the outbox
+                    // id, ADR-018 D3), then retire the row with that id (exactly one row, else the
+                    // repository throws and the save rolls back), then the event's audit row, all in this
+                    // transaction. The event rides employee-{id}, the stream of the registration it
+                    // retires, which committed earlier under this same lock and so holds a smaller outbox
+                    // id (ADR-018 D5). Nothing is inserted: the row is kept, marked, for replay and audit.
+                    // A clear adds no saved count (`saved` counts registration events). The audit row's
+                    // target organisation is the employee's, from the in-lock subject read above
+                    // (terminated-inclusive, so HR's clear for a leaver records the leaver's org).
+                    var clearAuditTargetOrgId = lockedSubject.PrimaryOrgId;
+                    async Task WriteClearAuditRowAsync<TEvent>(
+                        TEvent clearEvent, long clearOutboxId, IAuditProjectionMapper<TEvent> mapper)
+                        where TEvent : DomainEventBase
+                    {
+                        var auditCtx = new AuditProjectionContext(
+                            ActorId: actor.ActorId,
+                            ActorPrimaryOrgId: actor.OrgId,
+                            CorrelationId: actor.CorrelationId,
+                            OccurredAt: new DateTimeOffset(clearEvent.OccurredAt),
+                            ResolvedTargetOrgId: clearAuditTargetOrgId);
+                        await auditRepo.InsertAsync(conn, tx, clearEvent.EventId, clearOutboxId,
+                            clearEvent.EventType, mapper.Map(clearEvent, auditCtx), auditCtx, ct);
+                    }
+
+                    foreach (var cleared in clearedEntries)
+                    {
+                        if (!entryRowsToClear.TryGetValue((cleared.Date, cleared.ProjectCode), out var row))
+                            continue; // nothing current to remove: a removal of nothing records nothing.
+                        var clearEvent = new TimeEntryCleared
+                        {
+                            EmployeeId = employeeId,
+                            Date = row.Date,
+                            TaskId = row.TaskId!,
+                            ClearedEventId = row.EventId,
+                            ClearedHours = row.Hours,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId
+                        };
+                        var clearOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, clearEvent, ct);
+                        await timeEntryProjectionRepo.RetireSkemaCellAsync(
+                            conn, tx, employeeId, row.Date, row.TaskId!, clearOutboxId, ct);
+                        await WriteClearAuditRowAsync(clearEvent, clearOutboxId, timeEntryClearedAuditMapper);
+                    }
+
+                    foreach (var cleared in clearedWorkTime)
+                    {
+                        if (!workTimeDaysToClear.TryGetValue(cleared.Date, out var day))
+                            continue;
+                        var clearEvent = new WorkTimeCleared
+                        {
+                            EmployeeId = employeeId,
+                            Date = day.Date,
+                            // The registration whose outbox id the row held at step 1; the clear below
+                            // advances that id to its own (addendum A1 D-3).
+                            ClearedEventId = day.RegisteredEventId,
+                            ClearedHours = WorkTimeDayHours(day.Intervals.Select(i => (i.Start, i.End))),
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId
+                        };
+                        var clearOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, clearEvent, ct);
+                        await workTimeProjectionRepo.ClearDayAsync(conn, tx, employeeId, day.Date, clearOutboxId, ct);
+                        await WriteClearAuditRowAsync(clearEvent, clearOutboxId, workTimeClearedAuditMapper);
+                    }
+
+                    // The entitlement types whose cleared rows were retired, in order: step 5 gives their
+                    // stored feriedage back (replacedByEntitlementType holds it, from step 1).
+                    var clearedBalanceTypes = new List<string>();
+                    foreach (var cleared in clearedAbsences)
+                    {
+                        if (!absenceRowsToClear.TryGetValue((cleared.Date, cleared.AbsenceType), out var row))
+                            continue;
+                        AbsenceToEntitlementType.TryGetValue(row.AbsenceType, out var clearedType);
+                        var clearEvent = new AbsenceCleared
+                        {
+                            EmployeeId = employeeId,
+                            Date = row.Date,
+                            AbsenceType = row.AbsenceType,
+                            ClearedEventId = row.EventId,
+                            ClearedHours = row.Hours,
+                            // What is stored is what is given back (ADR-032 D2), never a recomputation;
+                            // null for a type that draws on no balance.
+                            ClearedFeriedage = clearedType is null ? null : row.Feriedage,
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId
+                        };
+                        var clearOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, clearEvent, ct);
+                        await absenceProjectionRepo.RetireSkemaCellAsync(
+                            conn, tx, employeeId, row.Date, row.AbsenceType, clearOutboxId, ct);
+                        await WriteClearAuditRowAsync(clearEvent, clearOutboxId, absenceClearedAuditMapper);
+                        if (clearedType is not null && !clearedBalanceTypes.Contains(clearedType))
+                            clearedBalanceTypes.Add(clearedType);
+                    }
+
+                    // Step 4. The posted writes, in this order: entries, work time, absences.
+
                     // Save time entries (outbox enqueue + projection INSERT inside outer tx).
                     //
                     // S145 / TASK-14507 (A0) — a Skema save REPLACES the cell. Each posted entry still
@@ -2172,7 +2966,6 @@ public static class SkemaEndpoints
                                 EmployeeId = employeeId,
                                 Date = day.Date,
                                 Intervals = intervals,
-                                ManualHours = day.ManualHours,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
                                 CorrelationId = actor.CorrelationId
@@ -2184,15 +2977,11 @@ public static class SkemaEndpoints
                         }
                     }
 
-                    // Save absences and atomically adjust entitlement balances.
+                    // Save absences. The signed balance delta in step 5 takes what they replace from step
+                    // 1's read (replacedByEntitlementType), made before the first write.
+                    var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
                     if (request.Absences is not null)
                     {
-                        // S145 / TASK-14507 (R23) — the AUTHORITATIVE read of what this save replaces:
-                        // under the consumption lock (taken above, so no concurrent save or revaluation
-                        // of this employee can interleave) and BEFORE the inserts below, which mark these
-                        // very rows superseded. It drives the signed balance delta.
-                        var replacedByEntitlementType = await ReadReplacedFeriedageByTypeAsync(conn, tx);
-                        var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
 
                         for (var i = 0; i < request.Absences.Length; i++)
                         {
@@ -2245,100 +3034,150 @@ public static class SkemaEndpoints
                                 savedByEntitlementType[entitlementType!] += rowFeriedage ?? 0m;
                             }
                         }
+                    }
 
-                        // Atomically check quota and adjust balances (eliminates TOCTOU race) via the
-                        // (conn, tx) overload from S26 TASK-2603(a) so the UPDATE participates in the
-                        // outer tx. A breach (concurrent modification raced past the pre-validation
-                        // HTTP check) throws to roll back the entire save (S27 TASK-2706 (c)+(d)).
-                        foreach (var (entitlementType, totalFeriedage) in savedByEntitlementType)
+                    // Step 5. ONE BALANCE PASS over the posted entitlement types and the types whose
+                    // cleared rows step 3 retired (addendum A1 D-4, D-6). Outside the absences block, so a
+                    // save that only clears gives its days back too; a cleared cell that retired nothing
+                    // brings its type no balance change. Atomically check quota and adjust balances via
+                    // the (conn, tx) overloads from S26 TASK-2603(a), so every UPDATE participates in the
+                    // outer tx. A breach (concurrent modification raced past the pre-validation HTTP
+                    // check) throws to roll back the entire save, the clears with it (S27 TASK-2706).
+                    var balanceTypes = savedByEntitlementType.Keys
+                        .Concat(clearedBalanceTypes.Where(t => !savedByEntitlementType.ContainsKey(t)))
+                        .ToList();
+                    foreach (var entitlementType in balanceTypes)
+                    {
+                        if (!entitlementData.TryGetValue(entitlementType, out var data))
+                            continue; // no live config: skipped, as the booking consumed nothing either.
+
+                        // S66 / TASK-6603 — the new side of the delta IS the Σ authoritative per-row
+                        // feriedage (already day-equivalents from the in-lock valuation). NO
+                        // re-division by StandardDayHours (ADR-032 D2 single valuation): this is
+                        // the same value Σ'd into the emitted AbsenceRegistered.Feriedage above. A type
+                        // the save only clears posts nothing: 0.
+                        //
+                        // S145 / TASK-14507 (R23) — the delta is SIGNED: new minus the stored
+                        // feriedage of the current rows this save replaced or cleared (step 1, under
+                        // the lock). Re-saving a cell unchanged moves `used` by 0; a reduction moves
+                        // it down; a clear gives back exactly the cleared rows' stored feriedage. A
+                        // first booking replaces nothing, so it is the full new value, exactly as before.
+                        var totalFeriedage = savedByEntitlementType.GetValueOrDefault(entitlementType);
+                        var replacedDays = replacedByEntitlementType.GetValueOrDefault(entitlementType);
+                        var deltaDays = totalFeriedage - replacedDays;
+
+                        // QUAL-196 (owner Q1, 2026-11-11) — the seed inputs of a balance row this
+                        // write creates: the absence types the mapping sends to this entitlement
+                        // type and the reset_month that keyed the year. The rows above are already
+                        // written and the cleared ones retired, so the writer seeds `used` at the Σ
+                        // before this save (a give-back into a missing row ends at the right value).
+                        var seedAbsenceTypes = AbsenceToEntitlementType
+                            .Where(m => string.Equals(m.Value, entitlementType, StringComparison.Ordinal))
+                            .Select(m => m.Key)
+                            .ToArray();
+
+                        // A clear-only pro-rated type whose dated profile could not be resolved has no
+                        // seed quota (phase 1; addendum A1 D-6, N-1): its days go back into an existing
+                        // row only, which also supplies an IMMEDIATE type's fraction-scaled cap. No row:
+                        // nothing was ever counted against it, so nothing is created; the skip is logged.
+                        decimal seedQuota;
+                        decimal guardCap;
+                        if (data.SeedQuota is { } plannedSeedQuota)
                         {
-                            if (!entitlementData.TryGetValue(entitlementType, out var data))
-                                continue;
-
-                            // S66 / TASK-6603 — the new side of the delta IS the Σ authoritative per-row
-                            // feriedage (already day-equivalents from the in-lock valuation). NO
-                            // re-division by StandardDayHours (ADR-032 D2 single valuation): this is
-                            // the same value Σ'd into the emitted AbsenceRegistered.Feriedage above.
-                            //
-                            // S145 / TASK-14507 (R23) — the delta is SIGNED: new minus the stored
-                            // feriedage of the current rows this save just replaced (read above, under
-                            // the lock). Re-saving a cell unchanged moves `used` by 0; a reduction moves
-                            // it down. A first booking replaces nothing, so it is the full new value,
-                            // exactly as before.
-                            var replacedDays = replacedByEntitlementType.GetValueOrDefault(entitlementType);
-                            var deltaDays = totalFeriedage - replacedDays;
-
-                            bool success;
-                            decimal newUsed;
-                            if (deltaDays > 0m)
-                            {
-                                // An INCREASE (or a first booking) is held to the cap exactly as before.
-                                // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type
-                                // bookable cap; the WHERE-clause re-adds carryover once) + SeedQuota
-                                // (= annual entitlement, seeds total_quota on a first-INSERT only).
-                                (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
-                                    conn, tx, employeeId, entitlementType, data.EntitlementYear,
-                                    deltaDays, data.GuardCap, data.SeedQuota, ct);
-                            }
-                            else
-                            {
-                                // Zero or a REDUCTION: ungated, in this transaction. A reduction gives
-                                // days back and is never refused, not even when an ADR-032 D4
-                                // revaluation already left `used` above the cap (the guard would refuse
-                                // `used + delta <= cap` there although the save lowers `used`).
-                                newUsed = await entitlementBalanceRepo.AdjustUsedAsync(
-                                    conn, tx, employeeId, entitlementType, data.EntitlementYear,
-                                    deltaDays, data.SeedQuota, ct);
-                                success = true;
-                            }
-
-                            if (!success)
-                            {
-                                // S27 TASK-2706 (c) quota-race fix: throw to roll back the entire save
-                                // atomically (bundle-rollback per ADR-018 D3). Replaces pre-S27 silent
-                                // `continue` that returned 200 OK with inconsistent state. `newUsed`
-                                // here is the current used balance (the (conn, tx) overload routes the
-                                // failure-path read through the same snapshot — see EntitlementBalanceRepository
-                                // CheckAndAdjustInternalAsync). Caught at the outer try/catch below
-                                // and mapped to a 422 response. The 422 "remaining" uses the same
-                                // carryover-EXCLUDED GuardCap the guard enforced (the catch block
-                                // re-adds nothing — see note there) so the surfaced number matches
-                                // the per-type bookable cap, not the annual seed.
-                                throw new SkemaQuotaBreachException(
-                                    entitlementType,
-                                    requestedDays: deltaDays,
-                                    currentUsed: newUsed,
-                                    effectiveQuota: data.GuardCap);
-                            }
-
-                            // Read the carryover via the (conn, tx) overload so it observes the same
-                            // snapshot under the outer tx (ADR-018 D3 + S26 TASK-2603(a) refinement W3).
-                            var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
-                                conn, tx, employeeId, entitlementType, data.EntitlementYear, ct);
-                            var carryoverIn = balance?.CarryoverIn ?? 0m;
-                            // Remaining for the audit event mirrors the enforced cap: the per-type
-                            // GuardCap (carryover-EXCLUDED) + carryover − newUsed. For IMMEDIATE types
-                            // GuardCap == annual effectiveQuota, so this is unchanged from pre-S60.
-                            var newRemaining = data.GuardCap + carryoverIn - newUsed;
-
-                            var balanceEvent = new EntitlementBalanceAdjusted
-                            {
-                                EmployeeId = employeeId,
-                                EntitlementType = entitlementType,
-                                EntitlementYear = data.EntitlementYear,
-                                DeltaDays = deltaDays,
-                                NewUsed = newUsed,
-                                NewRemaining = Math.Round(newRemaining, 2),
-                                Reason = "Absence registered via Skema save",
-                                ActorId = actor.ActorId,
-                                ActorRole = actor.ActorRole,
-                                CorrelationId = actor.CorrelationId
-                            };
-                            // No projection write for EntitlementBalanceAdjusted: entitlement_balances is
-                            // a write-back projection mutated by CheckAndAdjustAsync above (not event-
-                            // derived); the event captures the balance transition for audit/replay only.
-                            await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, balanceEvent, ct);
+                            seedQuota = plannedSeedQuota;
+                            guardCap = data.GuardCap!.Value;
                         }
+                        else
+                        {
+                            var existingBalance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                                conn, tx, employeeId, entitlementType, data.EntitlementYear, ct);
+                            if (existingBalance is null)
+                            {
+                                loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.SkemaEndpoints").LogWarning(
+                                    "Skema save for {EmployeeId}: cleared {EntitlementType} {EntitlementYear} has no balance row and no resolvable dated profile for its seed quota; no balance row created, nothing given back",
+                                    employeeId, entitlementType, data.EntitlementYear);
+                                continue;
+                            }
+                            seedQuota = existingBalance.TotalQuota;
+                            guardCap = data.GuardCap ?? existingBalance.TotalQuota;
+                        }
+
+                        bool success;
+                        decimal newUsed;
+                        if (deltaDays > 0m)
+                        {
+                            // An INCREASE (or a first booking) is held to the cap exactly as before.
+                            // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type
+                            // bookable cap; the WHERE-clause re-adds carryover once) + SeedQuota
+                            // (= annual entitlement, seeds total_quota on a first-INSERT only).
+                            (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
+                                conn, tx, employeeId, entitlementType, data.EntitlementYear,
+                                deltaDays, guardCap, seedQuota,
+                                seedResetMonth: data.ResetMonth, seedAbsenceTypes: seedAbsenceTypes, ct);
+                        }
+                        else
+                        {
+                            // Zero or a REDUCTION, a give-back included: ungated, in this transaction.
+                            // A reduction gives days back and is never refused, not even when an
+                            // ADR-032 D4 revaluation already left `used` above the cap (the guard would
+                            // refuse `used + delta <= cap` there although the save lowers `used`).
+                            newUsed = await entitlementBalanceRepo.AdjustUsedAsync(
+                                conn, tx, employeeId, entitlementType, data.EntitlementYear,
+                                deltaDays, seedQuota,
+                                seedResetMonth: data.ResetMonth, seedAbsenceTypes: seedAbsenceTypes, ct);
+                            success = true;
+                        }
+
+                        if (!success)
+                        {
+                            // S27 TASK-2706 (c) quota-race fix: throw to roll back the entire save
+                            // atomically (bundle-rollback per ADR-018 D3). Replaces pre-S27 silent
+                            // `continue` that returned 200 OK with inconsistent state. `newUsed`
+                            // here is the current used balance (the (conn, tx) overload routes the
+                            // failure-path read through the same snapshot — see EntitlementBalanceRepository
+                            // CheckAndAdjustInternalAsync). Caught at the outer try/catch below
+                            // and mapped to a 422 response. The 422 "remaining" uses the same
+                            // carryover-EXCLUDED GuardCap the guard enforced (the catch block
+                            // re-adds nothing — see note there) so the surfaced number matches
+                            // the per-type bookable cap, not the annual seed.
+                            throw new SkemaQuotaBreachException(
+                                entitlementType,
+                                requestedDays: deltaDays,
+                                currentUsed: newUsed,
+                                effectiveQuota: guardCap);
+                        }
+
+                        // Read the carryover via the (conn, tx) overload so it observes the same
+                        // snapshot under the outer tx (ADR-018 D3 + S26 TASK-2603(a) refinement W3).
+                        var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                            conn, tx, employeeId, entitlementType, data.EntitlementYear, ct);
+                        var carryoverIn = balance?.CarryoverIn ?? 0m;
+                        // Remaining for the audit event mirrors the enforced cap: the per-type
+                        // GuardCap (carryover-EXCLUDED) + carryover − newUsed. For IMMEDIATE types
+                        // GuardCap == annual effectiveQuota, so this is unchanged from pre-S60.
+                        var newRemaining = guardCap + carryoverIn - newUsed;
+
+                        var balanceEvent = new EntitlementBalanceAdjusted
+                        {
+                            EmployeeId = employeeId,
+                            EntitlementType = entitlementType,
+                            EntitlementYear = data.EntitlementYear,
+                            DeltaDays = deltaDays,
+                            NewUsed = newUsed,
+                            NewRemaining = Math.Round(newRemaining, 2),
+                            // A type the save only clears says so; a type it posts keeps the
+                            // registration reason, a clear in the same save included.
+                            Reason = savedByEntitlementType.ContainsKey(entitlementType)
+                                ? "Absence registered via Skema save"
+                                : "Absence cleared via Skema save",
+                            ActorId = actor.ActorId,
+                            ActorRole = actor.ActorRole,
+                            CorrelationId = actor.CorrelationId
+                        };
+                        // No projection write for EntitlementBalanceAdjusted: entitlement_balances is
+                        // a write-back projection mutated by CheckAndAdjustAsync above (not event-
+                        // derived); the event captures the balance transition for audit/replay only.
+                        await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, balanceEvent, ct);
                     }
 
                     await tx.CommitAsync(ct);
@@ -2365,10 +3204,16 @@ public static class SkemaEndpoints
             }
             catch (SkemaConsumptionValidationException ex)
             {
-                // S66 / TASK-6603 FIX-FORWARD — in-lock D2/D3 re-check failure (B1 profile-missing /
-                // B2 norm cap) after a racing profile-PUT. The throw site already shaped the body to
-                // match its pre-tx sibling guard byte-for-byte; surface it unchanged so the racing-save
-                // loser gets a clean validation 422 (never a 500) and the frontend contract holds.
+                // One of the five in-lock re-checks refused the save before any write, and the inner
+                // catch has rolled the transaction back: B1 (employment profile missing), B2 (the
+                // all-types cap) or B3 (full-day-only), each re-run because a profile change can race
+                // the save (ADR-032 D2/D3); the paid-absence day bound (ADR-043 D2), refused mostly
+                // because another save of the same employee committed while this one waited for the
+                // lock; or the child's-sick judge (QUAL-236: the illness chain, rule A on where an illness
+                // starts, rule B on the call-home day's work), judged on the rows as committed under the
+                // lock. The throw site already shaped the body to match its pre-tx sibling
+                // byte-for-byte; surface it unchanged so the race loser gets a clean validation 422
+                // (never a 500) and the frontend contract holds.
                 return Results.Json(ex.Body, statusCode: 422);
             }
 
@@ -2609,7 +3454,9 @@ public static class SkemaEndpoints
     /// <summary>
     /// The ADDABLE absence-type catalog — the EXISTING filter chain extracted VERBATIM from
     /// the month GET's inline block (S72 / TASK-7201; SPRINT-72 R4 "reuse the existing chain,
-    /// do not reimplement"): agreement (<see cref="GetAbsenceTypesForAgreement"/>) → org
+    /// do not reimplement"): agreement (<see cref="GetAbsenceTypesForAgreement"/>, with the
+    /// child's-sick codes the agreement's dated CHILD_SICK config offers at the anchor,
+    /// <see cref="ChildSickCodesOfferedAsync"/>; QUAL-236) → org
     /// <c>absence_type_visibility</c> → per-employee eligibility. SELECTION-INDEPENDENT: the
     /// user's row preferences never feed this — removed rows stay re-addable. Consumed by the
     /// month GET (anchor = MONTH-END, the established S59 display anchor) and the
@@ -2622,9 +3469,10 @@ public static class SkemaEndpoints
     ///     gate per absence.Date is authoritative. The POST gate intentionally uses a
     ///     different anchor (per-row absence.Date); the two are NOT required to agree
     ///     mid-month (refinement line 19, SPRINT-59 TASK-5907).</item>
-    ///   <item><b>(a) CHILD_SICK:</b> drop all child-sick variants (those mapping to
-    ///     entitlement CHILD_SICK) when the employee is ineligible as-of the anchor. Absent
-    ///     eligibility row ⇒ ineligible (opt-in default).</item>
+    ///   <item><b>(a) CHILD_SICK:</b> drop every child's-sick code
+    ///     (<c>DefaultEntitlementConfigs.ChildSickCodes</c>, the call-home day included) when the
+    ///     employee is ineligible as-of the anchor. Absent eligibility row ⇒ ineligible (opt-in
+    ///     default).</item>
     ///   <item><b>(b) SENIOR_DAY:</b> DOB-derived age gate — hide when under the resolved
     ///     SENIOR_DAY MinAge as-of the anchor, OR when BirthDate is missing (fail-closed).
     ///     S59 / Step-7a BLOCKER 2: the SENIOR_DAY config is resolved AS-OF the anchor (not
@@ -2680,12 +3528,16 @@ public static class SkemaEndpoints
             "SPECIAL_HOLIDAY", agreementCode, OkVersionResolver.ResolveVersion(anchor), anchor, ct);
         var specialHolidayConfigured = specialHolidayConfig is not null;
 
-        // Agreement → visibility → eligibility, in the established order.
-        var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
+        // Agreement → visibility → eligibility, in the established order. The child's-sick codes
+        // are the ones the dated CHILD_SICK config offers at the anchor, under the anchor's OK
+        // version (as gate (c) reads SPECIAL_HOLIDAY): an April 2026 month (OK26) offers the
+        // call-home day and day 1 to 3, a March 2026 month (OK24) day 1 and 2 (QUAL-236).
+        var childSickCodesOffered = await ChildSickCodesOfferedAsync(entitlementConfigRepo, agreementCode, anchor, ct);
+        var agreementAbsenceTypes = GetAbsenceTypesForAgreement(childSickCodesOffered);
         var filteredTypes = agreementAbsenceTypes
             .Where(t => !hiddenTypes.Contains(t))
             .Where(t => childSickEligible
-                || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
+                || !StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Contains(t))
             .Where(t => seniorVisible || !string.Equals(t, AbsenceTypes.SeniorDay, StringComparison.Ordinal))
             .Where(t => specialHolidayConfigured
                 || !string.Equals(GetEntitlementType(t), "SPECIAL_HOLIDAY", StringComparison.Ordinal))
@@ -2772,6 +3624,37 @@ public static class SkemaEndpoints
         // event; re-saving a day supersedes the prior row via the projection's
         // outbox_id guard.
         public SkemaWorkTimeDay[]? WorkTime { get; init; }
+
+        // The cells this save EMPTIES (owner Q2; addendum A1 D-1), one typed array per cell family,
+        // keyed as the save replaces cells: (date, project code), (date, absence type), the day. A
+        // cleared cell's current Skema row is kept and marked retired by the clear's own event, and
+        // nothing is inserted; a cell with no current row is a no-op. Hours are never posted as 0 to
+        // remove a cell: 0 or less stays a 400, and a removal is this member.
+        public SkemaCleared? Cleared { get; init; }
+    }
+
+    private sealed class SkemaCleared
+    {
+        public SkemaClearedEntry[]? Entries { get; init; }
+        public SkemaClearedAbsence[]? Absences { get; init; }
+        public SkemaClearedWorkTimeDay[]? WorkTime { get; init; }
+    }
+
+    private sealed class SkemaClearedEntry
+    {
+        public required DateOnly Date { get; init; }
+        public required string ProjectCode { get; init; }
+    }
+
+    private sealed class SkemaClearedAbsence
+    {
+        public required DateOnly Date { get; init; }
+        public required string AbsenceType { get; init; }
+    }
+
+    private sealed class SkemaClearedWorkTimeDay
+    {
+        public required DateOnly Date { get; init; }
     }
 
     private sealed class SkemaEntry
@@ -2782,14 +3665,14 @@ public static class SkemaEndpoints
     }
 
     // TASK-5603 — one day's self-recorded work time: a list of wall-clock
-    // intervals plus a manual daily-hours scalar. Mirrors the
+    // intervals, the day's only work-time record (ADR-043 D10, D-2.4). A body
+    // member beyond these two is ignored by the binder, not refused. Mirrors the
     // WorkTimeRegistered event shape (EmployeeId is taken from the route, not
     // the body, so it cannot be spoofed).
     private sealed class SkemaWorkTimeDay
     {
         public required DateOnly Date { get; init; }
         public SkemaWorkInterval[]? Intervals { get; init; }
-        public decimal ManualHours { get; init; }
     }
 
     private sealed class SkemaWorkInterval
@@ -2828,6 +3711,9 @@ public static class SkemaEndpoints
         /// phase 3 adds the snapshot's carryover to form the rule-engine BookableLimit.</summary>
         public decimal AccruableCap { get; init; }
         public decimal GuardCap { get; init; }
+        /// <summary>A type the save only clears, pro-rated, whose dated profile could not be resolved:
+        /// it has no seed quota of its own (addendum A1 D-6, N-1).</summary>
+        public bool SeedQuotaUnresolved { get; init; }
         public bool HasNoLiveConfig { get; init; }
         public IResult? Refusal { get; init; }
 

@@ -68,8 +68,10 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
     /// — ONE record, sibling rule).</summary>
     private static readonly string[] DayHoursRowKeys = { "date", "hours" };
 
-    /// <summary>The EXACT 3 members of a <c>SkemaWorkTimeDayRow</c>.</summary>
-    private static readonly string[] WorkTimeDayKeys = { "date", "intervals", "manualHours" };
+    /// <summary>The EXACT 2 members of a <c>SkemaWorkTimeDayRow</c>. S148 S0-5: <c>manualHours</c> is retired;
+    /// this key-set assertion is kind F (CI): the served row has three keys until the member is removed
+    /// (red condition: <c>SkemaWorkTimeDayRow</c> still serving <c>manualHours</c>).</summary>
+    private static readonly string[] WorkTimeDayKeys = { "date", "intervals" };
 
     /// <summary>The EXACT 1 member of <c>SkemaSaveResponse</c>.</summary>
     private static readonly string[] SaveKeys = { "saved" };
@@ -231,7 +233,7 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
             HttpMethod.Post, $"/api/skema/{emp}/save",
             """
             { "year": 2026, "month": 3,
-              "workTime": [ { "date": "2026-03-03", "intervals": [ { "start": "08:00", "end": "12:00" } ], "manualHours": 1.5 } ] }
+              "workTime": [ { "date": "2026-03-03", "intervals": [ { "start": "08:00", "end": "12:00" } ] } ] }
             """)); // NO precondition header — the unconditioned pin
         var body = await response.Content.ReadAsStringAsync();
 
@@ -254,7 +256,6 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
         var day = Assert.Single(workTime.EnumerateArray());
         S118ContractAssert.AssertExactKeySet(day, WorkTimeDayKeys, "workTime row");
         Assert.Equal("2026-03-03", day.GetProperty("date").GetString());
-        Assert.Equal(1.5m, day.GetProperty("manualHours").GetDecimal());
         var interval = Assert.Single(day.GetProperty("intervals").EnumerateArray());
         Assert.Equal("08:00", interval.GetProperty("start").GetString());
         Assert.Equal("12:00", interval.GetProperty("end").GetString());

@@ -29,13 +29,13 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
    - **Phase 4** (sequential): Orchestrator validates — `dotnet build && dotnet test`. When the frontend changed, the gate also runs `npx tsc --noEmit`, `npm run lint`, `npm run typecheck:e2e`, `npm run build` and vitest, the checking and build steps CI's `frontend-build` job runs (CI also checks `api-types.ts` drift against `openapi.json`) (S146: a lint-only failure reached CI because the local gate ran only tsc and vitest)
 5. **Validate**: After all agents complete, the Orchestrator runs build and test. If validation fails, identify the responsible agent and re-dispatch with the error context.
 5α. **Constraint Validation**: Run the Constraint Validator Agent (see [AGENTS.md](AGENTS.md)) on every agent output (except documentation-only changes). If violations are found, re-dispatch the responsible agent with the violation list before proceeding. For Small Tasks Exception, the Orchestrator self-checks against the Constraint Validator checklist. This step is fast and mechanical — it should catch rule violations that agents missed in their pre-submission checklist.
-5a. **Reviewer Audit**: If the task meets trigger criteria (see [AGENTS.md](AGENTS.md) Reviewer Agent section), spawn the Reviewer Agent with the agent's output as context. Read the Reviewer's findings before proceeding to step 5b. The Orchestrator decides how to act on findings — a BLOCKER finding is a strong signal to withhold approval and re-dispatch, but authority remains with the Orchestrator. Do NOT invoke the Reviewer for tasks covered by the Small Tasks Exception. Save the Reviewer's report as `.claude/reviews/S<N>-TASK-<n>-5a-reviewer.md` (the Codex output beside it) BEFORE acting on it; a verdict with no artifact is not evidence at close (S146 Step 7a W-2, R-58; the S125 F4 lesson).
+5a. **Reviewer Audit**: If the task meets trigger criteria (see [AGENTS.md](AGENTS.md) Reviewer Agent section), spawn the Reviewer Agent with the agent's output as context. Read the Reviewer's findings before proceeding to step 5b. The Orchestrator decides how to act on findings — a BLOCKER finding is a strong signal to withhold approval and re-dispatch, but authority remains with the Orchestrator. Do NOT invoke the Reviewer for tasks covered by the Small Tasks Exception. Save the Reviewer's report as `.claude/reviews/S<N>-TASK-<n>-5a-reviewer.md` (the Codex output beside it) BEFORE acting on it; a verdict with no artifact is not evidence at close (S146 Step 7a W-2, R-58; the S125 F4 lesson). For each `(unproven)` NOTE that names an invariant, decide whether to dispatch a `trace` agent to prove or refute it (the no-concrete-case rule, [AGENTS.md](AGENTS.md) § Reviewer Agent "Role and Boundaries"); a Codex BLOCKER or WARNING without a concrete case is recorded as an `(unproven)` NOTE, never given a case by the Orchestrator.
 
    **High-Risk External Review Override**: If the task touches a high-risk category (schema migrations, JWT/auth, payroll export, legal rule logic, retroactive corrections — see [AGENTS.md](AGENTS.md) External Review section), the Orchestrator ALSO invokes Codex via `codex review "<prompt>"` (prompt-alone form — auto-targets the current uncommitted diff; see [AGENTS.md](AGENTS.md) Invocation Modes for the CLI constraint on combining prompts with diff-target flags) in addition to the internal Reviewer. Per-task Codex scope is narrow: "cross-check domain correctness with external eyes," NOT architectural invariants (already covered by the internal Reviewer). Findings are recorded in the task's **External Review** field in the sprint log. The scope-creep cycle cap (see Step 7a and AGENTS.md) applies per-task as well: every fix gets a verification review, so every cycle from 2 through 5 runs to verify the previous cycle's fix. Halt-and-prompt fires AFTER cycle 5 verification IF that verification surfaces new BLOCKERs, before any cycle-6 fix begins (cap raised from 3 to 5 by owner ruling 2026-09-29).
-5b. **Review Knowledge Proposals**: Review agent outputs for `PROPOSED KNOWLEDGE ENTRY` sections. Approve valid proposals by creating entries in `docs/knowledge-base/` and updating `INDEX.md`.
-5c. **Record in Sprint Log**: After validating each task, record it in the current sprint's `docs/sprints/SPRINT-N.md` with validation criteria, files changed, and KB references.
+5b. **Review Knowledge Proposals and Shortcuts**: Review agent outputs for `PROPOSED KNOWLEDGE ENTRY` sections. Approve valid proposals by creating entries in `docs/knowledge-base/` and updating `INDEX.md`. Register each "Shortcuts taken" item ([PAT-032](knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md)): a QUAL, SEC or F row (or a dated note on an existing row), or a `QUAL-BF` row in the QUAL register's "Shortcuts below the floor" table; then replace `shortcut(pending)` with the tag in the same merge. Check the code's `shortcut` comments against the list, both ways.
+5c. **Record in Sprint Log**: After validating each task, record it in the current sprint's `docs/sprints/SPRINT-N.md` with validation criteria, files changed, KB references, the "Not built / found / shortcuts" field (each item with its disposition), and every `(unproven)` NOTE with its evidence requirement and its disposition (proved / refuted / open). `(unproven)` NOTEs from refinement Step 4 and Step 0b go in the log's Plan Review section, since `.claude/refinements/` is gitignored.
 6. **Merge**: If agents ran in worktrees, the Orchestrator merges their branches and resolves any conflicts.
-7a. **External Review (Sprint-End)**: After tests pass, internal Reviewer findings are resolved, and any worktree merges (step 6) are complete, the Orchestrator invokes Codex on the full sprint diff. The preferred form is `codex review "<prompt>"` (prompt-alone, auto-targets uncommitted) — this requires that all sprint work is still uncommitted at Step 7a time, which is the default because step 7 (commit) only runs AFTER Step 7a completes. If intermediate commits exist on master (e.g. from a `--no-ff` worktree merge), fall back to `codex review --base <sprint-start-commit>` with no prompt (Codex runs its default review prompt; project-specific steering is lost). See [AGENTS.md](AGENTS.md) External Review section for the prompt template and the CLI constraint rationale. `<sprint-start-commit>` is the HEAD commit of the previous sprint on master. When post-close commits exist (a CI fix, a governance chain), the next sprint's base is the previous sprint's **close commit**, not HEAD, so those commits fall inside the next Step-7a diff; the sprint log header names the base at open. Codex findings are recorded in the sprint log under "## External Review (Step 7a)" and mapped to BLOCKER / WARNING / NOTE severities. BLOCKERs should be fixed as follow-up tasks within the same sprint; re-invoke Codex after fixes. **Cycle cap**: every fix gets a verification review — so every cycle from 2 through 5 runs to verify the previous cycle's fix. Halt-and-prompt fires AFTER cycle 5 verification IF that verification surfaces new BLOCKERs, before any cycle-6 fix begins (cap raised from 3 to 5 by owner ruling 2026-09-29). At the halt-prompt the user chooses: (a) continue iterating, (b) accept remaining findings and commit, or (c) defer findings as a new sprint task. This ensures every absorption commit is reviewed at least once before any decision to stop iterating. **Post-Step-7a coverage**: any code-touching commit after Step 7a closes (in-flight defects from full-test runs, post-close fixes) triggers a new Step-7a review cycle scoped to that fix; the cycle counter resets for the new fix scope. A docs-only sprint-close commit (no code changes) is exempt. The sprint is "validated, not sealed" until Step 7a passes or the user grants a documented exit. If the `codex` CLI is unavailable, halt and prompt the user — do not silently skip.
+7a. **External Review (Sprint-End)**: After tests pass, internal Reviewer findings are resolved, and any worktree merges (step 6) are complete, the Orchestrator invokes Codex on the full sprint diff. First, no `shortcut(pending)` may remain in code — the same file scope as `tools/check_docs.py` check 5: `git grep -nE "shortcut\s*\(\s*pending" -- '*.cs' '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.sql' '*.ps1' '*.psm1' '*.py' '*.sh' '*.yml' '*.yaml' ':!docs' ':!tools/check_docs.py'` must print nothing (Python cannot run locally; CI at C-2 is the hard check). The preferred form is `codex review "<prompt>"` (prompt-alone, auto-targets uncommitted) — this requires that all sprint work is still uncommitted at Step 7a time, which is the default because step 7 (commit) only runs AFTER Step 7a completes. If intermediate commits exist on master (e.g. from a `--no-ff` worktree merge), fall back to `codex review --base <sprint-start-commit>` with no prompt (Codex runs its default review prompt; project-specific steering is lost). See [AGENTS.md](AGENTS.md) External Review section for the prompt template and the CLI constraint rationale. `<sprint-start-commit>` is the HEAD commit of the previous sprint on master. When post-close commits exist (a CI fix, a governance chain), the next sprint's base is the previous sprint's **close commit**, not HEAD, so those commits fall inside the next Step-7a diff; the sprint log header names the base at open. Codex findings are recorded in the sprint log under "## External Review (Step 7a)" and mapped to BLOCKER / WARNING / NOTE severities; each `(unproven)` NOTE from either lens is recorded there with its evidence requirement and its disposition (proved / refuted / open — the one-line format's resolution slot). BLOCKERs should be fixed as follow-up tasks within the same sprint; re-invoke Codex after fixes. **Cycle cap**: every fix gets a verification review — so every cycle from 2 through 5 runs to verify the previous cycle's fix. Halt-and-prompt fires AFTER cycle 5 verification IF that verification surfaces new BLOCKERs, before any cycle-6 fix begins (cap raised from 3 to 5 by owner ruling 2026-09-29). At the halt-prompt the user chooses: (a) continue iterating, (b) accept remaining findings and commit, or (c) defer findings as a new sprint task. This ensures every absorption commit is reviewed at least once before any decision to stop iterating. **Post-Step-7a coverage**: any code-touching commit after Step 7a closes (in-flight defects from full-test runs, post-close fixes) triggers a new Step-7a review cycle scoped to that fix; the cycle counter resets for the new fix scope. A docs-only sprint-close commit (no code changes) is exempt. The sprint is "validated, not sealed" until Step 7a passes or the user grants a documented exit. If the `codex` CLI is unavailable, halt and prompt the user — do not silently skip.
 7. **Commit & Push**: After step 7a completes (Codex pass or user-approved exit), the Orchestrator commits all changes and pushes to the remote repository. This is mandatory — every completed sprint must be committed and pushed before moving on.
 
    **Mechanical close gates** (`.claude/hooks/sprint-close-guard.ps1`, PreToolUse on the close commit — every gate below is enforced by the hook, not by convention):
@@ -110,6 +110,7 @@ Each task in a sprint log includes:
 - **KB Refs**: Related knowledge base entries
 - **Orchestrator Approved**: yes/no with date
 - **Validation Criteria**: Checklist of acceptance criteria with pass/fail
+- **Not built / found / shortcuts** (since 2026-11-08): each item from the agent's three report sections with its disposition — not built: accepted | overruled → built where; found, not fixed: fixed in TASK-x | registered QUAL/SEC-nnn | recorded here; shortcuts: the registered tag
 - **Files Changed**: List of affected files
 
 ## Orchestrator Workflow Integration
@@ -220,6 +221,7 @@ At the start of each new sprint, the Orchestrator runs a lightweight entropy sca
 3. **Orphan Detection**: Check for files that exist but are not imported/referenced anywhere (unused components, dead models). Focus on files created in the previous 2 sprints.
 4. **Documentation Drift**: Verify that MEMORY.md deferred items list is current (no items already completed, no missing new items).
 5. **Quality Grade Review**: Update `docs/QUALITY.md` grades if the previous sprint changed domain quality.
+6. **Shortcut Review** ([PAT-032](knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md)): list the code's shortcuts with `git grep -nE "(//|#|--|\*)\s*shortcut\s*[(:]" -- '*.cs' '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.sql' '*.ps1' '*.psm1' '*.py' '*.sh' '*.yml' '*.yaml' ':!docs' ':!tools/check_docs.py'` and read each one's register row. A closed row whose comment remains is DRIFT (CI's check 5 proves a row exists, not that it is open). Also re-run the SMALLEST COMPLETE CHANGE identity check recorded in PAT-032.
 
 ### Recording
 
@@ -280,6 +282,17 @@ Every governance mechanism should be periodically evaluated for cost vs. value. 
 - **Every 5 sprints**: Review agent effectiveness metrics. Identify constraints with zero violations and consider relaxation.
 - **On model upgrade**: When the underlying model changes significantly, reassess whether existing constraints are still necessary. Capabilities that required pipelines in earlier sprints may only need prompting with newer models.
 - **On workflow friction**: If a governance step consistently slows delivery without catching real issues, mark it for evaluation.
+
+## Trial: four ideas from the Ponytail plugin (2026-11-08 → decided at S150's close)
+Assessed 2026-11-06 and adopted as ideas, not as the plugin (which would inject instructions into every agent
+behind the Orchestrator's prompts): the SMALLEST COMPLETE CHANGE block in the implementer definitions and the
+Agent Prompt Template ([AGENTS.md](AGENTS.md)); comments that state what is true now, and `shortcut(<tag>)` comments
+backed by a register row ([PAT-032](knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md),
+enforced by `tools/check_docs.py` check 5); and, for both review lenses, "no concrete case, no BLOCKER or WARNING"
+with a seven-field finding format. It is measured in `docs/operations/model-routing-register.md` for S148–S150
+against an S145–S147 baseline, and the keep-or-revert rule is in `ROADMAP.md` § Governance / docs — this principle
+applied in advance. Whatever the outcome, at S150's close every `(unproven)` NOTE still open that names an invariant
+becomes a register row (QUAL or SEC), so no concern raised under the rule expires with the trial.
 
 ## Observability Integration (Future — Phase 4+)
 When Docker services run in production-like environments, agent prompts may include runtime context:
@@ -350,11 +363,14 @@ one of its 19 agents inherited that model because no routing existed.
 2. *Gate at spawn.* `.claude/hooks/model-routing-guard.ps1` is a PreToolUse hook on the `Agent` tool. It
    blocks a reviewer on anything but the floor, blocks implementers/validators/traces/sweeps on Fable, and
    blocks a bare generic spawn that names no model (the choice must be conscious). Read-only built-ins
-   (Explore, Plan) and forks pass. Fail-open on hook-internal errors, like the close guard.
+   (Explore, Plan) and forks pass. Fail-open on hook-internal errors, like the close guard — and, because
+   Claude Code treats both as non-blocking, on a hook timeout or a start failure too: in S147 the guard did not
+   run on 51 of 200 spawns (FAIL-009). Both hooks now start by `${CLAUDE_PROJECT_DIR}` with a 60 s limit; whether
+   to fail closed instead is queued for the owner (`ROADMAP.md`).
 3. *Self-check inside the agent.* The reviewer's first output line is `reviewed-by-model: <id>`; if the id is
    not the floor it writes `verdict: REFUSED — wrong model for review` and stops. A refusal cannot be mistaken
    for a review.
-4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-1` in the Step-7a
+4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-2` in the Step-7a
    reviewer artifact (a trailing context-window suffix such as `[1m]` is ignored in the comparison). A sprint
    cannot close on a review that ran cheap, whatever happened upstream. (S145 alone closed on an Opus review,
    by a one-sprint owner exception in the hook while Fable was on its usage limit, R-104 in
@@ -417,9 +433,9 @@ this is a checklist with a record, like the Orchestrator seat:
   support this model; version 2.1.280 or newer is required … model sent to the API: claude-opus-5-5` — the
   **first** pin's value, not the file's current one. The next day, on client 2.1.281, the alias resolved to
   `claude-opus-5-5` with no pin at all. Two things follow directly: a pin **does** reach the API (the 400
-  names it), and Opus 5.5 **does** need 2.1.280+ (the 400 says so). *Inferred, not separately tested:* agent
-  definitions are reloaded with a lag, so a spawn made seconds after editing one can still run on the
-  previous definition — the "silent" first spawn is most simply explained as its pin not yet being loaded,
+  names it), and Opus 5.5 **does** need 2.1.280+ (the 400 says so). *Inferred at the time, and observed on client 2.1.322
+  (2026-11-10, "Last verified" below):* a spawn made after editing a definition can still run on the
+  previous definition, on 2.1.322 until the session restarts — the "silent" first spawn is most simply explained as its pin not yet being loaded,
   rather than as an unknown id falling through to the session model (the documentation's resolution order,
   per-spawn `model` → frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → main conversation's model, does not say
   what an unknown id does). The `[1m]` suffix on that first spawn's self-report was read at the time as the session model's signature; it is not — a current client's alias-`opus` spawn self-reports `claude-opus-5-5[1m]` too, so the suffix cannot establish a session-model fallback; where it comes from is not established. Either way the lesson is the same: a pin is not known to be in effect until a
@@ -427,11 +443,18 @@ this is a checklist with a record, like the Orchestrator seat:
   first spawn ran on a model other than the pinned one with no error at all — which is why the self-report
   comparison after any pin is mandatory. A stale client is a cause a pin does not fix.
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
-  compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5-5`** ·
+  compare against): Fable **`claude-fable-5-2`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5-5`** ·
   Haiku **`claude-haiku-4-5-20251001`**. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);
   the suffix is ignored when comparing. *(Sonnet corrected from `claude-sonnet-5` at the S144 close: from client
   2.1.284 on, all ten S144 Sonnet-tier spawns resolved to `claude-sonnet-5-5`, read from the subagent transcripts.)*
-- **Last verified 2026-09-25 (client 2.1.281):** a `backend-infrastructure` spawn (alias `opus`) ran on
+- **Last verified 2026-11-10 (client 2.1.322), with the floor bump to Fable 5.2:** after the client update
+  (2.1.301 → 2.1.322, a restart), the alias `fable` resolved to `claude-fable-5-2` in three probes. Those three
+  spawns ran 1–5 minutes after the five-place edit, in the same session, and all three still read the old
+  self-check (`claude-fable-5-1`), although the file on disk was changed. After a second restart, a
+  `reviewer` probe and an `adjudicator` probe self-reported `claude-fable-5-2` and read the new floor. So on this
+  client **an agent-definition edit reaches spawns only in a session started after it**. A floor bump (or any pin)
+  therefore ends with a restart and then the self-report comparison. It does not end with the edit.
+- **Previously verified 2026-09-25 (client 2.1.281):** a `backend-infrastructure` spawn (alias `opus`) ran on
   `claude-opus-5-5`, confirmed both by self-report and by the subagent transcript's `"model"` field — the
   client had been updated 2.1.263 → 2.1.281 between the sessions, so no pin was needed. The same day a full id
   *temporarily* pinned in a definition file (`trace.md`, `model: claude-sonnet-5`, applied and reverted around
@@ -461,12 +484,16 @@ this is a checklist with a record, like the Orchestrator seat:
   up. Treat the whole event as a routing deviation, not a cosmetic one — the owner's rule is "always the
   newest", not "the right family".
 - **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) enforces the *configured* Fable id
-  (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump **four**
+  (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump **five**
   things in ONE commit: the reference list above, `$reviewFloor` in the close guard, the literal id in the
-  reviewer's self-check (`.claude/agents/reviewer.md`), and the fixtures in the guard's own test harness
+  reviewer's self-check (`.claude/agents/reviewer.md`), the literal id in the adjudicator's self-check
+  (`.claude/agents/adjudicator.md`), and the fixtures in the guard's own test harness
   (`.claude/hooks/test-sprint-close-guard.ps1`, which hard-codes the id — the omission that cost five harness
   tests in S141). There is no other route to a new floor — the reviewer accepts no successor named only in a
-  prompt, because the close gate would refuse that review at close.
+  prompt, because the close gate would refuse that review at close. Then run the harness, **restart the
+  session**, and confirm the floor with a `reviewer` probe and an `adjudicator` probe, each reporting both
+  the model it runs on and the floor its definition names. Before a restart, a probe still reads the
+  old definition ("Last verified" above).
 - The register row for each sprint records the **resolved** id per tier, not the alias, and the client
   version the session ran on.
 
@@ -512,6 +539,7 @@ never polled.
 event to `.claude/telemetry/model-routing.log` (local, gitignored). At close, the retrospective adds the
 sprint's row to [`docs/operations/model-routing-register.md`](operations/model-routing-register.md) — spawns by
 model, guard blocks, review findings by lens, CI runs to green, post-close defects — from artifacts the close
-guard already requires. Read for direction over three sprints; the register names the three signals that put
+guard already requires. Spawn counts come from the subagent transcripts, reconciled against the log's `ALLOW`
+lines, because the log shows only what the guard saw (FAIL-009). Read for direction over three sprints; the register names the three signals that put
 the routing back on the entropy-scan agenda. No per-task attribution, no score, no CI gate: at ten tasks a
 sprint the numbers cannot carry more.

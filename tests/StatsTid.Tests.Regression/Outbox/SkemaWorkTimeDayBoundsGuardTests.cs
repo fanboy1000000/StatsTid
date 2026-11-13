@@ -17,13 +17,12 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// <para>
 /// The save handler now rejects, UP FRONT (before the transaction), any
 /// <c>workTime[]</c> day that violates a physical input invariant — so no
-/// <c>work_time_projection</c> row is written. Three checks, in order:
-/// (1) <c>manualHours &lt; 0</c> → 422 <c>work_time_negative_manual_hours</c> (this
-/// runs first so a negative manual value cannot net large interval hours under the
-/// 24h cap); (2) overlapping intervals → 422 <c>work_time_intervals_overlap</c>;
-/// (3) total worked hours (interval hours + manual hours) &gt; 24 → 422
-/// <c>work_time_exceeds_day</c>. Exactly 24,0 t is allowed; touching interval
-/// boundaries (next.start == prev.end) are NOT an overlap.
+/// <c>work_time_projection</c> row is written. Two checks remain (manual hours, and with them the
+/// negative-manual check, are retired): (1) overlapping intervals → 422
+/// <c>work_time_intervals_overlap</c> (pinned here); (2) total worked hours (interval hours) &gt; 24 →
+/// 422 <c>work_time_exceeds_day</c>, a backstop that no test reaches today: hours parse 0-23 and overlaps
+/// are refused first, so a day tops out at 86 399 s, which rounds to 24,00. Exactly 24,0 t is allowed;
+/// touching interval boundaries (next.start == prev.end) are NOT an overlap.
 /// </para>
 ///
 /// <para>
@@ -58,21 +57,9 @@ public sealed class SkemaWorkTimeDayBoundsGuardTests : IAsyncLifetime
             await _harness.DisposeAsync();
     }
 
-    /// <summary>
-    /// Negative manual hours → 422 <c>work_time_negative_manual_hours</c>, no row.
-    /// This is the Codex-flagged bypass: 8h intervals + (-6) manual nets to 2h, which
-    /// would pass a naive total&gt;24 check — but the negative-manual guard runs first.
-    /// </summary>
-    [Fact]
-    public async Task Save_NegativeManualHours_Returns422_AndWritesNoRow()
-    {
-        var date = new DateOnly(2026, 3, 9);
-        var rsp = await PostWorkDayAsync(date,
-            intervals: new[] { ("08:00", "16:00") },
-            manualHours: -6m);
-
-        await AssertRejectedAsync(rsp, date, "work_time_negative_manual_hours");
-    }
+    // S148 S0-5: the negative-manual-hours fact and the two above-24-hours facts are retired with the
+    // manual-hours member: the negative check is gone with it, and more than 24 h cannot be reached from
+    // same-day clock intervals (TASK-14809 BC-4).
 
     /// <summary>Overlapping intervals → 422 <c>work_time_intervals_overlap</c>, no row.</summary>
     [Fact]
@@ -80,47 +67,22 @@ public sealed class SkemaWorkTimeDayBoundsGuardTests : IAsyncLifetime
     {
         var date = new DateOnly(2026, 3, 10);
         var rsp = await PostWorkDayAsync(date,
-            intervals: new[] { ("08:00", "16:00"), ("12:00", "20:00") }, // overlap 12:00–16:00
-            manualHours: 0m);
+            intervals: new[] { ("08:00", "16:00"), ("12:00", "20:00") }); // overlap 12:00–16:00
 
         await AssertRejectedAsync(rsp, date, "work_time_intervals_overlap");
     }
 
-    /// <summary>Manual-only &gt; 24h → 422 <c>work_time_exceeds_day</c>, no row.</summary>
-    [Fact]
-    public async Task Save_ManualHoursOver24_Returns422_AndWritesNoRow()
-    {
-        var date = new DateOnly(2026, 3, 11);
-        var rsp = await PostWorkDayAsync(date,
-            intervals: Array.Empty<(string, string)>(),
-            manualHours: 25m);
-
-        await AssertRejectedAsync(rsp, date, "work_time_exceeds_day");
-    }
-
-    /// <summary>Combined interval + manual &gt; 24h → 422 <c>work_time_exceeds_day</c>, no row.</summary>
-    [Fact]
-    public async Task Save_CombinedOver24_Returns422_AndWritesNoRow()
-    {
-        var date = new DateOnly(2026, 3, 12);
-        var rsp = await PostWorkDayAsync(date,
-            intervals: new[] { ("08:00", "16:00") }, // 8h
-            manualHours: 17m);                        // 8 + 17 = 25h
-
-        await AssertRejectedAsync(rsp, date, "work_time_exceeds_day");
-    }
-
     /// <summary>
-    /// Exactly 24,0 t (8h intervals + 16 manual) → 200, row written. Proves the cap is
-    /// strictly greater-than, not greater-or-equal.
+    /// Kind R (S148 S0-5: same assertions as before, the 24 h now expressed as clock time). One interval
+    /// 00:00–23:59:59 (86 399 s, 24,00 t at 2 dp) → 200, row written. Proves the cap is strictly
+    /// greater-than, not greater-or-equal. Red conditions: none; it holds before and after.
     /// </summary>
     [Fact]
     public async Task Save_Exactly24Hours_Succeeds_AndWritesRow()
     {
         var date = new DateOnly(2026, 3, 13);
         var rsp = await PostWorkDayAsync(date,
-            intervals: new[] { ("08:00", "16:00") }, // 8h
-            manualHours: 16m);                        // 8 + 16 = 24h exactly
+            intervals: new[] { ("00:00", "23:59:59") }); // 86 399 s = 24,00 t at 2 dp
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -137,8 +99,7 @@ public sealed class SkemaWorkTimeDayBoundsGuardTests : IAsyncLifetime
     {
         var date = new DateOnly(2026, 3, 14);
         var rsp = await PostWorkDayAsync(date,
-            intervals: new[] { ("08:00", "12:00"), ("12:00", "13:00") },
-            manualHours: 0m);
+            intervals: new[] { ("08:00", "12:00"), ("12:00", "13:00") });
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -149,7 +110,7 @@ public sealed class SkemaWorkTimeDayBoundsGuardTests : IAsyncLifetime
     // ── Helpers ──
 
     private async Task<HttpResponseMessage> PostWorkDayAsync(
-        DateOnly date, (string Start, string End)[] intervals, decimal manualHours)
+        DateOnly date, (string Start, string End)[] intervals)
     {
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
@@ -165,7 +126,6 @@ public sealed class SkemaWorkTimeDayBoundsGuardTests : IAsyncLifetime
                 {
                     date = date.ToString("yyyy-MM-dd"),
                     intervals = intervals.Select(i => new { start = i.Start, end = i.End }).ToArray(),
-                    manualHours,
                 },
             },
         };

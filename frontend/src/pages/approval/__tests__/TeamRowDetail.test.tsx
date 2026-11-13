@@ -124,7 +124,7 @@ const cleanSkemaMonth = {
     { date: '2026-03-04', absenceType: 'VACATION', hours: 7.4, feriedage: 1 },
   ],
   workTime: [
-    { date: '2026-03-02', intervals: [{ start: '08:00', end: '15:24' }], manualHours: 0 },
+    { date: '2026-03-02', intervals: [{ start: '08:00', end: '15:24' }] },
   ],
   dailyNorm: [
     { date: '2026-03-02', hours: 7.4 },
@@ -456,6 +456,10 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     renderPage()
     await expandFirstRow(user)
     await waitFor(() => expect(screen.getByText('Hviletid ikke kontrolleret for 2 dage')).toBeInTheDocument())
+    // S148 14b (BC-7), kind F: the same sentence is informational here too. Red before: the line carries detailAlertWarn.
+    const notice = screen.getByText('Hviletid ikke kontrolleret for 2 dage')
+    expect(notice).toHaveClass('detailAlertInfo')
+    expect(notice).not.toHaveClass('detailAlertWarn')
   })
 
   it('S147 boundary pin — holds today: an empty list shows no notice (compliance read landed)', async () => {

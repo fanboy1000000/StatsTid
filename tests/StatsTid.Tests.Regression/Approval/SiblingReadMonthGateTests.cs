@@ -412,14 +412,16 @@ public sealed class SiblingReadMonthGateTests : IAsyncLifetime
 
         await using (var cmd = new NpgsqlCommand(
             """
-            INSERT INTO work_time_projection (employee_id, date, intervals, manual_hours, occurred_at, outbox_id)
-            VALUES (@emp, @date, '[]'::jsonb, @manual, NOW(), @outbox)
-            ON CONFLICT (employee_id, date) DO UPDATE SET manual_hours = @manual
+            INSERT INTO work_time_projection (employee_id, date, intervals, occurred_at, outbox_id)
+            VALUES (@emp, @date, @intervals::jsonb, NOW(), @outbox)
+            ON CONFLICT (employee_id, date) DO UPDATE SET intervals = @intervals::jsonb
             """, conn))
         {
+            // S148 S0-5: manual hours are retired; the same hours as one clock interval from 08:00.
+            var end = (TimeSpan.FromHours(8) + TimeSpan.FromSeconds((double)(hours * 3600m))).ToString(@"hh\:mm\:ss");
             cmd.Parameters.AddWithValue("emp", employeeId);
             cmd.Parameters.AddWithValue("date", date);
-            cmd.Parameters.AddWithValue("manual", hours);
+            cmd.Parameters.AddWithValue("intervals", $$"""[{"start":"08:00:00","end":"{{end}}"}]""");
             cmd.Parameters.AddWithValue("outbox", _outboxSeq++);
             await cmd.ExecuteNonQueryAsync();
         }
