@@ -19,9 +19,10 @@ namespace StatsTid.Tests.Unit.Rules;
 ///
 /// <para>
 /// <b>Expected values come from the refinement (S0-3: "a day is analysed when its interval hours
-/// cover its project hours (to the hundredth)"), not from the code.</b> Every fact below is kind
-/// <b>N</b> (names the member this sprint creates) except the marker pin (kind R); each carries a
-/// POSITIVE date assertion, so the one named mutation "FindRestNotCheckedDays returns an empty
+/// cover its project hours (to the hundredth)"), not from the code.</b> Each fact's own docstring
+/// names its kind: those first written in S147 against the list are kind R here (re-pinned by S148),
+/// the one moved value and the unchanged boundary facts are kind N (the member is new), and the marker
+/// pin is kind R; each list fact carries a POSITIVE date assertion, so the one named mutation "FindRestNotCheckedDays returns an empty
 /// list" fails it on an exact-value assertion. The moved value of
 /// <c>Evaluate_DayWithIntervalHoursBelowProjectHours_IsListed</c> is proved by mutation M-25
 /// (any kept interval makes a day analysed), run at the S148 wave-3 gate. A compile error is not RED.
@@ -101,7 +102,7 @@ public class RestPeriodNotCheckedTests
         });
 
     /// <summary>
-    /// Kind <b>N</b>. AC-234i-1 server half. S148 S0-3 (P-12): the two clocked days' clock times moved
+    /// Kind <b>R</b> (S148 re-pin; first written as N in S147). AC-234i-1 server half. S148 S0-3 (P-12): the two clocked days' clock times moved
     /// from timed entries to intervals (same project hours); expected values unchanged. Red conditions:
     /// <c>Assert.Equal([Mon2, Tue3], RestNotCheckedDays)</c> fails under the mutation "return an empty
     /// list" (actual: empty). The 8-hour gap is still a DAILY_REST VIOLATION with ActualValue 8.0 /
@@ -123,7 +124,7 @@ public class RestPeriodNotCheckedTests
     }
 
     /// <summary>
-    /// Kind <b>N</b>. S148 S0-3 (P-12): the timed days' clock times moved to intervals (8 project
+    /// Kind <b>R</b> (S148 re-pin; first written as N in S147). S148 S0-3 (P-12): the timed days' clock times moved to intervals (8 project
     /// hours = 8 clock hours); expected values unchanged. Red conditions: <c>Assert.Equal([Tue3],
     /// ...)</c> fails under the "empty list" mutation. A fully clocked period reports none (the
     /// negative half) while Tue 3, a lone hours-only day added to it, is reported (the discriminating
@@ -253,7 +254,7 @@ public class RestPeriodNotCheckedTests
     }
 
     /// <summary>
-    /// Kind <b>N</b>. Boundary: a night shift typed as Skema's two halves (Mon 2 22:00-23:59 with
+    /// Kind <b>R</b> (S148 re-pin; first written as N in S147). Boundary: a night shift typed as Skema's two halves (Mon 2 22:00-23:59 with
     /// project hours 1.98, Tue 3 00:00-02:00 with project hours 2.0) has every hour on the clock on
     /// both days, so neither is listed; Wed 4, hours-only, is reported. S148 S0-3 (P-12): the old
     /// fixture's crossing is now its two halves as intervals, and its separate 3 h hours-only entry

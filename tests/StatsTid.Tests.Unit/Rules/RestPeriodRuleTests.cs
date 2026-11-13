@@ -414,6 +414,28 @@ public class RestPeriodRuleTests
             v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS);
     }
 
+    /// <summary>
+    /// Kind <b>F</b> (Unit; fix-up 2, adjudication ruling 1). The weekly average is shown to one decimal
+    /// with halves rounded up, and the message says the same figure. Mon-Fri 8.0 h and Sat 8.25 h is
+    /// 48.25 h in one 7-day week: <c>ActualValue</c> 48.3. The expected message is built in the test from
+    /// the value (this machine's culture prints a decimal comma). Red conditions: with fix-up 2 reverted
+    /// the value is rounded to even, 48.2, so <c>Assert.Equal(48.3m, ...)</c> fails.
+    /// </summary>
+    [Fact]
+    public void WeeklyMaxHours_MidpointAverage_ValueAndMessageAgree()
+    {
+        var entries = new List<TimeEntry>();
+        for (int i = 0; i < 5; i++)
+            entries.Add(CreateHoursOnlyEntry(Monday.AddDays(i), 8.0m));
+        entries.Add(CreateHoursOnlyEntry(Monday.AddDays(5), 8.25m));
+
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+
+        var finding = Assert.Single(result.Violations, v => v.ViolationType == ComplianceViolationType.WEEKLY_MAX_HOURS);
+        Assert.Equal(48.3m, finding.ActualValue);
+        Assert.Contains($"arbejdstid {finding.ActualValue:F1}t overstiger", finding.Message);
+    }
+
     // ---------------------------------------------------------------
     // 9. Derogation allowed → rest breach is WARNING, not VIOLATION
     // ---------------------------------------------------------------

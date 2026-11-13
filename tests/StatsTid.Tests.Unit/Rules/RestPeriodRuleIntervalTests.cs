@@ -133,4 +133,140 @@ public class RestPeriodRuleIntervalTests
         Assert.Equal(mon, rest.Date);
         Assert.Equal(6.0m, rest.ActualValue);
     }
+
+    private static readonly DateOnly AprilStart = new(2026, 4, 1);
+    private static readonly DateOnly AprilEnd = new(2026, 4, 30);
+
+    /// <summary>
+    /// Kind <b>N</b> (names the interval input this sprint creates), proved red by mutation
+    /// <b>M-27</b> (the daily check's upper period guard deleted: <c>|| next.Date &gt; periodEnd</c>),
+    /// run at the S148 wave-3 fix-up gate. A rest is judged in the period in which it ENDS (14813 BC-4):
+    /// 31 March 14:00-22:00 to 1 April 07:00-15:00 is April's rest (9.0 h), so March, given both days,
+    /// does not judge it. Red conditions: under M-27 March reports the 9.0 h finding and
+    /// <c>Assert.Empty</c> fails. Contrast arm: April reports exactly that finding, dated 31 March.
+    /// </summary>
+    [Fact]
+    public void RestEndingAfterThePeriod_IsNotJudged()
+    {
+        var mar31 = new DateOnly(2026, 3, 31);
+        var intervals = new[] { Iv(mar31, 14, 0, 22, 0), Iv(AprilStart, 7, 0, 15, 0) };
+
+        var march = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals);
+        Assert.Empty(DailyRest(march));
+
+        var april = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), AprilStart, AprilEnd, Config(), intervals);
+        var rest = Assert.Single(DailyRest(april));
+        Assert.Equal(mar31, rest.Date);
+        Assert.Equal(9.0m, rest.ActualValue);
+    }
+
+    /// <summary>
+    /// Kind <b>N</b>, proved red by mutation <b>M-28</b> (the lower period guard deleted:
+    /// <c>next.Date &lt; periodStart ||</c>). April, given 30 March 14:00-22:00 and 31 March
+    /// 07:00-15:00, does not judge that 9.0 h rest: it ended in March, which owns it. Red conditions:
+    /// under M-28 April reports the finding and <c>Assert.Empty</c> fails.
+    /// </summary>
+    [Fact]
+    public void RestEndingBeforeThePeriod_IsNotJudged()
+    {
+        var intervals = new[]
+        {
+            Iv(new DateOnly(2026, 3, 30), 14, 0, 22, 0),
+            Iv(new DateOnly(2026, 3, 31), 7, 0, 15, 0),
+        };
+
+        var april = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), AprilStart, AprilEnd, Config(), intervals);
+
+        Assert.Empty(DailyRest(april));
+    }
+
+    /// <summary>
+    /// Kind <b>F</b> (Unit; fix-up 1, adjudication ruling 3). A chain cut at the read edge is not
+    /// exempt: the read begins on 31 March, so an interval starting at exactly 00:00 there may continue
+    /// work from a day the read never saw, and its voluntary status cannot be judged. April's view:
+    /// 31 March 00:00-20:00 on a day whose only entry is voluntary, 1 April 05:00-13:00 with a
+    /// non-voluntary entry, exemption allowed, derogation off. Expect exactly one VIOLATION, 9.0 h,
+    /// dated 31 March. Red conditions: with fix-up 1's engine change reverted (<c>cutAtReadEdge</c>
+    /// removed) the stint counts as wholly voluntary, the pair is skipped and there is no finding, so
+    /// <c>Assert.Single</c> fails.
+    /// </summary>
+    [Fact]
+    public void ChainCutAtTheReadEdge_IsNotExempt()
+    {
+        var mar31 = new DateOnly(2026, 3, 31);
+        var entries = new List<TimeEntry> { Entry(mar31, 8m, voluntary: true), Entry(AprilStart, 8m) };
+        var intervals = new[] { Iv(mar31, 0, 0, 20, 0), Iv(AprilStart, 5, 0, 13, 0) };
+
+        var result = RestPeriodRule.Evaluate(
+            Profile(), entries, AprilStart, AprilEnd, Config(), intervals);
+
+        var rest = Assert.Single(DailyRest(result));
+        Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
+        Assert.Equal(mar31, rest.Date);
+        Assert.Equal(9.0m, rest.ActualValue);
+    }
+
+    /// <summary>
+    /// Kind <b>R</b> (control for <see cref="ChainCutAtTheReadEdge_IsNotExempt"/>): the same shape with
+    /// the read-edge day starting at 00:01, not 00:00, stays exempt: its beginning is seen, so the rule
+    /// does not apply. Red conditions: a rule that cuts at any early start reports the finding and
+    /// <c>Assert.Empty</c> fails.
+    /// </summary>
+    [Fact]
+    public void VoluntaryDayStartingAt0001BeforeThePeriod_StaysExempt()
+    {
+        var mar31 = new DateOnly(2026, 3, 31);
+        var entries = new List<TimeEntry> { Entry(mar31, 8m, voluntary: true), Entry(AprilStart, 8m) };
+        var intervals = new[] { Iv(mar31, 0, 1, 20, 0), Iv(AprilStart, 5, 0, 13, 0) };
+
+        var result = RestPeriodRule.Evaluate(
+            Profile(), entries, AprilStart, AprilEnd, Config(), intervals);
+
+        Assert.Empty(DailyRest(result));
+    }
+
+    /// <summary>
+    /// Kind <b>R</b> (control): a voluntary day starting at 00:00 on <c>periodStart</c> itself (not
+    /// before it) stays exempt. 1 April 00:00-20:00 on a voluntary day, 2 April 05:00-13:00 with a
+    /// non-voluntary entry: the pair is skipped. Red conditions: a rule that cuts at every 00:00 start,
+    /// not only those before the period, reports the 9.0 h rest and <c>Assert.Empty</c> fails.
+    /// </summary>
+    [Fact]
+    public void VoluntaryDayStartingAt0000OnPeriodStart_StaysExempt()
+    {
+        var apr2 = AprilStart.AddDays(1);
+        var entries = new List<TimeEntry> { Entry(AprilStart, 8m, voluntary: true), Entry(apr2, 8m) };
+        var intervals = new[] { Iv(AprilStart, 0, 0, 20, 0), Iv(apr2, 5, 0, 13, 0) };
+
+        var result = RestPeriodRule.Evaluate(
+            Profile(), entries, AprilStart, AprilEnd, Config(), intervals);
+
+        Assert.Empty(DailyRest(result));
+    }
+
+    /// <summary>
+    /// Kind <b>F</b> (Unit; fix-up 2, adjudication ruling 1). A rest is shown to one decimal with halves
+    /// rounded up, and the finding's message says the same figure. Mon 16 March 14:00-22:00 and Tue 17
+    /// March 06:27-14:00 leave 8 h 27 min = 8.45 h: <c>ActualValue</c> 8.5. The expected message is built
+    /// in the test from the value (this machine's culture prints a decimal comma, so no literal).
+    /// Red conditions: with fix-up 2 reverted the value is rounded to even, 8.4, so
+    /// <c>Assert.Equal(8.5m, ...)</c> fails (the message still says 8.5).
+    /// </summary>
+    [Fact]
+    public void MidpointRest_ValueAndMessageAgree()
+    {
+        var mon = new DateOnly(2026, 3, 16);
+        var tue = new DateOnly(2026, 3, 17);
+        var intervals = new[] { Iv(mon, 14, 0, 22, 0), Iv(tue, 6, 27, 14, 0) };
+
+        var result = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals);
+
+        var rest = Assert.Single(DailyRest(result));
+        Assert.Equal(8.5m, rest.ActualValue);
+        Assert.Contains($"er {rest.ActualValue:F1}t", rest.Message);
+    }
 }

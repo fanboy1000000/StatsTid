@@ -138,6 +138,59 @@ public sealed class RestComplianceRealEngineHarness : IAsyncDisposable
         return client;
     }
 
+    /// <summary>
+    /// A client authorised as a non-employee actor (a leader, HR, or a token carrying several scopes).
+    /// The actor needs no database row: the read endpoints admit by the token's scopes.
+    /// </summary>
+    public HttpClient ClientAs(string actorId, string role, params RoleScope[] scopes)
+    {
+        var svc = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        });
+        var token = svc.GenerateToken(
+            employeeId: actorId, name: actorId, role: role,
+            agreementCode: "HK", orgId: OrgId, scopes: scopes);
+        var client = _host.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    /// <summary>The org the seeded employees belong to, for building scopes.</summary>
+    public static string EmployeeOrgId => OrgId;
+
+    /// <summary>
+    /// One month's approval row for an employee (status as the column holds it: SUBMITTED, REJECTED, DRAFT...).
+    /// A REJECTED row carries a decision and a reason, as the rejecting endpoint writes it.
+    /// </summary>
+    public async Task InsertPeriodAsync(string employeeId, string status, int year, int month)
+    {
+        var rejected = status == "REJECTED";
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO approval_periods
+                (period_id, employee_id, org_id, period_start, period_end, period_type, status,
+                 agreement_code, ok_version, submitted_at, submitted_by, approved_at, approved_by, rejection_reason)
+            VALUES
+                (gen_random_uuid(), @emp, @org, @start, @end, 'MONTHLY', @status, 'HK', 'OK24',
+                 NOW(), @emp, @decisionAt, @decisionBy, @reason)
+            """, conn);
+        cmd.Parameters.AddWithValue("emp", employeeId);
+        cmd.Parameters.AddWithValue("org", OrgId);
+        cmd.Parameters.AddWithValue("start", new DateOnly(year, month, 1));
+        cmd.Parameters.AddWithValue("end", new DateOnly(year, month, DateTime.DaysInMonth(year, month)));
+        cmd.Parameters.AddWithValue("status", status);
+        cmd.Parameters.AddWithValue("decisionAt", rejected ? DateTime.UtcNow : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("decisionBy", rejected ? "leader" : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("reason", rejected ? "rettelser nødvendige" : (object)DBNull.Value);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     private static string MintEmployeeToken(string actorId)
     {
         var svc = new JwtTokenService(new JwtSettings

@@ -12,7 +12,7 @@ namespace StatsTid.Tests.Unit.Rules;
 /// <para>
 /// <b>Plain language.</b> The 11-hour rest rule lives in two places: the server's check (the
 /// authority) and Skema's own instant warning. One tracked JSON file,
-/// <c>tests/StatsTid.Tests.Unit/TestData/rest-parity-scenarios.json</c>, holds twelve rest scenarios
+/// <c>tests/StatsTid.Tests.Unit/TestData/rest-parity-scenarios.json</c>, holds sixteen rest scenarios
 /// with the verdict each must get. This fact checks the server's engine against every row; the
 /// screen's vitest (<c>restParity.test.ts</c>) checks the screen against the same file, so the two
 /// cannot drift apart without one of the tests turning red. The file is read in place by both
@@ -27,21 +27,26 @@ namespace StatsTid.Tests.Unit.Rules;
 ///
 /// <para>
 /// <b>Kind N</b> (names <see cref="ComplianceWorkInterval"/> and <c>Evaluate</c>'s interval parameter,
-/// which this sprint creates). Proved red by three named mutations at the wave gate, each run alone
+/// which this sprint creates). Proved red by named mutations (M-24 to M-26 at the wave gate; M-29 and M-30 at the fix-up gate), each run alone
 /// in a detached worktree: <b>M-24</b> (midnight continuity dropped) turns red the rows
 /// <c>midnight-halves-alone</c>, <c>midnight-halves-then-same-day-work</c>,
 /// <c>midnight-halves-across-month-edge</c>, <c>continuation-day-without-other-work</c> and
 /// <c>chain-over-two-midnights</c>; <b>M-25</b> (any kept interval makes a day analysed) turns red
 /// <c>partly-clocked-day</c> (list <c>[2026-03-16]</c>, actual empty); <b>M-26</b> (the daily check
 /// keeps the old overlap filter) turns red <c>lower-month-edge-short-rest</c> (31 Mar to 1 Apr, 9.0;
-/// actual none). A compile error is not RED.
+/// actual none). Four rows added by the Step 5a fix-up: <c>end-2358-does-not-join</c> (kind N, <b>M-29</b>: the
+/// join end test loosened from 23:59 to 23:00 turns it red, expected one 0.0 finding, actual none),
+/// <c>start-0001-does-not-join</c> (kind N, <b>M-30</b>: the join start test loosened to include 00:01),
+/// <c>midpoint-rest-rounds-half-up</c> (kind F: with the half-up rounding reverted the value is 8.4, not 8.5) and
+/// <c>overlapping-intervals-show-zero</c> (kind R: the clamp that shows a negative rest as 0.0 is kept).
+/// A compile error is not RED.
 /// </para>
 ///
 /// <para>
 /// Red conditions: for each row the set of <c>(Date, ActualValue)</c> over the DAILY_REST findings,
 /// each finding's message naming its <c>to</c> day, its severity (WARNING exactly when the row allows
 /// derogation) and <c>RestNotCheckedDays</c> must equal the row's values; a file that does not parse,
-/// is not schema 1 or lacks one of the twelve ids fails the non-vacuity fact.
+/// is not schema 1 or lacks an expected id, or holds an id that is not expected, fails the non-vacuity fact.
 /// </para>
 /// </summary>
 public class RestParityTableTests
@@ -60,12 +65,16 @@ public class RestParityTableTests
         "reversed-interval-ignored",
         "continuation-day-without-other-work",
         "chain-over-two-midnights",
+        "end-2358-does-not-join",
+        "start-0001-does-not-join",
+        "midpoint-rest-rounds-half-up",
+        "overlapping-intervals-show-zero",
     };
 
     public static IEnumerable<object[]> RowIds() => ExpectedIds.Select(id => new object[] { id });
 
     [Fact]
-    public void Table_IsParsed_SchemaOne_AndHoldsAllTwelveRows()
+    public void Table_IsParsed_SchemaOne_AndHoldsExactlyTheExpectedRows()
     {
         var root = ReadTable();
 
