@@ -357,7 +357,8 @@ public static class RestPeriodRule
                 {
                     ViolationType = ComplianceViolationType.DAILY_REST,
                     Date = current.Date,
-                    ActualValue = Math.Round(displayRest, 1),
+                    // One decimal, halves up: the same rounding as the message's F1, so the two agree.
+                    ActualValue = Math.Round(displayRest, 1, MidpointRounding.AwayFromZero),
                     ThresholdValue = config.MinimumRestHours,
                     Severity = severity,
                     Message = $"Hvileperiode mellem {current.Date:yyyy-MM-dd} og {next.Date:yyyy-MM-dd} er {displayRest:F1}t — minimum er {config.MinimumRestHours:F1}t"
@@ -470,7 +471,8 @@ public static class RestPeriodRule
             {
                 ViolationType = ComplianceViolationType.WEEKLY_MAX_HOURS,
                 Date = periodStart,
-                ActualValue = Math.Round(avgWeeklyHours, 1),
+                // One decimal, halves up: the same rounding as the message's F1, so the two agree.
+                ActualValue = Math.Round(avgWeeklyHours, 1, MidpointRounding.AwayFromZero),
                 ThresholdValue = 48.0m,
                 Severity = ComplianceSeverity.VIOLATION,
                 Message = $"Gennemsnitlig ugentlig arbejdstid {avgWeeklyHours:F1}t overstiger EU-loftet paa 48t/uge over referenceperioden"
