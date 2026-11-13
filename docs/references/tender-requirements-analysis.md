@@ -537,11 +537,12 @@ Judgement calls:
 **The direction the owner's comments set** (each with the requirement it was written on):
 - **Payroll and absence statistics target the new state system, SLP.** HR-Løn and SLS are being replaced by SLP (EM A22), and the old FRAV module by a new one inside SLP (EM B1). The owner will provide the integration specifications later (EM-G8). The Navision posting details need thorough analysis when that integration is specified (EM B9, EM B11). Project codes are what the tenders call *aliases* (EM B20).
 - **Identity and access come from outside StatsTid.** Sign-on is Statens SSO (EM A19, not relevant as a StatsTid feature). The user lifecycle is handled through the HR-system integration (EM A33, VD 33), and roles by an external user-administration system (EM A34). StatsTid keeps its own role model; shift planners and shift users are added with that functionality (VD 8).
-- **Shift planning is in scope;** the open question is how (VD-G1, VD-G2).
+- **Shift planning is in scope;** the open question was how (VD-G1). The owner made the same comment on VD-G2, which is about control and statistics; it is read with reporting below.
 - **StatsTid follows its own verified rule analysis,** not a tender's description of the rules (EM A16). The vacation rules need documentation of exactly what current legislation is (EM A9).
 - **General reporting is wanted** (EM A23); what an "extract" means must be defined first (VD 17).
 - **The owner will supply the full master-data list** (EM A6).
 - **Needs analysis before it can be planned:** keeping the night supplement during sickness (VD 25) and the annex-dependent VD 45. EM A38 (the ØS solution-architecture guide) was flagged as important.
+- **Owner answers, 2026-11-13** (to the roadmap proposal's five questions; `docs/sprints/SPRINT-148.md`): shift planning is built in on ADR-043 stage 2's roster record; an "extract" is on-screen reports plus dataset endpoints; the HR back office is the first lane; the feeds are the source for what they carry; S124 and ADR-034 stay. A further owner ruling the same day: the two-person rule for pay-affecting configuration (SEC-060, VD 35) is built as the first item of the compliance epic, after the HR back office. The roadmap items are `ROADMAP.md` § 1 item 7 and its § 2 rows.
 
 **The decisions, requirement by requirement.** Rating is the gap analysis's, as of 2026-10-26.
 

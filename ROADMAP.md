@@ -25,7 +25,7 @@
 
 ## 1. Path to production (the arc)
 
-Loosely sequenced buckets between where we are (S128) and a system we would consider production-ready.
+Loosely sequenced buckets between where we are (S148) and a system we would consider production-ready.
 Not commitments or dates — direction.
 
 1. **Docs & governance cleanup** — *in progress.* Tracked in
@@ -75,8 +75,27 @@ Not commitments or dates — direction.
    *Standards and requirements conformance*): ISO 27001, the tekniske minimumskrav, NIS2, GDPR, Rigsarkivet,
    accessibility.
    A precondition for any go-live. **Includes authentication through Statens SSO** (owner-raised 2026-10-16;
-   SAML 2.0 / OIOSAML Service Provider; see §2 "Security & access control").
-6. **Go-to-production decision** — owner's call; not on the near horizon.
+   SAML 2.0 / OIOSAML Service Provider; see §2 "Security & access control"). Since the tender review (2026-11-13) SSO
+   is also product scope, as part of epic E7 (item 7); its sign-in half can be built before this pass.
+6. **Go-to-production decision** — owner's call; not on the near horizon. (It stays the last step whatever the
+   numbering: item 7 runs before it.)
+7. **Product scope for a state buyer: the tender review** (owner, 2026-11-13). The owner reviewed 215 requirements
+   from two historical state tenders and marked 128 "should meet" (`docs/references/tender-requirements-analysis.md`,
+   § "Owner review (2026-11-13)"). They group into twelve epics, each a row in § 2: rules and configuration (E1,
+   mostly item 4's program), vacation end to end (E2), the HR and leader back office (E3), requests and
+   notifications (E4), reporting (E5), shift planning (E6), people and access from the state's systems (E7), the
+   integration foundation (E8), pay and absence reporting to SLP (E9), Navision Stat (E10), audit and compliance
+   (E11), and usability, mobile and the user manual (E12). It runs alongside items 4 and 5, not after them; it is
+   numbered 7 only so existing "§1 item 5" citations stay valid.
+   **Owner rulings 2026-11-13** (`docs/sprints/SPRINT-148.md`): (1) shift planning is built into StatsTid in stages,
+   on ADR-043 stage 2's roster record; (2) an "extract" is an on-screen report or statistic, plus documented dataset
+   endpoints a tool such as SAS pulls with a service login; (3) the first lane among the work that needs no outside
+   input is the HR back office (E3, then E4), alongside or after item 4's overtime program, which stays the
+   priority; (4) the HR-system and user-administration feeds are the source for what they carry, and fed facts are
+   read-only in StatsTid; (5) the S124 visibility rule and ADR-034's export lock both stay.
+   **Still waiting on the owner:** the integration specifications (SLP, Navision Stat, the HR system, the
+   user-administration system) and the master-data list. E7's feed half, E8, E9 and E10 (53 of the 128 ids) wait on
+   them, wholly or partly. Detail: `.claude/plans/tender-review-roadmap-draft.md` (draft 1, adjudicated 2026-11-13).
 
 ## 2. Backlog (deferred, awaiting pickup)
 
@@ -204,6 +223,37 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   - **Where it fits.** It belongs to the path to production (§1 item 5) and to SYSTEM_TARGET's integration and
     security requirements. It needs its own refinement (the `refine-requirements` gate) and an ADR for the
     authentication model before any sprint.
+  - **Tender review (owner, 2026-11-13).** "We will use Statens SSO" (EM A19). A login through each institution's
+    own directory (EM A19, VD 6) and self-service passwords (EM A20) are not relevant. Whether the local login
+    survives outside dev/test is ruled in the authentication ADR, with SEC-020. The sign-in half belongs to epic E7
+    (§ 1 item 7) and waits on nothing; provisioning users and roles waits for the specifications (the row below).
+- **★ People and roles from the state's systems (tender epic E7; owner, 2026-11-13).** The owner's direction:
+  people are created, changed and closed through the HR-system integration (EM A33, VD 33); role assignments come
+  from an external user-administration system (EM A34); StatsTid keeps its own role model and adds a shift planner
+  and a shift user with shift planning (VD 8). **Owner ruling 2026-11-13: the feeds are the source for what they
+  carry.** A fed fact is read-only in StatsTid and corrected at the source; StatsTid edits only what no feed
+  carries. Until a feed is built, today's editors stay the source and nothing changes. Once it is, the termination
+  screen, the effective-date picker and the role-grant screen become views for fed facts, and dev/test needs a
+  stand-in feed (the `mock-payroll` pattern). **Needs:** an ADR for the inbound people feed, in which fed changes
+  are written through ADR-040's dated writers, each recorded with its source, so the audit trail and the backdate
+  worklist fire as for a human edit, and a failed or partial feed run changes nothing; a provisioning interface that
+  maps role assignments onto StatsTid's roles and Organisation-set scopes, audited with their source; the master
+  data on the owner's list (EM A6), field by field, with a DPIA for any CPR number; a production web entry with
+  HTTPS (EM A18). **Re-decides, at this epic's refinement:** ADR-035 and ADR-009 (where assignments come from),
+  ADR-040 (who writes employment facts), ADR-029 (which personal data is held), `SYSTEM_TARGET.md` § F.
+  **Open until the specifications arrive:** which system is the HR source (Statens HR or SLP's HR part); whether
+  the line manager is fed, which would make approval edges fed data; how an administrator gets access when the
+  user-administration system cannot supply it. **Waits on:** the integration specifications, the master-data list,
+  the user-administration system's interface. Ids: EM A6, EM A18, VD 3, VD 33.
+- **Four-eyes on pay-affecting configuration, corrections and settlement payouts (SEC-060; tender VD 35; epic
+  E11).** S147 put two different people on every month (SEC-053, SEC-054). One person alone can still publish an
+  agreement config, change a wage-type mapping, edit a local profile, run a correction (`/recalculate`) and trigger
+  a settlement payout. **From S148's config stage a publish or a profile edit changes pay** (ADR-043 D12); until
+  then it changed screens only. Each change is audited, dated and frozen into the month's proof, and a past-dated
+  publish lands the paid months it reaches on HR's worklist, so it can be detected but is not prevented. Needs an
+  ADR at E11's refinement naming who signs what (amending ADR-014's publish lifecycle, with a note on ADR-043 D12);
+  a second signer also means a second administrator in every demo and test flow. Not S148 scope.
+  **Owner ruling 2026-11-13: built as the first item of the compliance epic (E11), after the HR back office (E3).**
 
 *(prior recon list — now superseded by the SEC register; kept for provenance:)*
 - **RES-002 read-gate remainder** — 9 sibling read endpoints still ungated (7 lack a month parameter,
@@ -393,7 +443,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Forskudsferie (§7 advance-vacation) cap for LEAVERS — site 6.** `SkemaEndpoints` caps VACATION forskud at
   earned-to-`ferieaarEnd` regardless of a recorded leave date (manager approval IS the §7 agreement). Capping at
   the leave date would change bookability — a genuine domain fork, deliberately NOT taken in S137's D9 end-cap
-  (sites 1–5, 7, 8 opted in). Phase-B-adjacent domain question. [S137 refinement scope cut]
+  (sites 1–5, 7, 8 opted in). Phase-B-adjacent domain question. [S137 refinement scope cut] → part of tender epic E2.
 - **Demo-seed write-free rerun** — the loader-evidence arm is written but unobserved (no container
   runtime on the dev machine). [S128 FU-C]
 - **Absence day rules — one kind of absence per day, and absence never pushes a day past its norm (owner
@@ -428,6 +478,42 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
     clearing a cell.
   [owner UI testing 2026-10-28; working notes in `.claude/refinements/REFINEMENT-absence-day-rules.md`
   (gitignored, so this entry carries the rulings)]
+- **Working-time rules: what the tenders add to ADR-043 (tender epic E1; owner, 2026-11-13).** Most of the tenders'
+  working-time requirements are §1 item 4's program. The rest: VD 45's flex capping (a −10 h floor, yearly or
+  quarterly cut dates, conversion to særlige omsorgstimer 2:1 up to 74 h, HR approval, advance notice; the owner:
+  "needs analysis and evidence"); minimum and maximum hours per registration type as data (EM A5, VD 10, beside the
+  absence day rules row); more quotas (cheffridage; care days per child, which needs children's data from E7;
+  fasttidsdage, which the analysis could not match to a source); a new agreement version applied as dated
+  configuration with a mass recalculation screen (EM A17); per-institution feature flags (ADR-025 D6). The owner's
+  EM A16 ruling, "stick to our own analysis of rules", keeps StatsTid's verified research as the authority: a
+  customer does not define its own rules or absence types (EM A16 and VD 26 are not relevant). Ids: EM A5, EM A8,
+  EM A17, EM D1, VD 10, VD 11, VD 12, VD 20, VD 21, VD 45.
+- **Vacation: the holiday rules end to end (tender epic E2; owner, 2026-11-13).** Accrual and the account are
+  strong; the last mile is missing. **Needs:** a verified vacation-law reference built from the three dossiers (the
+  owner, EM A9: "documentation so we know exactly what the current legislation is"); the §21 transfer as an employee
+  request with the manager's approval documented (EM A9b, VD 14; amends ADR-033 D8, where HR records it with no
+  manager step; needs E4); a separate transferred-days balance on screen; the 16-month taking period modelled
+  (ADR-033 D12) so the forecast covers it; transfer of særlige feriedage (research); a leaver form and the §26
+  request screen (the §21 record is one of the four write forms owed since S140, and HR's list still says "skærm
+  følger i S141", `FollowUpLists.tsx:86`, `:672`); switching the close on, after the §15 stk.1 precondition below
+  and with real payout codes (E9). **Open, an owner decision at this epic's refinement:** advance vacation (EM A10,
+  VD 15) is an automatic allowance today, not a grant; whether to add an explicit grant is decided after the law
+  reference. Ids: EM A9, EM A9b, EM A10, EM A11, EM A13, VD 13–16, VD 18.
+- **★ Shift planning and the calendar (tender epic E6). Owner ruling 2026-11-13: built into StatsTid, in stages, on
+  ADR-043 stage 2's roster record.** One record serves pay and planning, so "this shift was rostered" never has two
+  sources. It is more than a convenience: the state's +25 % supplement applies to work "ordered or on an approved
+  duty roster", so a roster is a pay input. **Covers:** rosters and shift types, swaps approved by a leader,
+  protected days off, rest warnings before a roster is published, the roster flowing into Skema with planned
+  against actual hours, Outlook kept current, and last the automatic roster proposal from availability (the
+  heaviest part). **Consequences for §1 item 4's program:** stage 2's refinement designs "an order, or a roster
+  span" (ADR-043 D3) as the record shift planning will extend with shift templates and recurrence; it does not
+  build shift planning. If stage 2 lands its acceptance half first, shift planning waits for the order half.
+  **Research before stage 2's refinement:** the shift-worker chapter ADR-043 left undecided, so the record fits the
+  shift types. **Research before the pay rules:** VD 25 (night supplement during sickness; the owner: "needs
+  thorough analysis"), VD 52 (short-notice summons), VD 54 (civil servants' night pay; civil servants are not
+  modelled). **Needs, at this epic's refinement:** a new `SYSTEM_TARGET.md` section (owner approval), a
+  shift-planning ADR, and the shape of the shift planner and shift user (VD 8), decided with E7's roles. **After:**
+  stage 2's order half, and E4 (swaps are requests). Ids: VD-G1, VD 25, VD 46–57, VD 59, VD 61.
 
 ### HR operations — the follow-up processes (owner-raised 2026-09-03)
 
@@ -482,13 +568,75 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   - after it, the month is on HR's leaver list (HRP-011, `docs/operations/hr-follow-up-process-register.md`).
 
   It needs a notification capability that does not exist yet, so it belongs with the HR register's escalation gap
-  ("nothing escalates it") rather than as a one-off mail.
+  ("nothing escalates it") rather than as a one-off mail. The capability is tender epic E4 (below).
+
+- **★ The HR and leader back office (tender epic E3). Owner ruling 2026-11-13: the first lane among the work that
+  needs no outside input,** alongside or after §1 item 4's overtime program, which stays the priority. HR can do far
+  more through the API than on screen. **Needs:** an "open employee" mode for HR and local admins in Skema and
+  Årsoversigt (read, write, send; audited as on-behalf; four-eyes unchanged); an approval-status overview with a
+  month picker across the actor's Organisations; balances per employee for every modelled type; absence over a date
+  range (through Skema's save path, so the absence day rules apply); search on master data (after E7's list);
+  server-side mass approve and reopen for an HR-selected group, each month keeping its own four-eyes check;
+  comments on a registration (they can hold health data, so GDPR applies and E11's erasure must reach them); a
+  running flex figure (after ADR-043 stage 1). **Owner ruling 2026-11-13: both deliberate choices stay.** A leader
+  sees a month only after it is sent (S124), and a month sent to payroll is never reopened (ADR-034). The tender
+  rows are met through overviews of sent months, HR's own view, and the corrections path; a tender evaluator may
+  still score the difference. HRP-022's export screen and group export (the E9 row) are HR screens of the same kind
+  and may ride in this lane. Ids: EM-G1, EM A1, EM A3, EM A4, EM A7, EM A29, EM A30, EM A31, VD 9, VD 32.
+- **★ Employee requests and notifications (tender epic E4; second half of the first lane, owner 2026-11-13).** Two
+  new capabilities, not extensions. A **request**: employee-initiated and typed (vacation transfer, payout wish,
+  holiday payout, ulempetillæg), decided by whoever holds the employee's month-approval authority, never on one's
+  own request, with a history, a full answer on rejection, and open requests shown in the monthly statement.
+  ADR-043's overtime marks stay in month approval, so the request design is refined with stage 2's marks in view.
+  **Notifications**: an in-app inbox first, then mail through a relay (a mock sink in dev); alert rules HR
+  configures over the HR register's processes; a log of alerts sent. Needs an ADR; two named triggers ("vacation
+  without pay", sickness qualifying for sygedagpengerefusion) need research. Unlocks E2's manager approval, the
+  leaver notification above and E6's swaps. Ids: EM A2, EM A14, EM A15, VD 22, VD 24.
+- **Reporting, statistics and data access (tender epic E5). Owner ruling 2026-11-13: an "extract" is an on-screen
+  report or statistic, plus documented dataset endpoints that a tool such as SAS pulls with a service login.** The
+  owner (EM A23): "We should have some general reporting functionality." Excel/PDF export, print, unlimited
+  self-service extracts and the LDV feed are not relevant. **Needs:** a small set of predefined on-screen
+  statistics on absence and on project time; a vacation-liability overview (VD 17: earned, taken and untaken days
+  for a chosen population); dataset endpoints; a login for a machine, not a person, scoped to one institution (the
+  first piece of E8; touches SEC-036; needs an ADR); a project-administrator assignment (EM A26), proposed as a
+  scoped capability, not a new role. **Constraints:** every report and dataset stays inside the viewer's org scope;
+  a leader's figures cover sent months only (S124); sickness is health data (GDPR Art. 9), so aggregates need a
+  minimum group size and the dataset endpoints need a ruling on what leaves at person level. **After** ADR-043
+  stage 1, so the figures are the corrected ones. No longer waits on the owner. Ids: EM-G2, VD-G2, EM A23, EM A26,
+  EM B31, VD 17, VD 60.
+
+### Integrations with the state's shared systems (tender review, owner 2026-11-13)
+
+*The owner will provide the integration specifications later (EM-G8). SLP replaces SLS / HR-Løn and FRAV (EM A22,
+EM B1). Every row here waits on those specifications, except the machine login E5 needs and E9's export screen.*
+
+- **Integration foundation (tender epic E8).** The plumbing every connection needs: machine (service) credentials
+  (touches SEC-036), versioned inbound and outbound contracts, a scheduler with per-institution intervals and an
+  on-demand trigger, delivery receipts (closing ADR-034 D2's "handed off ≠ delivered"), per-institution destinations
+  (ADR-025 D1, generalised), webhooks for case systems. **Re-decides:** `SYSTEM_TARGET.md` "External Integrations"
+  and the architecture's external context, both outbound-only today: inbound data enters only through the same
+  dated, audited writers as a human edit, and never evaluates rules. Designed with the first real specification, not
+  ahead of it. Ids: VD-G4, EM B32.
+- **Pay and absence reporting to SLP (tender epic E9).** The export is solid but posts StatsTid's own JSON to a mock
+  with internal codes.
+  **Now, independent of SLP:** an HR export screen and a group export over the approval gate (HRP-022), each month
+  keeping its approval and four-eyes check; they may ride with the HR back office (E3). **After the
+  specifications:** the scheduled hand-off (VD 58), since SLP decides which payroll model applies; SLP's format and
+  transport, the real catalogue through the dated wage-type mappings, FRAV's absence categories and schedule, keying
+  slips if SLP still uses them, delivery receipts. **Re-decides:** "SLS" wording in `SYSTEM_TARGET.md`; ADR-025 D1;
+  ADR-033 D1 if SLP needs amounts, not quantities; which payroll model (automatic transfer, VD 58, vs one-off
+  elements, VD 2 / EM B2). Ids: EM A22, EM B1, EM B2, VD 1, VD 2, VD 28, VD 41, VD 58.
+- **Navision Stat via GIS (tender epic E10).** The registration frame (dimensions, aliases = StatsTid's projects per
+  the owner, cases, case tasks) imported and kept in sync; approved hours posted back with batch and voucher numbers,
+  reconciliation, resend, reversal and repost, moves between aliases; SFTP/FTP. The owner: posting details "need
+  thorough analysis when we spec the integration". The largest block (39 ids); proposed after E9. Ids: EM B3–B6,
+  EM B8–B11, EM B13–B30, VD 4, VD 39, VD 44, VD 62–71.
 
 ### Usability / accessibility
 
 - **Backdate worklist: a "show resolved rows" toggle** (S144 Step-0b ruling R7, 2026-09-29). From S144 every resolution records the block set that was in force when the claim was made (event `BlockedBy`, row `resolution_blocked_by`, GET `resolutionBlockedBy`) — but the screen lists open rows only and re-fetches after each resolve, so HR never sees a resolved row and the display of that audit fact was cut as unreachable UI. The honest way to surface it is a toggle that lists resolved rows too (a query flag the API already accepts, `BackdateWorklistEndpoints.cs:71` defaults to open). Small UX task; source: `.claude/plans/PLAN-s144.md` R7.
 - **Clearing a Skema cell (S72 R17 — still open; kept out of S145 by the Fable seat's ruling R24, owner informed
-  2026-10-01).** Today an emptied cell is never sent (`useSkema.ts:203`), so a booked hour or absence cannot be
+  2026-10-01).** **→ Promoted into S148 (TASK-14840/14841, addendum A1); this row leaves at S148's close, once its two riders below are confirmed placed.** Today an emptied cell is never sent (`useSkema.ts:203`), so a booked hour or absence cannot be
   taken back from the timesheet. S145 makes a re-save replace the cell (QUAL-192..194) and refuses a save of
   0 hours with a 400, so a cell can be corrected but not emptied. The right design is a *retraction*: mark the
   current row superseded and insert nothing. A 0-hour booking would be wrong, for three reasons. The strand
@@ -511,6 +659,11 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   or an HR user a month they sent on the employee's behalf (SEC-053, since S147). The server's reasons are English,
   so this needs a Danish mapping, as HR's leaver list already has for the four-eyes case
   (`frontend/src/pages/admin/opfoelgning/FollowUpLists.tsx:191`). A small UX task.
+- **Mobile access, error messages and the user manual (tender epic E12; owner, 2026-11-13).** Responsive pages and an
+  installable web app (PWA) first, a native app only if the PWA fails a requirement (EM A21, VD 27, which also wants
+  shift planning on the phone); Danish error messages that say what to do (QUAL-058) and Danish labels throughout; a
+  Danish user manual and release notes kept in step with each version. The accessibility row above belongs in the
+  same pass. Ids: EM A21, VD 27, EM A32, EM A36, EM E4, VD 83, VD 85, VD 87.
 
 ### Tooling / infra / environment
 - **★ Dependency inventory, security and updates** (owner-raised 2026-10-26: *"We need to have an overview of what
@@ -675,6 +828,9 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
       compliance documented yearly, VD on request), an audit trail that meets Rigsrevisionen's requirements, the
       four-eyes principle (VD ties it to payroll-affecting actions under *Regnskabsbekendtgørelsen*), and FRAV
       absence reporting under circular 2022/9247.
+      **Owner review (2026-11-13):** EM A38 ("This one sounds important"), EM §8.3 and VD 43, ØS's guide for
+      payment-derived systems, are "should meet". Proposed as the register's first source, mapped clause by clause
+      (the analysis read it at heading level only). Epic E11.
   - **A proposed systematic approach** (for the refinement, not decided):
     1. **A conformance register:** `docs/operations/compliance-register.md`, built like the SEC and QUAL registers.
        - **One row per requirement source,** then one row per clause or control that applies.
@@ -697,6 +853,14 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   - **Timing (owner, 2026-10-26):** it can wait. The system is not in production; the item only needs to be on the
     roadmap. The order (the scoping and the register skeleton first, or one mandatory source end to end) is decided
     when the item is picked up.
+- **Audit trail, data protection and resilience for a state buyer (tender epic E11; owner, 2026-11-13).** The
+  strongest match with the tenders; what is missing: registrations in the audit view ("who registered what, when, for
+  which day"); an audit-log export to hand to a controller (VD 36); database-level append-only protection; GDPR
+  erasure (ADR-025 D3 Part B, with its S70 constraints) and a retention period, including deleting a leaver after a set
+  period; backup with a tested restore (VD 72, with hosting); Rigsrevisionen's requirements researched. Four-eyes on
+  configuration, corrections and payouts is SEC-060, its own row under "Security & access control". **Owner ruling
+  2026-11-13: SEC-060 is built as the first item of this epic, after the HR back office (E3).** Ids: EM A37, EM A38,
+  EM §8.3, VD 35, VD 36, VD 42, VD 43, VD 72, VD 75.
 - **★ A thorough governance review: is the process getting bloated?** (owner, 2026-10-01: *"I have a
   feeling our governance is getting bloated. We need to do a thorough review."*). A follow-up, raised during
   S145 planning. Evidence measured the day it was raised, so the review starts from numbers, not from the feeling:
