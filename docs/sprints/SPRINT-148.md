@@ -1592,3 +1592,12 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
 
 **Wave 3 merged** (`40d3e694`, `--no-ff` of the stack tip `31a956b4`; paperwork in the merge: SEC-059 and QUAL-253 registered, two `shortcut(SEC-059)` tags, three Docker facts relabelled R, comments true-now, plan re-pointed). Step 5a cycle 2 on the fix-ups: Codex APPROVED-WITH-WARNINGS (`S148-WAVE3-5a-codex-c2.raw.md`), Fable APPROVED-WITH-WARNINGS (`S148-WAVE3-5a-reviewer-c2.md`); 5alpha PASS (`S148-TASK-14813-14814-5alpha.md`). Two small items go to wave 3b, which rewrites the same screen code: a rest typed with seconds can show 0.1 higher on screen than on the server (the screen rounds twice); the parity test keys the expected side through the display helper.
 - **GATE on `40d3e694`: green.** Build 0 errors / 143 warnings / CA2100 113; Unit 1746; DemoSeed 170; Regression non-Docker 140; frontend tsc, lint, e2e typecheck, build, vitest 99 files / 1169 tests. **Next:** CI-W3.
+
+**Tender review: owner answers to the roadmap questions (2026-11-13).** The planner's proposal (`.claude/plans/tender-review-roadmap-draft.md`) grouped the 128 "should meet" requirements into twelve epics; the owner answered its five questions, each with the recommended option:
+1. **Shift planning: built into StatsTid, in stages, on ADR-043 stage 2's roster record** (one record for pay and planning; automatic roster proposals last). Decided before stage 2's refinement, as it must be.
+2. **"Extract" means on-screen reports and statistics plus documented dataset endpoints** that tools such as SAS pull with a service login.
+3. **First unblocked lane: the HR back office** (HR acting on behalf on screen, employee requests with manager approval, notifications), alongside or after the overtime programme, which stays the priority.
+4. **The HR-system and user-administration feeds are the source for what they carry:** fed facts are read-only in StatsTid and corrected at the source; StatsTid edits only what no feed carries.
+5. **Both deliberate design choices stay:** a manager sees a month only after it is sent (S124), and a month sent to payroll is never reopened (ADR-034); the tender rows are met through sent-month overviews, HR's view and the corrections path.
+
+**Next:** the proposal goes to the `adjudicator` (Fable 5.2) with these answers; the Orchestrator then applies the ruled `ROADMAP.md` edits.
