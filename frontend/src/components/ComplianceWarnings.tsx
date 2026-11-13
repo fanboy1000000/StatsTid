@@ -83,10 +83,11 @@ function ViolationItem({ item }: { item: ComplianceViolation }) {
 /**
  * One polite live region: role="status" on the outermost element, none on items. It is always
  * mounted and empty while loading or when there is nothing to show, because a region that mounts
- * with its content is often not announced; the month's fetch fills it in place.
+ * with its content is often not announced; the month's fetch fills it in place. While empty it is
+ * taken out of the page's flow (`.region:empty`) so it adds no flex-gap space.
  */
 export function ComplianceWarnings(props: ComplianceWarningsProps) {
-  return <div role="status">{!props.loading && props.result && <WarningsPanel {...props} result={props.result} />}</div>
+  return <div role="status" className={styles.region}>{!props.loading && props.result && <WarningsPanel {...props} result={props.result} />}</div>
 }
 
 function WarningsPanel({

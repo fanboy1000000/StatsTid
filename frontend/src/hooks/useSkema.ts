@@ -845,7 +845,10 @@ function joinShifts(byDate: ReadonlyMap<string, WorkTimeDay>): RestShift[] {
  * runs from the earlier group's latest end to the later group's earliest start. `fromDate` is the
  * earlier group's day and `toDate` the later group's. At month edges the adjacent day resolves from
  * the served `boundaryWorkTime` (month entries win on duplicate dates). The minimum is the fixed
- * `REST_MINIMUM_HOURS`; the served one is a later task's.
+ * `REST_MINIMUM_HOURS`; the served one is a later task's. The screen does not apply the engine's
+ * voluntary-unsocial-hours exemption or its derogation severity, and uses the fixed minimum; the
+ * table proves the rest computation only. An overlap never shows a negative rest: the shown gap is
+ * clamped at 0 while the comparison stays on the true value.
  *
  * For the open `date`, returns each too-short rest for which `date` is the later group's day, the
  * earlier group's day, or a day the earlier group's shift runs on past its start day (earlier rest
@@ -880,10 +883,18 @@ export function analyzeRestPeriods(
     const gapMin = later.startMin - earlier.endMin
     if (gapMin >= REST_MINIMUM_HOURS * 60) continue
     if (date === toDate || date === fromDate || earlier.runsOn.has(date)) {
-      warnings.push({ gapHours: round2(gapMin / 60), fromDate, toDate })
+      warnings.push({ gapHours: round2(Math.max(0, gapMin) / 60), fromDate, toDate })
     }
   }
   return warnings.length > 0 ? warnings : null
+}
+
+/**
+ * A rest as shown: one decimal, halves rounded up, as the server's value and message round it.
+ * (`toFixed` works on the binary value and shows 8,45 as 8,4.) Works on the 2-decimal `gapHours`.
+ */
+export function restGapDisplayHours(gapHours: number): number {
+  return Math.round(Math.round(gapHours * 100) / 10) / 10
 }
 
 // ════════════════════════════════════════════════════════════════════════════

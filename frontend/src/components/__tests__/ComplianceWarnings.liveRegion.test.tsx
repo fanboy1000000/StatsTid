@@ -57,6 +57,13 @@ describe('ComplianceWarnings — one polite live region (AC-14a)', () => {
     expect(container.firstElementChild).toBe(region)
   })
 
+  // Kind F (fix-up 1). Red: the wrapper has no class, so `.region:empty` (out of the flex flow)
+  // cannot apply. The visual result is (unproven): jsdom cannot see layout.
+  it('the region carries the class that takes it out of the layout while empty', () => {
+    render(<ComplianceWarnings result={clean} loading={false} />)
+    expect(screen.getByRole('status')).toHaveClass('region')
+  })
+
   it('the clean and the loading state keep the region mounted and empty', () => {
     const { rerender } = render(<ComplianceWarnings result={clean} loading={false} />)
     expect(screen.getByRole('status')).toBeEmptyDOMElement()

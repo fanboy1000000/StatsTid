@@ -35,6 +35,7 @@ import {
   periodsTotalHours,
   LONG_DAY_WARNING_HOURS,
   MAX_DAY_HOURS,
+  restGapDisplayHours,
   type ClockPeriod,
 } from '../hooks/useSkema'
 import { classifyAllocation, unallocated } from '../lib/allocation'
@@ -285,7 +286,7 @@ export function SkemaDayPanel({
             )}
             {restWarnings?.map((w) => (
               <Alert key={`${w.fromDate}-${w.toDate}`} variant="warning">
-                Denne registrering giver kun {formatDanishNumber(w.gapHours, 1)} timers hvile
+                Denne registrering giver kun {formatDanishNumber(restGapDisplayHours(w.gapHours), 1)} timers hvile
                 mellem {formatLongDanishDate(w.fromDate)} og {formatLongDanishDate(w.toDate)}.
                 Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din
                 leder og kan udløse kompenserende hvile.

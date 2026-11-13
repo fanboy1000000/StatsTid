@@ -111,6 +111,16 @@ describe('SkemaDayPanel — R6 warnings (warning-ONLY, panel meta area)', () => 
     expect(warning.closest('[role="alert"]')?.className).toContain('warning')
   })
 
+  // Kind F (S148 14814 fix-up 1). Red conditions: a rest of 8 h 27 min (8.45) is shown with
+  // `toFixed`, which works on the binary value, as "8,4"; the server rounds half up to 8.5.
+  it('S148: a rest of 8 h 27 min is shown rounded half up, "8,5 timers hvile"', () => {
+    const monthWorkTime: WorkTimeDay[] = [
+      { date: '2026-03-08', intervals: [{ start: '14:00', end: '22:00' }] },
+    ]
+    renderPanel({ monthWorkTime, periods: [per('p1', '06:27', '14:00')] })
+    expect(screen.getByText(/giver kun 8,5 timers hvile/)).toBeInTheDocument()
+  })
+
   it('R6: the adjacent-day analysis uses the served boundaryWorkTime at the month edge', () => {
     const boundaryWorkTime: WorkTimeDay[] = [
       { date: '2026-02-28', intervals: [{ start: '14:00', end: '23:30' }] },

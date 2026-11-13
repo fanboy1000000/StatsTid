@@ -58,6 +58,21 @@ describe("analyzeRestPeriods — midnight continuity (the engine's algorithm)", 
     }
   })
 
+  // Kind F (fix-up 1). Red conditions: before the clamp the overlap (shift ends 06:00, the next
+  // group starts 05:00) shows gapHours -1, so the toEqual fails with -1 where 0 is expected.
+  it('overlapping intervals show a rest of 0, never a negative one', () => {
+    const month = [
+      wt('2026-03-25', [{ start: '22:00', end: '23:59' }]),
+      wt('2026-03-26', [
+        { start: '00:00', end: '06:00' },
+        { start: '05:00', end: '09:00' },
+      ]),
+    ]
+    expect(analyzeRestPeriods(month, [], '2026-03-26')).toEqual([
+      { gapHours: 0, fromDate: '2026-03-25', toDate: '2026-03-26' },
+    ])
+  })
+
   it('chain over two midnights is one shift', () => {
     const month = [
       wt('2026-03-09', [{ start: '22:00', end: '23:59' }]),

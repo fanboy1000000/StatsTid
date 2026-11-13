@@ -8,11 +8,17 @@
 // later day is inside the period, and every pair dropped must end on the day after the period.
 // `derogationAllowed`, `projectHours` and `expectedEngineRestNotCheckedDays` are engine-only.
 //
-// Kind F. Red conditions: before the midnight join, `midnight-halves-alone` yields a 0.0 h pair the
-// row does not expect, and `midnight-halves-then-same-day-work`, `continuation-day-without-other-work`
-// and `chain-over-two-midnights` yield pairs with other gaps or labels than the row expects.
+// Kinds per row. F (fail on the code before the midnight join): `midnight-halves-alone`,
+// `midnight-halves-then-same-day-work`, `midnight-halves-across-month-edge`,
+// `continuation-day-without-other-work`, `chain-over-two-midnights`; and, before fix-up 1,
+// `midpoint-rest-rounds-half-up` (shown 8,4 where the server says 8.5) and
+// `overlapping-intervals-show-zero` (-1.0 where 0.0). R (regression pins, green before and after):
+// `interior-short-rest`, `interior-short-rest-derogation`, `exactly-eleven-hours`,
+// `partly-clocked-day`, `lower-month-edge-short-rest`, `upper-month-edge-belongs-to-next-month`,
+// `reversed-interval-ignored`, and the two midnight-boundary rows `end-2358-does-not-join` and
+// `start-0001-does-not-join` (each goes red if the join condition is loosened).
 import { describe, it, expect } from 'vitest'
-import { analyzeRestPeriods, type RestPeriodWarning } from '../useSkema'
+import { analyzeRestPeriods, restGapDisplayHours, type RestPeriodWarning } from '../useSkema'
 import type { WorkTimeDay } from '../../types'
 
 interface Scenario {
@@ -40,7 +46,17 @@ const REQUIRED_IDS = [
   'reversed-interval-ignored',
   'continuation-day-without-other-work',
   'chain-over-two-midnights',
+  'end-2358-does-not-join',
+  'start-0001-does-not-join',
+  'midpoint-rest-rounds-half-up',
+  'overlapping-intervals-show-zero',
 ]
+
+// The pairs the screen computes but the period filter drops (a rest belongs to the month it ends
+// in), named per row so the filter cannot hide a disagreement. Every other row drops nothing.
+const EXPECTED_DROPPED: Record<string, string[]> = {
+  'upper-month-edge-belongs-to-next-month': ['2026-03-31>2026-04-01@9.0'],
+}
 
 // The house rule is `import.meta.glob`, never `node:fs` (`clockGuard.test.ts`); the table lives
 // outside `frontend/`, so the glob is tried first and the non-vacuity test below catches a miss.
@@ -74,11 +90,11 @@ function workDays(intervals: Scenario['intervals'], keep: (date: string) => bool
 }
 
 describe('rest parity table — the screen judges every row as the engine does', () => {
-  it('the table was read: schemaVersion 1 and all twelve required rows are present', () => {
+  it('the table was read: schemaVersion 1 and its ids are exactly the sixteen listed here', () => {
     expect(table, 'rest-parity-scenarios.json was not found by import.meta.glob').toBeDefined()
     expect(table!.schemaVersion).toBe(1)
     const ids = table!.scenarios.map((s) => s.id)
-    for (const id of REQUIRED_IDS) expect(ids).toContain(id)
+    expect([...ids].sort()).toEqual([...REQUIRED_IDS].sort())
   })
 
   for (const id of REQUIRED_IDS) {
@@ -87,6 +103,10 @@ describe('rest parity table — the screen judges every row as the engine does',
       expect(s, `row ${id} missing`).toBeDefined()
       const sc = s!
       const inPeriod = (d: string) => d >= sc.periodStart && d <= sc.periodEnd
+      // Every interval lies in the window the screen is fed (the period and its two boundary days).
+      for (const iv of sc.intervals) {
+        expect(iv.date >= addDay(sc.periodStart, -1) && iv.date <= addDay(sc.periodEnd, 1), `${id}: ${iv.date} outside the fed window`).toBe(true)
+      }
       const month = workDays(sc.intervals, inPeriod)
       const boundary = workDays(
         sc.intervals,
@@ -103,11 +123,15 @@ describe('rest parity table — the screen judges every row as the engine does',
       const kept = all.filter((w) => inPeriod(w.toDate))
       const dropped = all.filter((w) => !inPeriod(w.toDate))
 
-      const toKey = (from: string, to: string, gap: number) => `${from}>${to}@${gap.toFixed(1)}`
+      // The screen's figure is the shown one (one decimal, halves up), as the server's value is.
+      const toKey = (from: string, to: string, gap: number) => `${from}>${to}@${restGapDisplayHours(gap).toFixed(1)}`
       expect(kept.map((w) => toKey(w.fromDate, w.toDate, w.gapHours)).sort()).toEqual(
         sc.expectedDailyRest.map((r) => toKey(r.from, r.to, r.gapHours)).sort(),
       )
-      // The filter must not hide a disagreement: a dropped pair ends the day after the period.
+      // The filter must not hide a disagreement: the dropped pairs are exactly the ones named.
+      expect(dropped.map((w) => toKey(w.fromDate, w.toDate, w.gapHours)).sort()).toEqual(
+        EXPECTED_DROPPED[id] ?? [],
+      )
       for (const w of dropped) expect(w.toDate).toBe(addDay(sc.periodEnd, 1))
     })
   }
