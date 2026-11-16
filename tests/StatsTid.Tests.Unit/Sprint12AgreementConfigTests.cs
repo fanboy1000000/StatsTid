@@ -27,7 +27,6 @@ public class Sprint12AgreementConfigTests
         Assert.Equal(NormModel.WEEKLY_HOURS, config.NormModel);
         Assert.Equal(1924m, config.AnnualNormHours);
         Assert.Equal(150.0m, config.MaxFlexBalance);
-        Assert.Equal(150.0m, config.FlexCarryoverMax);
         Assert.False(config.HasOvertime);
         Assert.True(config.HasMerarbejde);
         Assert.Equal(37.0m, config.OvertimeThreshold50);
@@ -74,7 +73,6 @@ public class Sprint12AgreementConfigTests
         Assert.True(config.CallInWorkEnabled);
         Assert.Equal(3.0m, config.CallInMinimumHours);
         Assert.Equal(100.0m, config.MaxFlexBalance);
-        Assert.Equal(100.0m, config.FlexCarryoverMax);
     }
 
     [Fact]
@@ -86,90 +84,6 @@ public class Sprint12AgreementConfigTests
         Assert.Equal(NormModel.ANNUAL_ACTIVITY, config.NormModel);
         Assert.Equal(1924m, config.AnnualNormHours);
         Assert.Equal("AC_RESEARCH", config.AgreementCode);
-    }
-
-    // ========================================================================
-    // 2. ConfigResolutionService.ValidateLocalOverride
-    // ========================================================================
-
-    [Theory]
-    [InlineData("HasOvertime")]
-    [InlineData("HasMerarbejde")]
-    [InlineData("EveningSupplementEnabled")]
-    [InlineData("OnCallDutyEnabled")]
-    [InlineData("OvertimeThreshold50")]
-    public void ValidateLocalOverride_RejectsProtectedKeys(string protectedKey)
-    {
-        var sut = CreateSut();
-        var centralConfig = CentralAgreementConfigs.GetConfig("AC", "OK24");
-
-        var (valid, error) = sut.ValidateLocalOverride(protectedKey, "true", centralConfig);
-
-        Assert.False(valid);
-        Assert.Contains("centrally negotiated", error!);
-    }
-
-    [Fact]
-    public void ValidateLocalOverride_MaxFlexBalance_ValidWithinBounds()
-    {
-        var sut = CreateSut();
-        var centralConfig = CentralAgreementConfigs.GetConfig("AC", "OK24");
-        // AC central MaxFlexBalance = 150
-
-        var (valid, error) = sut.ValidateLocalOverride("MaxFlexBalance", "100", centralConfig);
-
-        Assert.True(valid);
-        Assert.Null(error);
-    }
-
-    [Fact]
-    public void ValidateLocalOverride_MaxFlexBalance_InvalidExceedsCentral()
-    {
-        var sut = CreateSut();
-        var centralConfig = CentralAgreementConfigs.GetConfig("AC", "OK24");
-        // AC central MaxFlexBalance = 150
-
-        var (valid, error) = sut.ValidateLocalOverride("MaxFlexBalance", "200", centralConfig);
-
-        Assert.False(valid);
-        Assert.Contains("exceeds central maximum", error!);
-    }
-
-    [Fact]
-    public void ValidateLocalOverride_WeeklyNormHours_ValidWithinRange()
-    {
-        var sut = CreateSut();
-        var centralConfig = CentralAgreementConfigs.GetConfig("HK", "OK24");
-
-        var (valid, error) = sut.ValidateLocalOverride("WeeklyNormHours", "30", centralConfig);
-
-        Assert.True(valid);
-        Assert.Null(error);
-    }
-
-    [Fact]
-    public void ValidateLocalOverride_WeeklyNormHours_InvalidExceeds40()
-    {
-        var sut = CreateSut();
-        var centralConfig = CentralAgreementConfigs.GetConfig("HK", "OK24");
-
-        var (valid, error) = sut.ValidateLocalOverride("WeeklyNormHours", "45", centralConfig);
-
-        Assert.False(valid);
-        Assert.Contains("exceeds maximum of 40", error!);
-    }
-
-    [Fact]
-    public void ValidateLocalOverride_FlexCarryoverMax_BoundaryAtCentralMax()
-    {
-        var sut = CreateSut();
-        var centralConfig = CentralAgreementConfigs.GetConfig("HK", "OK24");
-        // HK central FlexCarryoverMax = 100
-
-        var (valid, error) = sut.ValidateLocalOverride("FlexCarryoverMax", "100", centralConfig);
-
-        Assert.True(valid);
-        Assert.Null(error);
     }
 
     // ========================================================================
@@ -273,7 +187,6 @@ public class Sprint12AgreementConfigTests
         NormModel = NormModel.WEEKLY_HOURS,
         AnnualNormHours = 1924m,
         MaxFlexBalance = 150.0m,
-        FlexCarryoverMax = 150.0m,
         HasOvertime = false,
         HasMerarbejde = true,
         OvertimeThreshold50 = 37.0m,
@@ -315,7 +228,6 @@ public class Sprint12AgreementConfigTests
         NormModel = NormModel.ANNUAL_ACTIVITY,
         AnnualNormHours = 1924m,
         MaxFlexBalance = 150.0m,
-        FlexCarryoverMax = 150.0m,
         HasOvertime = false,
         HasMerarbejde = true,
         OvertimeThreshold50 = 37.0m,
@@ -357,7 +269,6 @@ public class Sprint12AgreementConfigTests
         NormModel = NormModel.WEEKLY_HOURS,
         AnnualNormHours = 1924m,
         MaxFlexBalance = 100.0m,
-        FlexCarryoverMax = 100.0m,
         HasOvertime = true,
         HasMerarbejde = false,
         OvertimeThreshold50 = 37.0m,

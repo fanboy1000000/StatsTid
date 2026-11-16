@@ -18,11 +18,11 @@ namespace StatsTid.Backend.Api.Validation;
 public static class PositionOverrideValidator
 {
     /// <summary>
-    /// Validates the four nullable numeric override fields. Null values are skipped (they mean
+    /// Validates the three nullable numeric override fields. Null values are skipped (they mean
     /// "inherit the base config"); supplied values are range-checked.
     /// </summary>
     public static (bool IsValid, string? Error) ValidateRanges(
-        decimal? weeklyNormHours, int? normPeriodWeeks, decimal? maxFlexBalance, decimal? flexCarryoverMax)
+        decimal? weeklyNormHours, int? normPeriodWeeks, decimal? maxFlexBalance)
     {
         // Relational patterns on a nullable only match when the value is non-null → null is skipped.
         if (weeklyNormHours is <= 0)
@@ -31,8 +31,6 @@ public static class PositionOverrideValidator
             return (false, $"NormPeriodWeeks must be one of: {string.Join(", ", AgreementRuleConfig.ValidNormPeriodWeeks.OrderBy(w => w))} when supplied");
         if (maxFlexBalance is < 0)
             return (false, "MaxFlexBalance must be >= 0 when supplied");
-        if (flexCarryoverMax is < 0)
-            return (false, "FlexCarryoverMax must be >= 0 when supplied");
         return (true, null);
     }
 }

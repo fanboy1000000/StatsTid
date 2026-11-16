@@ -210,7 +210,6 @@ public sealed class ProfileNoOpShortCircuitTests : IAsyncLifetime
             EffectiveFrom = effectiveFrom,
             WeeklyNormHours = weeklyNormHours,
             MaxFlexBalance = maxFlexBalance,
-            FlexCarryoverMax = flexCarryoverMax,
             MaxOvertimeHoursPerPeriod = maxOvertimeHoursPerPeriod,
             OvertimeRequiresPreApproval = overtimeRequiresPreApproval,
             CreatedBy = "admin",

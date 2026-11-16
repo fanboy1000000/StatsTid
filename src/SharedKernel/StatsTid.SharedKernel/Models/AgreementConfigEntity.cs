@@ -15,7 +15,6 @@ public sealed class AgreementConfigEntity
 
     // Flex settings
     public required decimal MaxFlexBalance { get; init; }
-    public required decimal FlexCarryoverMax { get; init; }
 
     // Overtime settings
     public required bool HasOvertime { get; init; }
@@ -106,7 +105,6 @@ public sealed class AgreementConfigEntity
         WeeklyNormHours = WeeklyNormHours,
         NormPeriodWeeks = NormPeriodWeeks,
         MaxFlexBalance = MaxFlexBalance,
-        FlexCarryoverMax = FlexCarryoverMax,
         HasOvertime = HasOvertime,
         HasMerarbejde = HasMerarbejde,
         OvertimeThreshold50 = OvertimeThreshold50,

@@ -101,11 +101,11 @@ public sealed class PositionOverrideRepository
         """
         INSERT INTO position_override_configs (
             override_id, agreement_code, ok_version, position_code, status,
-            max_flex_balance, flex_carryover_max, norm_period_weeks, weekly_norm_hours,
+            max_flex_balance, norm_period_weeks, weekly_norm_hours,
             applies_from, created_by, description, created_at, updated_at
         ) VALUES (
             @overrideId, @agreementCode, @okVersion, @positionCode, 'ACTIVE',
-            @maxFlexBalance, @flexCarryoverMax, @normPeriodWeeks, @weeklyNormHours,
+            @maxFlexBalance, @normPeriodWeeks, @weeklyNormHours,
             @appliesFrom, @createdBy, @description, NOW(), NOW()
         )
         """;
@@ -164,7 +164,6 @@ public sealed class PositionOverrideRepository
         cmd.Parameters.AddWithValue("okVersion", entity.OkVersion);
         cmd.Parameters.AddWithValue("positionCode", entity.PositionCode);
         cmd.Parameters.AddWithValue("maxFlexBalance", (object?)entity.MaxFlexBalance ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("flexCarryoverMax", (object?)entity.FlexCarryoverMax ?? DBNull.Value);
         cmd.Parameters.AddWithValue("normPeriodWeeks", (object?)entity.NormPeriodWeeks ?? DBNull.Value);
         cmd.Parameters.AddWithValue("weeklyNormHours", (object?)entity.WeeklyNormHours ?? DBNull.Value);
         cmd.Parameters.AddWithValue("appliesFrom", entity.AppliesFrom);
@@ -244,7 +243,6 @@ public sealed class PositionOverrideRepository
             """
             UPDATE position_override_configs SET
                 max_flex_balance = @maxFlexBalance,
-                flex_carryover_max = @flexCarryoverMax,
                 norm_period_weeks = @normPeriodWeeks,
                 weekly_norm_hours = @weeklyNormHours,
                 description = @description,
@@ -256,7 +254,6 @@ public sealed class PositionOverrideRepository
         await using var updateCmd = new NpgsqlCommand(updateSql, conn, tx);
         updateCmd.Parameters.AddWithValue("overrideId", overrideId);
         updateCmd.Parameters.AddWithValue("maxFlexBalance", (object?)updated.MaxFlexBalance ?? DBNull.Value);
-        updateCmd.Parameters.AddWithValue("flexCarryoverMax", (object?)updated.FlexCarryoverMax ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("normPeriodWeeks", (object?)updated.NormPeriodWeeks ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("weeklyNormHours", (object?)updated.WeeklyNormHours ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("description", (object?)updated.Description ?? DBNull.Value);
@@ -550,7 +547,6 @@ public sealed class PositionOverrideRepository
         PositionCode = reader.GetString(reader.GetOrdinal("position_code")),
         Status = reader.GetString(reader.GetOrdinal("status")),
         MaxFlexBalance = reader.IsDBNull(reader.GetOrdinal("max_flex_balance")) ? null : reader.GetDecimal(reader.GetOrdinal("max_flex_balance")),
-        FlexCarryoverMax = reader.IsDBNull(reader.GetOrdinal("flex_carryover_max")) ? null : reader.GetDecimal(reader.GetOrdinal("flex_carryover_max")),
         NormPeriodWeeks = reader.IsDBNull(reader.GetOrdinal("norm_period_weeks")) ? null : reader.GetInt32(reader.GetOrdinal("norm_period_weeks")),
         WeeklyNormHours = reader.IsDBNull(reader.GetOrdinal("weekly_norm_hours")) ? null : reader.GetDecimal(reader.GetOrdinal("weekly_norm_hours")),
         CreatedBy = reader.GetString(reader.GetOrdinal("created_by")),

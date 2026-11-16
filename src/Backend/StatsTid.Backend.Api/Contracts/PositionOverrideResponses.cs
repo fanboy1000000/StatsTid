@@ -31,7 +31,6 @@ public sealed record PositionOverrideResponse(
     // header; by-id GET also sets the matching ETag header.
     long Version,
     decimal? MaxFlexBalance,
-    decimal? FlexCarryoverMax,
     int? NormPeriodWeeks,
     decimal? WeeklyNormHours,
     string CreatedBy,

@@ -332,7 +332,6 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
         NormModel = NormModel.WEEKLY_HOURS,
         AnnualNormHours = 1924m,
         MaxFlexBalance = 100m,
-        FlexCarryoverMax = 50m,
         HasOvertime = true,
         HasMerarbejde = false,
         OvertimeThreshold50 = 37m,

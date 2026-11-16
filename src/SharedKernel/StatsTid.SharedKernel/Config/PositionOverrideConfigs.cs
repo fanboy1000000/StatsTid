@@ -16,7 +16,6 @@ public static class PositionOverrideConfigs
     public sealed record PositionConfigOverride
     {
         public decimal? MaxFlexBalance { get; init; }
-        public decimal? FlexCarryoverMax { get; init; }
         public int? NormPeriodWeeks { get; init; }
         public decimal? WeeklyNormHours { get; init; }
     }
@@ -71,7 +70,6 @@ public static class PositionOverrideConfigs
             HasOvertime = baseConfig.HasOvertime,
             HasMerarbejde = baseConfig.HasMerarbejde,
             MaxFlexBalance = positionOverride.MaxFlexBalance ?? baseConfig.MaxFlexBalance,
-            FlexCarryoverMax = positionOverride.FlexCarryoverMax ?? baseConfig.FlexCarryoverMax,
             EveningSupplementEnabled = baseConfig.EveningSupplementEnabled,
             NightSupplementEnabled = baseConfig.NightSupplementEnabled,
             WeekendSupplementEnabled = baseConfig.WeekendSupplementEnabled,

@@ -56,7 +56,6 @@ public class RestPeriodNotCheckedTests
         HasOvertime = false,
         HasMerarbejde = true,
         MaxFlexBalance = 150.0m,
-        FlexCarryoverMax = 150.0m,
         EveningSupplementEnabled = false,
         NightSupplementEnabled = false,
         WeekendSupplementEnabled = false,

@@ -30,7 +30,6 @@ public class NormPeriodWeeksConstantTests
         HasOvertime = false,
         HasMerarbejde = true,
         MaxFlexBalance = 150m,
-        FlexCarryoverMax = 150m,
         EveningSupplementEnabled = false,
         NightSupplementEnabled = false,
         WeekendSupplementEnabled = false,

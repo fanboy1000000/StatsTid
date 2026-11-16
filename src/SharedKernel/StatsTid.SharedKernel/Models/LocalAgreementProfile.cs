@@ -7,7 +7,7 @@ namespace StatsTid.SharedKernel.Models;
 /// effective_to-only — there is no separate is_active boolean (ADR-017 D1, cycle-1 review).
 ///
 /// Overridable columns (NULL = inherit central):
-///   weekly_norm_hours, max_flex_balance, flex_carryover_max,
+///   weekly_norm_hours, max_flex_balance,
 ///   max_overtime_hours_per_period, overtime_requires_pre_approval.
 /// Settings added after S21, also NULL = not set: the flex settlement and cap columns, the ten
 /// office-hours columns and paid_absence_credit_basis (ADR-043 D6).
@@ -21,10 +21,9 @@ public sealed class LocalAgreementProfile
     public required DateOnly EffectiveFrom { get; init; }
     public DateOnly? EffectiveTo { get; init; }
 
-    // Legacy overridable fields (5). NULL = inherit central.
+    // Legacy overridable fields (4). NULL = inherit central.
     public decimal? WeeklyNormHours { get; init; }
     public decimal? MaxFlexBalance { get; init; }
-    public decimal? FlexCarryoverMax { get; init; }
     public decimal? MaxOvertimeHoursPerPeriod { get; init; }
     public bool? OvertimeRequiresPreApproval { get; init; }
 
@@ -88,7 +87,6 @@ public static class LocalAgreementProfileMetadata
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["MaxFlexBalance"]              = "max_flex_balance",
-            ["FlexCarryoverMax"]            = "flex_carryover_max",
             ["WeeklyNormHours"]             = "weekly_norm_hours",
             ["MaxOvertimeHoursPerPeriod"]   = "max_overtime_hours_per_period",
             ["OvertimeRequiresPreApproval"] = "overtime_requires_pre_approval",
@@ -149,7 +147,7 @@ public static class LocalAgreementProfileAlignmentPolicies
                     NearestValidDates: new[] { previousMonday, nextMonday });
             },
 
-            // The remaining 4 overridable fields (MaxFlexBalance, FlexCarryoverMax,
+            // The remaining 3 overridable fields (MaxFlexBalance,
             // MaxOvertimeHoursPerPeriod, OvertimeRequiresPreApproval) have no alignment
             // requirement today and are intentionally absent from this map. The validator
             // treats absence as "no policy" → automatically aligned. New fields with

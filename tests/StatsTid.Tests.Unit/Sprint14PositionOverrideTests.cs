@@ -18,7 +18,6 @@ public class Sprint14PositionOverrideTests
         Assert.NotNull(result);
         Assert.Equal(200.0m, result!.MaxFlexBalance);
         Assert.Equal(4, result.NormPeriodWeeks);
-        Assert.Null(result.FlexCarryoverMax);
         Assert.Null(result.WeeklyNormHours);
     }
 
@@ -30,7 +29,6 @@ public class Sprint14PositionOverrideTests
         Assert.NotNull(result);
         Assert.Equal(4, result!.NormPeriodWeeks);
         Assert.Null(result.MaxFlexBalance);
-        Assert.Null(result.FlexCarryoverMax);
         Assert.Null(result.WeeklyNormHours);
     }
 
@@ -96,7 +94,6 @@ public class Sprint14PositionOverrideTests
 
         Assert.Equal(4, result.NormPeriodWeeks);
         Assert.Equal(baseConfig.MaxFlexBalance, result.MaxFlexBalance);
-        Assert.Equal(baseConfig.FlexCarryoverMax, result.FlexCarryoverMax);
     }
 
     // ========================================================================

@@ -8,6 +8,8 @@ namespace StatsTid.SharedKernel.Events;
 /// Case C (cross-day fresh INSERT after predecessor close) emits
 /// <see cref="RoleConfigOverrideSuperseded"/>.
 /// ADR-024 D1 role-within-agreement scope. Sprint 40 / Phase 4d-4.
+/// The flex-carryover member was retired in S148 (C-7, ADR-043 D6); a stored payload that
+/// still carries it deserialises, the member being ignored (EventSerializer skips unknown members; DEP-003).
 /// </summary>
 public sealed class RoleConfigOverrideCreated : DomainEventBase
 {
@@ -29,7 +31,6 @@ public sealed class RoleConfigOverrideCreated : DomainEventBase
     public bool? HasWeekendSupplement { get; init; }
     public bool? HasHolidaySupplement { get; init; }
     public decimal? MaxFlexBalance { get; init; }
-    public decimal? FlexCarryoverMax { get; init; }
     public int? NormPeriodWeeks { get; init; }
     public decimal? WeeklyNormHours { get; init; }
 }

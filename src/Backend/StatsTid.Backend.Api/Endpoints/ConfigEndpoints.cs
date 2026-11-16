@@ -37,7 +37,6 @@ public static class ConfigEndpoints
                 OkVersion: entity.OkVersion,
                 WeeklyNormHours: entity.WeeklyNormHours,
                 MaxFlexBalance: entity.MaxFlexBalance,
-                FlexCarryoverMax: entity.FlexCarryoverMax,
                 HasOvertime: entity.HasOvertime,
                 HasMerarbejde: entity.HasMerarbejde,
                 EveningSupplementEnabled: entity.EveningSupplementEnabled,
@@ -85,7 +84,6 @@ public static class ConfigEndpoints
                 OkVersion: mergedConfig.OkVersion,
                 WeeklyNormHours: mergedConfig.WeeklyNormHours,
                 MaxFlexBalance: mergedConfig.MaxFlexBalance,
-                FlexCarryoverMax: mergedConfig.FlexCarryoverMax,
                 HasOvertime: mergedConfig.HasOvertime,
                 HasMerarbejde: mergedConfig.HasMerarbejde,
                 EveningSupplementEnabled: mergedConfig.EveningSupplementEnabled,
@@ -173,7 +171,6 @@ public static class ConfigEndpoints
                 EffectiveTo = null,
                 WeeklyNormHours = request.WeeklyNormHours,
                 MaxFlexBalance = request.MaxFlexBalance,
-                FlexCarryoverMax = request.FlexCarryoverMax,
                 MaxOvertimeHoursPerPeriod = request.MaxOvertimeHoursPerPeriod,
                 OvertimeRequiresPreApproval = request.OvertimeRequiresPreApproval,
                 CreatedBy = actor.ActorId ?? "system",
@@ -402,7 +399,7 @@ public static class ConfigEndpoints
             //
             //    ADR-018 D9 MODIFIED branch: the repository's UpdateInPlaceAsync preserves
             //    the predecessor's created_by / created_at across same-day edits (only the
-            //    5 overridable columns + version are mutated). Echo those preserved values
+            //    4 overridable columns + version are mutated). Echo those preserved values
             //    here so the PUT response matches what a subsequent GET returns. INSERT
             //    paths (first-create + close-then-insert supersession) take candidate.* as
             //    the row's values — InsertProfileAsync binds them directly.
@@ -418,7 +415,6 @@ public static class ConfigEndpoints
                 EffectiveTo = candidate.EffectiveTo,
                 WeeklyNormHours = candidate.WeeklyNormHours,
                 MaxFlexBalance = candidate.MaxFlexBalance,
-                FlexCarryoverMax = candidate.FlexCarryoverMax,
                 MaxOvertimeHoursPerPeriod = candidate.MaxOvertimeHoursPerPeriod,
                 OvertimeRequiresPreApproval = candidate.OvertimeRequiresPreApproval,
                 CreatedBy = isInPlaceEdit ? predecessor!.CreatedBy : candidate.CreatedBy,
@@ -551,7 +547,7 @@ public static class ConfigEndpoints
 
     /// <summary>
     /// Computes the per-field old/new pair dictionary between the predecessor profile (or null
-    /// for first creation) and the candidate profile. Only the five overridable columns are
+    /// for first creation) and the candidate profile. Only the four overridable columns are
     /// inspected. Fields with identical values are excluded; identity is "both null OR equal
     /// non-null values" — value equality uses default decimal/bool comparisons. Used as the
     /// changed-fields input to <see cref="ProfileAlignmentValidator"/>, the audit-row
@@ -564,7 +560,6 @@ public static class ConfigEndpoints
 
         AddIfChanged(changed, "WeeklyNormHours", predecessor?.WeeklyNormHours, candidate.WeeklyNormHours);
         AddIfChanged(changed, "MaxFlexBalance", predecessor?.MaxFlexBalance, candidate.MaxFlexBalance);
-        AddIfChanged(changed, "FlexCarryoverMax", predecessor?.FlexCarryoverMax, candidate.FlexCarryoverMax);
         AddIfChanged(changed, "MaxOvertimeHoursPerPeriod", predecessor?.MaxOvertimeHoursPerPeriod, candidate.MaxOvertimeHoursPerPeriod);
         AddIfChanged(changed, "OvertimeRequiresPreApproval", predecessor?.OvertimeRequiresPreApproval, candidate.OvertimeRequiresPreApproval);
 
@@ -599,7 +594,6 @@ public static class ConfigEndpoints
             EffectiveTo: profile.EffectiveTo,
             WeeklyNormHours: profile.WeeklyNormHours,
             MaxFlexBalance: profile.MaxFlexBalance,
-            FlexCarryoverMax: profile.FlexCarryoverMax,
             MaxOvertimeHoursPerPeriod: profile.MaxOvertimeHoursPerPeriod,
             OvertimeRequiresPreApproval: profile.OvertimeRequiresPreApproval,
             CreatedBy: profile.CreatedBy,
@@ -635,7 +629,6 @@ public static class ConfigEndpoints
         public required DateOnly EffectiveFrom { get; init; }
         public decimal? WeeklyNormHours { get; init; }
         public decimal? MaxFlexBalance { get; init; }
-        public decimal? FlexCarryoverMax { get; init; }
         public decimal? MaxOvertimeHoursPerPeriod { get; init; }
         public bool? OvertimeRequiresPreApproval { get; init; }
     }

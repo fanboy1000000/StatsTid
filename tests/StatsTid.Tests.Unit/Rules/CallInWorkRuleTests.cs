@@ -27,7 +27,6 @@ public class CallInWorkRuleTests
             HasOvertime = agreement != "AC",
             HasMerarbejde = agreement == "AC",
             MaxFlexBalance = 100.0m,
-            FlexCarryoverMax = 100.0m,
             EveningSupplementEnabled = agreement != "AC",
             NightSupplementEnabled = agreement != "AC",
             WeekendSupplementEnabled = agreement != "AC",

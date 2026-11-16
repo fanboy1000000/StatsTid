@@ -18,7 +18,6 @@ public sealed class AgreementRuleConfig
     public required bool HasOvertime { get; init; }
     public required bool HasMerarbejde { get; init; }
     public required decimal MaxFlexBalance { get; init; }
-    public required decimal FlexCarryoverMax { get; init; }
 
     // Supplement toggles
     public required bool EveningSupplementEnabled { get; init; }

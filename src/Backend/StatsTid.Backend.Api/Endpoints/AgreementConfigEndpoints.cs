@@ -208,7 +208,6 @@ public static class AgreementConfigEndpoints
                 NormModel = source.NormModel,
                 AnnualNormHours = source.AnnualNormHours,
                 MaxFlexBalance = source.MaxFlexBalance,
-                FlexCarryoverMax = source.FlexCarryoverMax,
                 HasOvertime = source.HasOvertime,
                 HasMerarbejde = source.HasMerarbejde,
                 OvertimeThreshold50 = source.OvertimeThreshold50,
@@ -713,7 +712,7 @@ public static class AgreementConfigEndpoints
     // ── Response Mapping ──
 
     // S118 / TASK-11800 (PAT-012 retrofit Pass 5): the anonymous shape became the named
-    // 48-member AgreementConfigResponse record — an EXACT shape-copy (same member names, same
+    // 47-member AgreementConfigResponse record — an EXACT shape-copy (same member names, same
     // order, same nullability; camelCase via JsonSerializerDefaults.Web — BYTE-IDENTICAL wire
     // JSON). Also embedded (untyped) in the 412 error-body `currentState` envelopes, which
     // stay anonymous per the S118 exclusions.
@@ -733,7 +732,6 @@ public static class AgreementConfigEndpoints
         AnnualNormHours: e.AnnualNormHours,
         // Flex settings
         MaxFlexBalance: e.MaxFlexBalance,
-        FlexCarryoverMax: e.FlexCarryoverMax,
         // Overtime settings
         HasOvertime: e.HasOvertime,
         HasMerarbejde: e.HasMerarbejde,
@@ -803,7 +801,6 @@ public static class AgreementConfigEndpoints
         AnnualNormHours: e.AnnualNormHours,
         // Flex settings
         MaxFlexBalance: e.MaxFlexBalance,
-        FlexCarryoverMax: e.FlexCarryoverMax,
         // Overtime settings
         HasOvertime: e.HasOvertime,
         HasMerarbejde: e.HasMerarbejde,
@@ -897,8 +894,6 @@ public static class AgreementConfigEndpoints
             return (false, "MinimumRestHours must be > 0");
         if (r.MaxFlexBalance < 0)
             return (false, "MaxFlexBalance must be >= 0");
-        if (r.FlexCarryoverMax < 0)
-            return (false, "FlexCarryoverMax must be >= 0");
         if (r.OvertimeThreshold50 < 0)
             return (false, "OvertimeThreshold50 must be >= 0");
         if (r.OvertimeThreshold100 < r.OvertimeThreshold50)
@@ -948,7 +943,6 @@ public static class AgreementConfigEndpoints
             NormModel = normModel,
             AnnualNormHours = r.AnnualNormHours,
             MaxFlexBalance = r.MaxFlexBalance,
-            FlexCarryoverMax = r.FlexCarryoverMax,
             HasOvertime = r.HasOvertime,
             HasMerarbejde = r.HasMerarbejde,
             OvertimeThreshold50 = r.OvertimeThreshold50,
@@ -993,7 +987,7 @@ public static class AgreementConfigEndpoints
         JsonSerializer.Serialize(new
         {
             r.AgreementCode, r.OkVersion, r.WeeklyNormHours, r.NormPeriodWeeks, r.NormModel, r.AnnualNormHours,
-            r.MaxFlexBalance, r.FlexCarryoverMax, r.HasOvertime, r.HasMerarbejde,
+            r.MaxFlexBalance, r.HasOvertime, r.HasMerarbejde,
             r.OvertimeThreshold50, r.OvertimeThreshold100,
             r.EveningSupplementEnabled, r.NightSupplementEnabled, r.WeekendSupplementEnabled, r.HolidaySupplementEnabled,
             r.EveningStart, r.EveningEnd, r.NightStart, r.NightEnd,
@@ -1009,7 +1003,7 @@ public static class AgreementConfigEndpoints
         {
             e.AgreementCode, e.OkVersion, e.WeeklyNormHours, e.NormPeriodWeeks,
             NormModel = e.NormModel.ToString(), e.AnnualNormHours,
-            e.MaxFlexBalance, e.FlexCarryoverMax, e.HasOvertime, e.HasMerarbejde,
+            e.MaxFlexBalance, e.HasOvertime, e.HasMerarbejde,
             e.OvertimeThreshold50, e.OvertimeThreshold100,
             e.EveningSupplementEnabled, e.NightSupplementEnabled, e.WeekendSupplementEnabled, e.HolidaySupplementEnabled,
             e.EveningStart, e.EveningEnd, e.NightStart, e.NightEnd,
@@ -1082,7 +1076,6 @@ public static class AgreementConfigEndpoints
 
         // Flex settings
         public required decimal MaxFlexBalance { get; init; }
-        public required decimal FlexCarryoverMax { get; init; }
 
         // Overtime settings
         public required bool HasOvertime { get; init; }

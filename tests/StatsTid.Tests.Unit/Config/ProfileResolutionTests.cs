@@ -35,7 +35,6 @@ public sealed class ProfileResolutionTests
         HasOvertime = true,
         HasMerarbejde = false,
         MaxFlexBalance = 80m,
-        FlexCarryoverMax = 20m,
         EveningSupplementEnabled = true,
         NightSupplementEnabled = true,
         WeekendSupplementEnabled = true,
@@ -60,7 +59,6 @@ public sealed class ProfileResolutionTests
 
         Assert.Equal(CentralConfig.WeeklyNormHours, resolved.WeeklyNormHours);
         Assert.Equal(CentralConfig.MaxFlexBalance, resolved.MaxFlexBalance);
-        Assert.Equal(CentralConfig.FlexCarryoverMax, resolved.FlexCarryoverMax);
         Assert.Equal(CentralConfig.MaxOvertimeHoursPerPeriod, resolved.MaxOvertimeHoursPerPeriod);
         Assert.Equal(CentralConfig.OvertimeRequiresPreApproval, resolved.OvertimeRequiresPreApproval);
 
@@ -87,7 +85,6 @@ public sealed class ProfileResolutionTests
         Assert.Equal(100m, resolved.MaxFlexBalance);
         // The other four overridable fields must come from central.
         Assert.Equal(CentralConfig.WeeklyNormHours, resolved.WeeklyNormHours);
-        Assert.Equal(CentralConfig.FlexCarryoverMax, resolved.FlexCarryoverMax);
         Assert.Equal(CentralConfig.MaxOvertimeHoursPerPeriod, resolved.MaxOvertimeHoursPerPeriod);
         Assert.Equal(CentralConfig.OvertimeRequiresPreApproval, resolved.OvertimeRequiresPreApproval);
     }
@@ -134,7 +131,6 @@ public sealed class ProfileResolutionTests
         EffectiveFrom = new DateOnly(2026, 5, 4), // Monday — ignore alignment policy here
         WeeklyNormHours = weeklyNormHours,
         MaxFlexBalance = maxFlexBalance,
-        FlexCarryoverMax = flexCarryoverMax,
         MaxOvertimeHoursPerPeriod = maxOvertimeHoursPerPeriod,
         OvertimeRequiresPreApproval = overtimeRequiresPreApproval,
         CreatedBy = "test",
