@@ -154,10 +154,12 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
                 """
                 INSERT INTO position_override_configs (
                     override_id, agreement_code, ok_version, position_code, status,
-                    max_flex_balance, created_by, description, created_at, updated_at
+                    max_flex_balance, created_by, description, created_at, updated_at,
+                    applies_from -- mandatory since S148 C-2 (no DEFAULT)
                 ) VALUES (
                     @id, @ac, @ok, @pos, 'INACTIVE',
-                    @mfb, 'tester', @desc, NOW(), NOW()
+                    @mfb, 'tester', @desc, NOW(), NOW(),
+                    '0001-01-01'
                 )
                 """, conn);
             insertCmd.Parameters.AddWithValue("id", secondId);

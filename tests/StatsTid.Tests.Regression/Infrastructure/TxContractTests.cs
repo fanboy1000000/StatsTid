@@ -159,7 +159,9 @@ public sealed class TxContractTests : IAsyncLifetime
             updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             published_at            TIMESTAMPTZ,
             archived_at             TIMESTAMPTZ,
-            cloned_from_id          UUID        REFERENCES agreement_configs(config_id),
+            -- S148 C-2: mandatory, no DEFAULT, as init.sql (a default here once masked a NOT NULL column).
+            applies_from            DATE        NOT NULL,
+            cloned_from_id         UUID        REFERENCES agreement_configs(config_id),
             description             TEXT,
             -- S25 / TASK-2503 row-version (ADR-018 D7 optimistic concurrency).
             -- AgreementConfigRepository.ReadEntity (src:876) reads this column;
@@ -196,8 +198,26 @@ public sealed class TxContractTests : IAsyncLifetime
             -- S25 / TASK-2504 row-version (ADR-018 D7). PositionOverrideRepository.ReadEntity
             -- (src:644) reads this column; absence raised "Field not found in row: version".
             -- Mirrors init.sql + ForcedRollbackHarness (which already carries it).
-            version             BIGINT      NOT NULL DEFAULT 1
+            version             BIGINT      NOT NULL DEFAULT 1,
+            -- S148 C-2: mandatory, no DEFAULT, as init.sql.
+            applies_from        DATE        NOT NULL
         );
+
+        -- S148 NR-P8: the override's append-only version history, as init.sql (every override writer
+        -- inserts a version row from TASK-14818 on).
+        CREATE TABLE IF NOT EXISTS position_override_config_versions (
+            version_id          BIGSERIAL   PRIMARY KEY,
+            override_id         UUID        NOT NULL REFERENCES position_override_configs(override_id),
+            applies_from        DATE        NOT NULL,
+            state               TEXT        NOT NULL CHECK (state IN ('ACTIVE', 'INACTIVE')),
+            max_flex_balance    DECIMAL,
+            norm_period_weeks   INT,
+            weekly_norm_hours   DECIMAL,
+            recorded_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+            recorded_by         TEXT        NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_position_override_config_versions_read
+            ON position_override_config_versions (override_id, applies_from, recorded_at);
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_position_override_active_unique
             ON position_override_configs (agreement_code, ok_version, position_code)
