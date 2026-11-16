@@ -44,6 +44,66 @@ public sealed class AgreementConfigRepository
         return await reader.ReadAsync(ct) ? ReadEntity(reader) : null;
     }
 
+    /// <summary>
+    /// The version of (<paramref name="agreementCode"/>, <paramref name="okVersion"/>) in force on
+    /// <paramref name="day"/> (QUAL-182, ADR-043 D12): the PUBLISHED version (<c>published_at IS NOT NULL</c>,
+    /// either status: an ARCHIVED version stays in force for its own days) with the latest
+    /// <c>applies_from</c> on or before the day; of two dated the same day, the one published last (NR-P11).
+    /// <c>null</c> when no published version applies yet: never the ACTIVE row, a draft or a compiled value.
+    /// A DRAFT, even one archived unpublished, never counts (B-5).
+    /// </summary>
+    public async Task<AgreementConfigEntity?> GetInForceAsync(
+        string agreementCode, string okVersion, DateOnly day, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM agreement_configs
+            WHERE agreement_code = @agreementCode AND ok_version = @okVersion
+              AND published_at IS NOT NULL
+              AND applies_from <= @day
+            ORDER BY applies_from DESC, published_at DESC
+            LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        cmd.Parameters.AddWithValue("okVersion", okVersion);
+        cmd.Parameters.AddWithValue("day", day);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadEntity(reader) : null;
+    }
+
+    /// <summary>
+    /// The planner's read (QUAL-182; payroll's <c>AgreementConfigPromotions</c>): every distinct
+    /// <c>applies_from</c> of a PUBLISHED version of the key inside <c>(afterExclusive, toInclusive]</c>, in date
+    /// order. The lower bound is strict: a version dated the first day of the caller's run is that run's
+    /// starting state, not a boundary.
+    /// </summary>
+    public async Task<IReadOnlyList<DateOnly>> GetPublishedAppliesFromDatesAsync(
+        string agreementCode, string okVersion, DateOnly afterExclusive, DateOnly toInclusive,
+        CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT DISTINCT applies_from FROM agreement_configs
+            WHERE agreement_code = @agreementCode AND ok_version = @okVersion
+              AND published_at IS NOT NULL
+              AND applies_from > @afterExclusive AND applies_from <= @toInclusive
+            ORDER BY applies_from
+            """, conn);
+        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        cmd.Parameters.AddWithValue("okVersion", okVersion);
+        cmd.Parameters.AddWithValue("afterExclusive", afterExclusive);
+        cmd.Parameters.AddWithValue("toInclusive", toInclusive);
+        var dates = new List<DateOnly>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            dates.Add(reader.GetFieldValue<DateOnly>(0));
+        return dates;
+    }
+
     public async Task<IReadOnlyList<AgreementConfigEntity>> GetByStatusAsync(string status, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
@@ -345,18 +405,23 @@ public sealed class AgreementConfigRepository
 
     /// <summary>
     /// In-transaction v3 publish overload — admin-strict ETag/If-Match optimistic-concurrency
-    /// (ADR-019 pending). Atomically archives the prior ACTIVE config (if any) for the same
-    /// (agreement_code, ok_version) and activates the DRAFT identified by
-    /// <paramref name="configId"/>. Both UPDATEs run on the caller-supplied
-    /// <paramref name="conn"/> + <paramref name="tx"/>. The caller commits or rolls back;
-    /// this method does NOT.
+    /// (ADR-019 pending). Publishes the DRAFT identified by <paramref name="configId"/> as a dated
+    /// version of its (agreement_code, ok_version) that applies from <paramref name="appliesFrom"/>
+    /// (QUAL-182, ADR-043 D12), and archives the prior ACTIVE config, which stays in force for its own
+    /// days (the dated read, <see cref="GetInForceAsync"/>). Every statement runs on the caller-supplied
+    /// <paramref name="conn"/> + <paramref name="tx"/>. The caller commits or rolls back; this method
+    /// does NOT.
     ///
     /// <para>
-    /// Replaces the v2 overload that returned <c>(Guid? ArchivedId, bool Published)</c>
-    /// (S24 Step 7a P1 fix). The "Published == false" branch of that tuple now manifests
-    /// as <see cref="OptimisticConcurrencyException"/> — the caller's 412 path surfaces both
-    /// the (Expected, Actual) version AND the changed state. ArchivedId carries on
-    /// <see cref="SaveAgreementConfigResult"/> for the publish-event payload.
+    /// The order (TASK-14818 items 4.4, 4.5, 5; ruling B4): the key lock first — every row of the
+    /// (agreement_code, ok_version) <c>FOR UPDATE</c> in id order, so any number of concurrent publishes
+    /// of one key take turns; then the draft's status and version (412); then the predecessor, the
+    /// latest PUBLISHED version of either status (B-5), read after the lock so it is the committed one;
+    /// then the date rules (<see cref="AppliesFromRules"/>): not before the predecessor, and a Monday when
+    /// a Monday-only field changes compared with it (a key's first version changes nothing, B3). Only
+    /// then the two UPDATEs. The activation stamps <c>published_at = clock_timestamp()</c>, the moment it
+    /// takes effect, never the transaction's start (NR-P16), so of two versions dated the same day the
+    /// one that took effect last is in force (NR-P11).
     /// </para>
     /// </summary>
     /// <returns>
@@ -368,23 +433,24 @@ public sealed class AgreementConfigRepository
     /// Thrown when the row is missing, not in DRAFT, or its <c>version</c> column does not
     /// equal <paramref name="expectedVersion"/>.
     /// </exception>
+    /// <exception cref="AppliesFromRefusedException">
+    /// Thrown, before anything is written, when <paramref name="appliesFrom"/> precedes the predecessor's
+    /// date or misses a Monday the changed fields need.
+    /// </exception>
     public async Task<SaveAgreementConfigResult> PublishAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid configId, long expectedVersion, string actorId,
+        Guid configId, long expectedVersion, DateOnly appliesFrom, string actorId,
         CancellationToken ct = default)
     {
-        // 1. SELECT FOR UPDATE the target row to acquire its lock + capture identity +
-        //    status + version in one shot.
+        // 1. The draft's key, read without a lock (a row's agreement_code and ok_version never change).
         string agreementCode;
         string okVersion;
-        long currentVersion;
-        string currentStatus;
-        await using (var lockCmd = new NpgsqlCommand(
-            "SELECT agreement_code, ok_version, version, status FROM agreement_configs WHERE config_id = @configId FOR UPDATE",
+        await using (var keyCmd = new NpgsqlCommand(
+            "SELECT agreement_code, ok_version FROM agreement_configs WHERE config_id = @configId",
             conn, tx))
         {
-            lockCmd.Parameters.AddWithValue("configId", configId);
-            await using var reader = await lockCmd.ExecuteReaderAsync(ct);
+            keyCmd.Parameters.AddWithValue("configId", configId);
+            await using var reader = await keyCmd.ExecuteReaderAsync(ct);
             if (!await reader.ReadAsync(ct))
             {
                 throw new OptimisticConcurrencyException(
@@ -394,30 +460,59 @@ public sealed class AgreementConfigRepository
             }
             agreementCode = reader.GetString(0);
             okVersion = reader.GetString(1);
-            currentVersion = reader.GetInt64(2);
-            currentStatus = reader.GetString(3);
         }
 
-        // 2. Status check — only DRAFT is publishable. Concurrent publish/archive between
-        //    endpoint pre-check and our FOR UPDATE (S24 Step 7a P1 race) → 412.
-        if (!string.Equals(currentStatus, "DRAFT", StringComparison.Ordinal))
+        // 2. The key lock (ruling B4) — this write's first lock.
+        await LockKeyAsync(conn, tx, agreementCode, okVersion, ct);
+
+        // 3. The draft under the lock (its row is one of the key's): status + version, and the values the
+        //    Monday rule compares.
+        AgreementConfigEntity draft;
+        await using (var draftCmd = new NpgsqlCommand(
+            "SELECT * FROM agreement_configs WHERE config_id = @configId FOR UPDATE",
+            conn, tx))
+        {
+            draftCmd.Parameters.AddWithValue("configId", configId);
+            await using var reader = await draftCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                // Defense-in-depth — the row existed at step 1 and no writer deletes one.
+                throw new OptimisticConcurrencyException(
+                    $"Agreement config {configId} not found.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: null);
+            }
+            draft = ReadEntity(reader);
+        }
+
+        // Status check — only DRAFT is publishable. Concurrent publish/archive between
+        // endpoint pre-check and the lock (S24 Step 7a P1 race) → 412.
+        if (draft.Status != AgreementConfigStatus.DRAFT)
         {
             throw new OptimisticConcurrencyException(
-                $"Agreement config {configId} is no longer in DRAFT status (current: {currentStatus}); cannot publish — refresh and retry.",
+                $"Agreement config {configId} is no longer in DRAFT status (current: {draft.Status}); cannot publish — refresh and retry.",
                 expectedVersion: expectedVersion,
-                actualVersion: currentVersion);
+                actualVersion: draft.Version);
         }
 
-        // 3. Optimistic-concurrency check.
-        if (currentVersion != expectedVersion)
+        // Optimistic-concurrency check.
+        if (draft.Version != expectedVersion)
         {
             throw new OptimisticConcurrencyException(
-                $"Agreement config {configId} version is {currentVersion}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
+                $"Agreement config {configId} version is {draft.Version}, but caller sent If-Match: \"{expectedVersion}\"; refresh and retry.",
                 expectedVersion: expectedVersion,
-                actualVersion: currentVersion);
+                actualVersion: draft.Version);
         }
 
-        // 4. Archive the current ACTIVE config for the same (agreement_code, ok_version).
+        // 4. The predecessor and the date rules, decided under the key lock.
+        var predecessor = await ReadPredecessorAsync(conn, tx, agreementCode, okVersion, ct);
+        if (predecessor is not null)
+        {
+            AppliesFromRules.RequireNotBeforePredecessor(appliesFrom, predecessor.AppliesFrom);
+            AppliesFromRules.RequireMondayForChangedFields(appliesFrom, ChangedMondayOnlyFields(draft, predecessor));
+        }
+
+        // 5. Archive the current ACTIVE config for the same (agreement_code, ok_version).
         //    RETURNING the archived row's new version too — the publish endpoint uses it to
         //    emit a matching ARCHIVED audit row (versionBefore = version-1, versionAfter =
         //    version) + AgreementConfigArchived outbox event in the same tx (ADR-019 D1).
@@ -441,15 +536,19 @@ public sealed class AgreementConfigRepository
             }
         }
 
-        // 5. Activate the DRAFT — bump version + return the post-write snapshot.
+        // 6. Activate the DRAFT as the version applying from appliesFrom — bump version + return the
+        //    post-write snapshot. published_at = clock_timestamp(): the moment of activation, after the
+        //    key lock, never NOW() (the transaction's start; NR-P16).
         await using var publishCmd = new NpgsqlCommand(
             """
             UPDATE agreement_configs
-            SET status = 'ACTIVE', published_at = NOW(), updated_at = NOW(), version = version + 1
+            SET status = 'ACTIVE', applies_from = @appliesFrom, published_at = clock_timestamp(),
+                updated_at = NOW(), version = version + 1
             WHERE config_id = @configId AND status = 'DRAFT'
             RETURNING *
             """, conn, tx);
         publishCmd.Parameters.AddWithValue("configId", configId);
+        publishCmd.Parameters.AddWithValue("appliesFrom", appliesFrom);
         await using var publishReader = await publishCmd.ExecuteReaderAsync(ct);
         if (!await publishReader.ReadAsync(ct))
         {
@@ -467,8 +566,10 @@ public sealed class AgreementConfigRepository
     /// In-transaction v3 archive overload — admin-strict ETag/If-Match optimistic-concurrency
     /// (ADR-019 pending). Reads the current row under <c>SELECT ... FOR UPDATE</c>, validates
     /// <paramref name="expectedVersion"/>, and applies the UPDATE with status='ARCHIVED' +
-    /// <c>version = version + 1</c>. Already-ARCHIVED rows manifest as
-    /// <see cref="OptimisticConcurrencyException"/>.
+    /// <c>version = version + 1</c>. Only a DRAFT is archived: an already-ARCHIVED row manifests as
+    /// <see cref="OptimisticConcurrencyException"/>, and an ACTIVE one is refused (A-6): under dated
+    /// versions, archiving it would bring an older version back into force, so it is replaced by
+    /// publishing a successor. Both are decided on the locked status, before the version check (B7).
     /// </summary>
     /// <returns>
     /// <see cref="SaveAgreementConfigResult"/> with the archived entity, the new
@@ -478,6 +579,9 @@ public sealed class AgreementConfigRepository
     /// <exception cref="OptimisticConcurrencyException">
     /// Thrown when the row is missing, already ARCHIVED, or its <c>version</c> column does
     /// not equal <paramref name="expectedVersion"/>.
+    /// </exception>
+    /// <exception cref="ActiveConfigArchiveRefusedException">
+    /// Thrown, before anything is written, when the locked row is ACTIVE.
     /// </exception>
     public async Task<SaveAgreementConfigResult> ArchiveAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -513,6 +617,10 @@ public sealed class AgreementConfigRepository
                 actualVersion: currentVersion);
         }
 
+        // 2b. An ACTIVE config is replaced, not archived (A-6): refused whatever the If-Match (B7).
+        if (string.Equals(currentStatus, "ACTIVE", StringComparison.Ordinal))
+            throw new ActiveConfigArchiveRefusedException(configId);
+
         // 3. Optimistic-concurrency check.
         if (currentVersion != expectedVersion)
         {
@@ -540,13 +648,82 @@ public sealed class AgreementConfigRepository
         }
         var entity = ReadEntity(updReader);
         // S121 / TASK-12100: surface the FOR-UPDATE-locked pre-archive status so the archive
-        // endpoint can serialize an HONEST audit previousData (ACTIVE or DRAFT) — the locked
-        // read is the authority, not the endpoint's pre-flight read (Step-0b convergent
-        // BLOCKER both lenses). Result-shape extension only; SQL/locking/version semantics
-        // byte-unchanged.
+        // endpoint serializes an HONEST audit previousData — the locked read is the authority,
+        // not the endpoint's pre-flight read. Only a DRAFT reaches this line (A-6, step 2b).
         return new SaveAgreementConfigResult(
             entity, entity.Version, IsCreated: false, ArchivedId: null,
             PreviousStatus: currentStatus);
+    }
+
+    /// <summary>
+    /// The key lock (TASK-14818 item 4.4, ruling B4): every row of (<paramref name="agreementCode"/>,
+    /// <paramref name="okVersion"/>) <c>FOR UPDATE</c>, in id order, as a publish's first lock. Every publish
+    /// of the key takes the same rows in the same order, so they take turns without deadlocking, and a
+    /// waiter wakes holding all of them (a row it waited for still belongs to the key: the key columns never
+    /// change). Its next statement, at READ COMMITTED, sees the publish it waited for. In Block C's order
+    /// (PLAN:282-283) this is "the config row FOR UPDATE"; TASK-14823 puts the pay-inputs lock ahead of it.
+    /// </summary>
+    private static async Task LockKeyAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string agreementCode, string okVersion, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT config_id FROM agreement_configs
+            WHERE agreement_code = @agreementCode AND ok_version = @okVersion
+            ORDER BY config_id
+            FOR UPDATE
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        cmd.Parameters.AddWithValue("okVersion", okVersion);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            // Each row fetched is locked; reading them all takes the whole key.
+        }
+    }
+
+    /// <summary>
+    /// The predecessor of a new version of the key (A-6, B-5): the latest PUBLISHED version of either status
+    /// (<c>published_at IS NOT NULL</c>; a draft, even one archived unpublished, is never one), in the in-force
+    /// read's order without its day bound. Read under the key lock.
+    /// </summary>
+    private static async Task<AgreementConfigEntity?> ReadPredecessorAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string agreementCode, string okVersion, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM agreement_configs
+            WHERE agreement_code = @agreementCode AND ok_version = @okVersion
+              AND published_at IS NOT NULL
+            ORDER BY applies_from DESC, published_at DESC
+            LIMIT 1
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        cmd.Parameters.AddWithValue("okVersion", okVersion);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadEntity(reader) : null;
+    }
+
+    /// <summary>
+    /// The central config's Monday-only fields that <paramref name="draft"/> changes compared with its
+    /// predecessor: the closed list of TASK-14818 item 4.5 (S148-wave4C-briefs-adjudication, ruling 6).
+    /// <c>HasOvertime</c>, <c>HasMerarbejde</c> and <c>NormModel</c> because the engine judges a whole week by
+    /// its latest evaluated day (<c>WeeklyTimelineCore</c>); <c>WeeklyNormHours</c> on ADR-017 D9a's unretired
+    /// premise (<c>NORM_CHECK_WEEKLY</c> is still an aligned window; ADR-043 provisional item 18 lifts it).
+    /// Every other member may change on any weekday.
+    /// </summary>
+    private static List<string> ChangedMondayOnlyFields(AgreementConfigEntity draft, AgreementConfigEntity predecessor)
+    {
+        var changed = new List<string>();
+        if (draft.WeeklyNormHours != predecessor.WeeklyNormHours)
+            changed.Add(nameof(AgreementConfigEntity.WeeklyNormHours));
+        if (draft.HasOvertime != predecessor.HasOvertime)
+            changed.Add(nameof(AgreementConfigEntity.HasOvertime));
+        if (draft.HasMerarbejde != predecessor.HasMerarbejde)
+            changed.Add(nameof(AgreementConfigEntity.HasMerarbejde));
+        if (draft.NormModel != predecessor.NormModel)
+            changed.Add(nameof(AgreementConfigEntity.NormModel));
+        return changed;
     }
 
     /// <summary>
@@ -735,7 +912,7 @@ public sealed class AgreementConfigRepository
 /// per-surface SaveResult — mirrors <c>SaveProfileResult</c> from
 /// <see cref="LocalAgreementProfileRepository"/>). The S25 / TASK-2503 v3 mutating overloads
 /// (<see cref="AgreementConfigRepository.UpdateDraftAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, AgreementConfigEntity, CancellationToken)"/>,
-/// <see cref="AgreementConfigRepository.PublishAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, string, CancellationToken)"/>,
+/// <see cref="AgreementConfigRepository.PublishAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, DateOnly, string, CancellationToken)"/>,
 /// <see cref="AgreementConfigRepository.ArchiveAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, string, CancellationToken)"/>)
 /// return this shape; endpoints set <c>ETag: "&lt;Version&gt;"</c> on the response and feed
 /// <see cref="ArchivedId"/> into the publish-event payload.
@@ -756,11 +933,10 @@ public sealed class AgreementConfigRepository
 /// <c>ArchivedVersion</c> (per ADR-019 D8). Required by the publish endpoint to emit the
 /// second (ARCHIVED) audit row + outbox event mandated by ADR-019 D1.</param>
 /// <param name="PreviousStatus">S121 / TASK-12100 (sanctioned result-member extension): on the
-/// v3 Archive path, the FOR-UPDATE-locked row's status BEFORE the archive UPDATE
-/// (<c>ACTIVE</c> or <c>DRAFT</c> — the direct-archive surface admits both). The archive
-/// endpoint uses it to serialize the audit row's <c>previous_data</c> from the locked truth
-/// rather than the racy pre-flight read. <c>null</c> on all other construction sites
-/// (Create / Update / Publish paths — default preserves those sites unchanged).</param>
+/// v3 Archive path, the FOR-UPDATE-locked row's status BEFORE the archive UPDATE (always
+/// <c>DRAFT</c>: an ACTIVE row is refused, A-6). The archive endpoint uses it to serialize the
+/// audit row's <c>previous_data</c> from the locked truth rather than the racy pre-flight read.
+/// <c>null</c> on all other construction sites (Create / Update / Publish paths).</param>
 public sealed record SaveAgreementConfigResult(
     AgreementConfigEntity Config,
     long Version,
@@ -768,3 +944,93 @@ public sealed record SaveAgreementConfigResult(
     Guid? ArchivedId,
     long? ArchivedVersion = null,
     string? PreviousStatus = null);
+
+/// <summary>
+/// An archive of an ACTIVE agreement config, refused (A-6, TASK-14818 item 8): under dated versions,
+/// archiving the active version would silently bring an older one back into force, so it is replaced by
+/// publishing a successor. Thrown by <see cref="AgreementConfigRepository.ArchiveAsync"/> on the locked
+/// status, before anything is written; the archive endpoint maps it to 409.
+/// </summary>
+public sealed class ActiveConfigArchiveRefusedException : Exception
+{
+    public ActiveConfigArchiveRefusedException(Guid configId)
+        : base($"Agreement config {configId} is ACTIVE; an active configuration is replaced by publishing a successor, not archived.")
+    {
+        ConfigId = configId;
+    }
+
+    public Guid ConfigId { get; }
+}
+
+/// <summary>
+/// One refused field of a configuration write's applies-from date, in the profile PUT's error shape
+/// (ADR-017 D9a: <c>field</c>, <c>code</c>, <c>nearestValid</c> as ISO dates).
+/// </summary>
+public sealed record AppliesFromFieldError(string Field, string Code, IReadOnlyList<DateOnly> NearestValid);
+
+/// <summary>
+/// A configuration write's applies-from date, refused inside its transaction after the key lock
+/// (TASK-14818 items 4.4, 4.5; ADR-043 D12): <c>BEFORE_PREDECESSOR</c> or <c>NOT_MONDAY_ALIGNED</c>. Thrown
+/// before any row is written, so the caller's rollback leaves nothing; the agreement-config publish and
+/// the four position-override writes map it to 400.
+/// </summary>
+public sealed class AppliesFromRefusedException : Exception
+{
+    /// <summary>The field the date's own errors name: the requests' <c>appliesFrom</c> member.</summary>
+    public const string DateField = "AppliesFrom";
+
+    public AppliesFromRefusedException(IReadOnlyList<AppliesFromFieldError> errors)
+        : base("The applies-from date was refused: " + string.Join(", ", errors.Select(e => $"{e.Field} {e.Code}")))
+    {
+        Errors = errors;
+    }
+
+    public IReadOnlyList<AppliesFromFieldError> Errors { get; }
+}
+
+/// <summary>
+/// The two date rules a dated configuration write decides under its key lock (TASK-14818 items 4.4, 4.5),
+/// shared by <see cref="AgreementConfigRepository"/> and <see cref="PositionOverrideRepository"/>. The
+/// third rule, "never in the future", needs no database and is the endpoints'
+/// (<c>ProfileAlignmentValidator.ValidateEffectiveFromTemporality</c>, R-18).
+/// </summary>
+internal static class AppliesFromRules
+{
+    /// <summary>
+    /// "Not before the predecessor" (A-6, AC-C2q): a new version may not precede the newest version of its
+    /// key. An equal date is accepted, and the later write is then the one in force (NR-P11).
+    /// </summary>
+    internal static void RequireNotBeforePredecessor(DateOnly appliesFrom, DateOnly predecessorDate)
+    {
+        if (appliesFrom < predecessorDate)
+        {
+            throw new AppliesFromRefusedException(new[]
+            {
+                new AppliesFromFieldError(
+                    AppliesFromRefusedException.DateField, "BEFORE_PREDECESSOR", new[] { predecessorDate }),
+            });
+        }
+    }
+
+    /// <summary>
+    /// The Monday rule (A-16): every field of <paramref name="changedFields"/> (the caller's closed list,
+    /// TASK-14818 item 4.5) changes the weekly basis, so its new value must start on a Monday. Refused per
+    /// field with the local profile's own computation and code (ADR-017 D9a,
+    /// <see cref="LocalAgreementProfileAlignmentPolicies"/>): <c>NOT_MONDAY_ALIGNED</c>, nearest valid
+    /// [previous Monday, next Monday].
+    /// </summary>
+    internal static void RequireMondayForChangedFields(DateOnly appliesFrom, IReadOnlyList<string> changedFields)
+    {
+        // shortcut(pending): the Monday rule for week-read fields (A-16); upgrade when stage 1 removes the weekly basis
+        if (changedFields.Count == 0)
+            return;
+
+        var monday = LocalAgreementProfileAlignmentPolicies.ByFieldName["WeeklyNormHours"](appliesFrom);
+        if (monday.IsAligned)
+            return;
+
+        throw new AppliesFromRefusedException(changedFields
+            .Select(field => new AppliesFromFieldError(field, monday.ErrorCode!, monday.NearestValidDates!))
+            .ToList());
+    }
+}

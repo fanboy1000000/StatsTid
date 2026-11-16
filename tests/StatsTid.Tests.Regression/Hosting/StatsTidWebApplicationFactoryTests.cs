@@ -33,8 +33,9 @@ public sealed class StatsTidWebApplicationFactoryTests : IAsyncLifetime
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
 
-        // Backend.Api's AgreementConfigSeeder + EntitlementConfigSeeder run during
-        // Program.cs host startup against the configured connection. The
+        // Backend.Api's EntitlementConfigSeeder runs during Program.cs host startup against
+        // the configured connection (the agreement configurations are seeded by init.sql, S148
+        // QUAL-182, and no startup seeder writes them). The
         // Segmentation DockerHarness applies a 4-table subset DDL only — for full
         // Backend.Api boot we need every table init.sql defines. ApplyFullSchemaAsync
         // is idempotent (CREATE TABLE IF NOT EXISTS throughout init.sql).

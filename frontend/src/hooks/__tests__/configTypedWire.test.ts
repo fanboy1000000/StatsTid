@@ -140,6 +140,7 @@ const agreementRow: AgreementConfig = {
   createdAt: '2026-04-01T00:00:00Z',
   updatedAt: '2026-04-01T00:00:00Z',
   publishedAt: null,
+  appliesFrom: null,
   archivedAt: null,
   clonedFromId: null,
   description: null,

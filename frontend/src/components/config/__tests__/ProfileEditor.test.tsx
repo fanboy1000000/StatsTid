@@ -57,6 +57,7 @@ const centralConfig: AgreementConfig = {
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-01T00:00:00Z',
   publishedAt: '2026-01-01T00:00:00Z',
+  appliesFrom: '2026-01-01',
   archivedAt: null,
   clonedFromId: null,
   description: null,

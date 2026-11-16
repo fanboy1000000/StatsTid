@@ -139,11 +139,15 @@ public sealed class SEC032PositionOverrideAuthorizationTests : IAsyncLifetime
     [Fact]
     public async Task GlobalAdmin_StillRunsFullWriteLifecycle_AllFourWritesGreen()
     {
+        // S148 C-5 (NR-P14): the lifecycle writes the weekly norm (create null, PUT 36.75, deactivate,
+        // activate) on the real clock; the Monday rule would refuse it six weekdays of seven, so every
+        // write sends an explicit past Monday (5, 12, 19, 26 January 2026), each on or after the version
+        // it replaces.
         using var admin = GlobalAdmin();
 
         // Write #1 — create (v1, ACTIVE).
         using var create = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, "/api/admin/position-overrides", CreateJson("SEC032_LIFE", weeklyNormHours: "null")));
+            HttpMethod.Post, "/api/admin/position-overrides", CreateJson("SEC032_LIFE", weeklyNormHours: "null", appliesFrom: "2026-01-05")));
         var createBody = await create.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.Created, create.StatusCode); // 201
         var overrideId = JsonDocument.Parse(createBody).RootElement.GetProperty("overrideId").GetGuid();
@@ -153,29 +157,45 @@ public sealed class SEC032PositionOverrideAuthorizationTests : IAsyncLifetime
         // Write #2 — update (If-Match 1 ⇒ v2, still ACTIVE).
         using var update = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Put, $"/api/admin/position-overrides/{overrideId}",
-            CreateJson("SEC032_LIFE", weeklyNormHours: "36.75"), ifMatchVersion: v1));
+            CreateJson("SEC032_LIFE", weeklyNormHours: "36.75", appliesFrom: "2026-01-12"), ifMatchVersion: v1));
         Assert.Equal(HttpStatusCode.OK, update.StatusCode); // 200
         var v2 = S118ContractAssert.EtagVersion(update);
         Assert.Equal(2L, v2);
+        // S148 5a c1 ruling 1.5 (Fable W2): each audit row records the date the write was sent with.
+        Assert.Equal("2026-01-12", await AuditAppliesFromAsync(overrideId, "UPDATED"));
 
         // Write #3 — deactivate (If-Match 2 ⇒ v3, INACTIVE).
         using var deactivate = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Post, $"/api/admin/position-overrides/{overrideId}/deactivate",
-            jsonBody: null, ifMatchVersion: v2));
+            jsonBody: """{"appliesFrom":"2026-01-19"}""", ifMatchVersion: v2));
         var deactivateBody = await deactivate.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.OK, deactivate.StatusCode); // 200
         Assert.Equal("INACTIVE", JsonDocument.Parse(deactivateBody).RootElement.GetProperty("status").GetString());
         var v3 = S118ContractAssert.EtagVersion(deactivate);
         Assert.Equal(3L, v3);
+        Assert.Equal("2026-01-19", await AuditAppliesFromAsync(overrideId, "DEACTIVATED"));
 
         // Write #4 — activate (If-Match 3 ⇒ v4, back to ACTIVE).
         using var activate = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Post, $"/api/admin/position-overrides/{overrideId}/activate",
-            jsonBody: null, ifMatchVersion: v3));
+            jsonBody: """{"appliesFrom":"2026-01-26"}""", ifMatchVersion: v3));
         var activateBody = await activate.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.OK, activate.StatusCode); // 200
         Assert.Equal("ACTIVE", JsonDocument.Parse(activateBody).RootElement.GetProperty("status").GetString());
         Assert.Equal(4L, S118ContractAssert.EtagVersion(activate));
+        Assert.Equal("2026-01-26", await AuditAppliesFromAsync(overrideId, "ACTIVATED"));
+    }
+
+    private async Task<string?> AuditAppliesFromAsync(Guid overrideId, string action)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT new_data ->> 'AppliesFrom' FROM position_override_config_audit WHERE override_id = @id AND action = @action",
+            conn);
+        cmd.Parameters.AddWithValue("id", overrideId);
+        cmd.Parameters.AddWithValue("action", action);
+        return (string?)await cmd.ExecuteScalarAsync();
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -212,11 +232,12 @@ public sealed class SEC032PositionOverrideAuthorizationTests : IAsyncLifetime
 
     /// <summary>Create/update body — the same 8-member request shape serves both verbs.
     /// <paramref name="weeklyNormHours"/> is passed as raw JSON ("null" or a literal).</summary>
-    private static string CreateJson(string agreementCode, string weeklyNormHours)
+    private static string CreateJson(string agreementCode, string weeklyNormHours, string? appliesFrom = null)
         => $$"""
            { "agreementCode": "{{agreementCode}}", "okVersion": "{{OkVersion}}",
              "positionCode": "{{PositionCode}}",
              "maxFlexBalance": 120.5, "normPeriodWeeks": 4,
+             "appliesFrom": {{(appliesFrom is null ? "null" : "\"" + appliesFrom + "\"")}},
              "weeklyNormHours": {{weeklyNormHours}}, "description": "SEC-032 positionsundtagelse" }
            """;
 }

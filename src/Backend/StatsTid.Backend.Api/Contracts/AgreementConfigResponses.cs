@@ -20,10 +20,12 @@ namespace StatsTid.Backend.Api.Contracts;
 // data, open sets.
 
 /// <summary>
-/// The 47-member agreement-config row — ONE record for the five non-by-id success sites
+/// The 48-member agreement-config row — ONE record for the five non-by-id success sites
 /// (list, by-code list, create 201, clone 201, PUT 200; the S112 sibling-record rule).
 /// <c>version</c> is the row-version optimistic-concurrency token surfaced in-body so list
 /// consumers can compose <c>If-Match: "&lt;version&gt;"</c> without a by-id GET.
+/// <c>appliesFrom</c> is the version's applies-from date (QUAL-182, ADR-043 D12): null until the
+/// row is published (B-5; a draft's stored date is a placeholder no read uses), always present.
 /// The 412/409 error-body <c>currentState</c> envelopes stay anonymous/untyped (S118
 /// exclusion) — they embed this record's serialization but are never declared via .Produces.
 /// </summary>
@@ -83,16 +85,20 @@ public sealed record AgreementConfigResponse(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     DateTime? PublishedAt,
+    DateOnly? AppliesFrom,
     DateTime? ArchivedAt,
     Guid? ClonedFromId,
     string? Description);
 
 /// <summary>
-/// The GET /api/agreement-configs/{configId} 200 body — the 47 row members PLUS the inline
+/// The GET /api/agreement-configs/{configId} 200 body — the 48 row members of
+/// <see cref="AgreementConfigResponse"/>, in its order, PLUS the inline
 /// <c>entitlements</c> array (each row the shared 16-member <see cref="EntitlementConfigResponse"/>,
 /// carrying its own <c>version</c> for child If-Match composition) and the
 /// <c>entitlementsReadOnly</c> flag (true when sibling configs share the
-/// (agreement_code, ok_version) natural key). Per owner ruling #2 (S118, the drift-repair
+/// (agreement_code, ok_version) natural key). The row members include <c>appliesFrom</c> under the
+/// row's rule (null until published, always present; QUAL-182, S148 Step 5a ruling 1.2), because the
+/// editor stores this body as a row. Per owner ruling #2 (S118, the drift-repair
 /// class) the embedded rows now carry <c>fullDayOnly</c> — the previously-drifted inline
 /// mapper omitted it (additive; display-only on the read side).
 /// </summary>
@@ -152,6 +158,7 @@ public sealed record AgreementConfigWithEntitlementsResponse(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     DateTime? PublishedAt,
+    DateOnly? AppliesFrom,
     DateTime? ArchivedAt,
     Guid? ClonedFromId,
     string? Description,
@@ -164,13 +171,15 @@ public sealed record AgreementConfigWithEntitlementsResponse(
 /// emitted; <c>archivedConfigId</c>/<c>publishedAt</c> are nullable-valued
 /// (NULLABLE-ALWAYS-PRESENT, never optional-key — the S113 required/nullable orthogonality).
 /// <c>status</c> is the literal "ACTIVE" on this path (typed with the full status set — the
-/// same init.sql:1308 authority).
+/// same init.sql:1308 authority). <c>appliesFrom</c> is the published version's date (QUAL-182),
+/// never null on this path.
 /// </summary>
 public sealed record AgreementConfigPublishResponse(
     Guid ConfigId,
     [property: AllowedValues("DRAFT", "ACTIVE", "ARCHIVED")] string Status,
     Guid? ArchivedConfigId,
-    DateTime? PublishedAt);
+    DateTime? PublishedAt,
+    DateOnly AppliesFrom);
 
 /// <summary>
 /// The POST /api/agreement-configs/{configId}/archive 200 envelope. ALL keys are ALWAYS

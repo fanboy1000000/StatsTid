@@ -2,6 +2,7 @@ using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Outbox;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Concurrency;
 
@@ -114,7 +115,7 @@ public sealed class AuditVersionTransitionTests : IAsyncLifetime
         // PositionOverride uses Update + state-change (Activate/Deactivate) as its three
         // mutating endpoints — DEACTIVATE here exercises the state-change v3 audit path.
         var initial = NewPositionOverride();
-        var overrideId = await _positionOverrideRepo.CreateAsync(initial);
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(_positionOverrideRepo, _harness.Factory, initial);
 
         // CREATE audit (v2 primitive).
         await using (var conn = _harness.Factory.Create())
@@ -132,7 +133,7 @@ public sealed class AuditVersionTransitionTests : IAsyncLifetime
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            var saveResult = await _positionOverrideRepo.UpdateAsync(
+            var saveResult = await PositionOverrideTestWriter.UpdateAsync(_positionOverrideRepo, 
                 conn, tx, overrideId, expectedVersion: 1, NewPositionOverride(maxFlex: 250m));
             await _positionOverrideRepo.AppendAuditAsync(
                 conn, tx, overrideId, "UPDATED", "{}", "{}", "tester", "GLOBAL_ADMIN",
@@ -148,7 +149,7 @@ public sealed class AuditVersionTransitionTests : IAsyncLifetime
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            var saveResult = await _positionOverrideRepo.DeactivateAsync(
+            var saveResult = await PositionOverrideTestWriter.DeactivateAsync(_positionOverrideRepo, 
                 conn, tx, overrideId, expectedVersion: 2);
             await _positionOverrideRepo.AppendAuditAsync(
                 conn, tx, overrideId, "DEACTIVATED", "{}", null, "tester", "GLOBAL_ADMIN",

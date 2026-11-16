@@ -112,7 +112,7 @@ Persistence, security services, and cross-cutting infrastructure.
 
 - **(project root)** -- Npgsql-based repositories (no EF Core), at the Infrastructure project root (NOT a `Repositories/` subfolder — QUAL-080 corrected): `PostgresEventStore` (the event store; renamed from the former `EventStoreRepository`), `OrganizationRepository`, `UserRepository`, `RoleAssignmentRepository`, `LocalConfigurationRepository`, `ApprovalPeriodRepository`, `ProjectRepository`, `AgreementConfigRepository`, etc.
 - **Security/** -- `OrgScopeValidator` (org-scope enforcement on all endpoints)
-- **Services/** -- `ConfigResolutionService` (central + position override + local merge per [ADR-010](knowledge-base/decisions/ADR-010-local-config-merge-at-service-layer.md)), `AgreementConfigSeeder`
+- **Services/** -- `ConfigResolutionService` (central + position override + local merge per [ADR-010](knowledge-base/decisions/ADR-010-local-config-merge-at-service-layer.md)) (the agreement-config seeder was retired in S148: `init.sql` seeds every config)
 - **EventSerializer** -- Explicit type map registration for all domain events ([DEP-003](knowledge-base/dependencies/DEP-003-event-serializer-must-register-all-types.md))
 
 ### Integrations/Payroll (`src/Integrations/StatsTid.Integrations.Payroll/`)

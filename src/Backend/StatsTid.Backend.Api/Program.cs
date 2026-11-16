@@ -510,14 +510,6 @@ if (args.Contains("--openapi"))
     return;
 }
 
-// ── Seed agreement configs from static data if DB is empty (ADR-014) ──
-using (var scope = app.Services.CreateScope())
-{
-    var repo = scope.ServiceProvider.GetRequiredService<AgreementConfigRepository>();
-    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-    await AgreementConfigSeeder.SeedAsync(repo, logger);
-}
-
 // ── Seed entitlement configs if DB is empty ──
 {
     var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();

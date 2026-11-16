@@ -42,13 +42,19 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
     private const string OkVersion = "OKS118";
     private const string PositionCode = "S118_POS"; // test-seeded positions row (FK target)
 
-    /// <summary>The ruling #1 anchor: the EXACT 13 camelCase members of
+    // S148 C-5 (NR-P14): these facts run on the real clock, so every write sends an explicit past Monday
+    // (create 2026-01-05, the PUT 2026-01-12) instead of depending on today's weekday: the PUT changes the
+    // weekly norm (null to 36.75), which the Monday rule refuses on any other weekday.
+    private const string CreateDate = "2026-01-05";
+    private const string PutDate = "2026-01-12";
+
+    /// <summary>The ruling #1 anchor: the EXACT 14 camelCase members of
     /// <c>PositionOverrideResponse</c>.</summary>
     // S148 C-7: kind F (CI, Docker; not run locally). The retired flex carryover key is no longer served; on the code before C-7 the response still serves it, so the exact-key-set assertion fails (the extra key is named).
     private static readonly string[] EntityKeys =
     {
         "overrideId", "agreementCode", "okVersion", "positionCode", "status", "version",
-        "maxFlexBalance", "normPeriodWeeks", "weeklyNormHours",
+        "maxFlexBalance", "normPeriodWeeks", "weeklyNormHours", "appliesFrom", // S148 C-2 (TASK-14818)
         "createdBy", "createdAt", "updatedAt", "description",
     };
 
@@ -129,7 +135,7 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
     {
         using var admin = Admin();
         using var response = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, "/api/admin/position-overrides", CreateJson("S118PO_CRT", weeklyNormHours: "null")));
+            HttpMethod.Post, "/api/admin/position-overrides", CreateJson("S118PO_CRT", weeklyNormHours: "null", appliesFrom: CreateDate)));
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(201, (int)response.StatusCode); // the EXACT status — a 200 here is RED
@@ -148,6 +154,7 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
         Assert.Equal(120.5m, root.GetProperty("maxFlexBalance").GetDecimal());
         Assert.Equal(JsonValueKind.Null, root.GetProperty("weeklyNormHours").ValueKind); // nullable-always-present
         Assert.Equal(ActorId, root.GetProperty("createdBy").GetString());
+        Assert.Equal(CreateDate, root.GetProperty("appliesFrom").GetString()); // S148: the date sent is the date served
         Assert.Equal(1L, S118ContractAssert.EtagVersion(response));
     }
 
@@ -181,7 +188,7 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
             _spec, admin,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Put,
                 $"/api/admin/position-overrides/{overrideId}",
-                CreateJson("S118PO_RW", weeklyNormHours: "36.75"), ifMatchVersion: etagVersion),
+                CreateJson("S118PO_RW", weeklyNormHours: "36.75", appliesFrom: PutDate), ifMatchVersion: etagVersion),
             "/api/admin/position-overrides/{overrideId}", "put");
 
         var putRoot = JsonDocument.Parse(putBody).RootElement;
@@ -189,6 +196,7 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
         Assert.Equal(overrideId, putRoot.GetProperty("overrideId").GetGuid());
         Assert.Equal(2L, putRoot.GetProperty("version").GetInt64());
         Assert.Equal(36.75m, putRoot.GetProperty("weeklyNormHours").GetDecimal()); // the populated nullable state
+        Assert.Equal(PutDate, putRoot.GetProperty("appliesFrom").GetString()); // S148: the PUT's own date
         Assert.Equal("ACTIVE", putRoot.GetProperty("status").GetString());
     }
 
@@ -286,7 +294,7 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
         HttpClient client, string agreementCode)
     {
         using var response = await client.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, "/api/admin/position-overrides", CreateJson(agreementCode, weeklyNormHours: "null")));
+            HttpMethod.Post, "/api/admin/position-overrides", CreateJson(agreementCode, weeklyNormHours: "null", appliesFrom: CreateDate)));
         var body = await response.Content.ReadAsStringAsync();
         if ((int)response.StatusCode != 201)
             throw new XunitException($"Position-override create for {agreementCode} returned {(int)response.StatusCode}: {body}");
@@ -327,11 +335,12 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
     /// <summary>Create/update body — the same 8-member request shape serves both verbs.
     /// <paramref name="weeklyNormHours"/> is passed as raw JSON ("null" or a literal) so both
     /// nullable states are exercised on the wire.</summary>
-    private static string CreateJson(string agreementCode, string weeklyNormHours)
+    private static string CreateJson(string agreementCode, string weeklyNormHours, string appliesFrom)
         => $$"""
            { "agreementCode": "{{agreementCode}}", "okVersion": "{{OkVersion}}",
              "positionCode": "{{PositionCode}}",
              "maxFlexBalance": 120.5, "normPeriodWeeks": 4,
-             "weeklyNormHours": {{weeklyNormHours}}, "description": "S118 positionsundtagelse" }
+             "weeklyNormHours": {{weeklyNormHours}}, "appliesFrom": "{{appliesFrom}}",
+             "description": "S118 positionsundtagelse" }
            """;
 }

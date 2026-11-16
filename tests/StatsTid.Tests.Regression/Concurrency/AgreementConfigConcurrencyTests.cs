@@ -2,6 +2,7 @@ using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Outbox;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Concurrency;
 
@@ -105,7 +106,7 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            await _repo.PublishAsync(conn, tx, configId, expectedVersion: 1, actorId: "tester");
+            await PositionOverrideTestWriter.PublishAsync(_repo, conn, tx, configId, expectedVersion: 1, actorId: "tester");
             await tx.CommitAsync();
         });
         Assert.Equal(1L, ex.ExpectedVersion);
@@ -201,7 +202,7 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            saveResult = await _repo.PublishAsync(
+            saveResult = await PositionOverrideTestWriter.PublishAsync(_repo, 
                 conn, tx, draftId, expectedVersion: 1, actorId: "tester");
 
             await _repo.AppendAuditAsync(

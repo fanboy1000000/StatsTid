@@ -3,6 +3,7 @@ using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Infrastructure;
 
@@ -549,7 +550,7 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var saveResult = await repo.PublishAsync(conn, tx, draftId, expectedVersion, "tester");
+        var saveResult = await PositionOverrideTestWriter.PublishAsync(repo, conn, tx, draftId, expectedVersion, "tester");
         Assert.Null(saveResult.ArchivedId); // no prior ACTIVE for this (code, version)
         Assert.False(saveResult.IsCreated);
         await AssertTxStillUsable(conn, tx);
@@ -621,7 +622,7 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var overrideId = await repo.CreateAsync(conn, tx, entity);
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(repo, conn, tx, entity);
 
         await AssertTxStillUsable(conn, tx);
         Assert.Equal(1L, await CountInsideTx(conn, tx, "position_override_configs", "override_id", overrideId));
@@ -634,7 +635,7 @@ public sealed class TxContractTests : IAsyncLifetime
     {
         var repo = new PositionOverrideRepository(_harness.Factory);
         var entity = NewPositionOverride();
-        var overrideId = await repo.CreateAsync(entity);
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(repo, _harness.Factory, entity);
 
         // S25 / TASK-2504: v3 UpdateAsync(conn, tx, overrideId, expectedVersion, ...)
         // requires the row's current version. Read it back via the same path the HTTP
@@ -648,7 +649,7 @@ public sealed class TxContractTests : IAsyncLifetime
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
         var updated = NewPositionOverride(maxFlex: 250m);
-        var saveResult = await repo.UpdateAsync(conn, tx, overrideId, expectedVersion, updated);
+        var saveResult = await PositionOverrideTestWriter.UpdateAsync(repo, conn, tx, overrideId, expectedVersion, updated);
         Assert.False(saveResult.IsCreated);
         Assert.Equal(expectedVersion + 1, saveResult.Version);
         await AssertTxStillUsable(conn, tx);
@@ -662,7 +663,7 @@ public sealed class TxContractTests : IAsyncLifetime
     public async Task PositionOverrideRepo_DeactivateAsync_ParticipatesInCallerTx()
     {
         var repo = new PositionOverrideRepository(_harness.Factory);
-        var overrideId = await repo.CreateAsync(NewPositionOverride());
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(repo, _harness.Factory, NewPositionOverride());
 
         // S25 / TASK-2504: v3 DeactivateAsync expects expectedVersion.
         var preEntity = await repo.GetByIdAsync(overrideId);
@@ -673,7 +674,7 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var saveResult = await repo.DeactivateAsync(conn, tx, overrideId, expectedVersion);
+        var saveResult = await PositionOverrideTestWriter.DeactivateAsync(repo, conn, tx, overrideId, expectedVersion);
         Assert.False(saveResult.IsCreated);
         Assert.Equal("INACTIVE", saveResult.Status);
         await AssertTxStillUsable(conn, tx);
@@ -690,8 +691,8 @@ public sealed class TxContractTests : IAsyncLifetime
     public async Task PositionOverrideRepo_ActivateAsync_ParticipatesInCallerTx()
     {
         var repo = new PositionOverrideRepository(_harness.Factory);
-        var overrideId = await repo.CreateAsync(NewPositionOverride());
-        await repo.DeactivateAsync(overrideId); // seed INACTIVE
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(repo, _harness.Factory, NewPositionOverride());
+        await PositionOverrideTestWriter.DeactivateAsync(repo, _harness.Factory, overrideId); // seed INACTIVE
 
         // S25 / TASK-2504: v3 ActivateAsync expects expectedVersion.
         var preEntity = await repo.GetByIdAsync(overrideId);
@@ -702,7 +703,7 @@ public sealed class TxContractTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
-        var saveResult = await repo.ActivateAsync(conn, tx, overrideId, expectedVersion);
+        var saveResult = await PositionOverrideTestWriter.ActivateAsync(repo, conn, tx, overrideId, expectedVersion);
         Assert.False(saveResult.IsCreated);
         Assert.Equal("ACTIVE", saveResult.Status);
         await AssertTxStillUsable(conn, tx);

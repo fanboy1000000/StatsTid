@@ -2155,6 +2155,15 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigPublishRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -2372,6 +2381,15 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.PositionOverrideTransitionRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -2402,6 +2420,15 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.PositionOverrideTransitionRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -5194,6 +5221,7 @@
       },
       "StatsTid.Backend.Api.Contracts.AgreementConfigPublishResponse": {
         "required": [
+          "appliesFrom",
           "archivedConfigId",
           "configId",
           "publishedAt",
@@ -5222,6 +5250,10 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "appliesFrom": {
+            "type": "string",
+            "format": "date"
           }
         },
         "additionalProperties": false
@@ -5230,6 +5262,7 @@
         "required": [
           "agreementCode",
           "annualNormHours",
+          "appliesFrom",
           "archivedAt",
           "callInMinimumHours",
           "callInRate",
@@ -5448,6 +5481,11 @@
             "format": "date-time",
             "nullable": true
           },
+          "appliesFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
           "archivedAt": {
             "type": "string",
             "format": "date-time",
@@ -5469,6 +5507,7 @@
         "required": [
           "agreementCode",
           "annualNormHours",
+          "appliesFrom",
           "archivedAt",
           "callInMinimumHours",
           "callInRate",
@@ -5687,6 +5726,11 @@
           "publishedAt": {
             "type": "string",
             "format": "date-time",
+            "nullable": true
+          },
+          "appliesFrom": {
+            "type": "string",
+            "format": "date",
             "nullable": true
           },
           "archivedAt": {
@@ -8918,6 +8962,7 @@
       "StatsTid.Backend.Api.Contracts.PositionOverrideResponse": {
         "required": [
           "agreementCode",
+          "appliesFrom",
           "createdAt",
           "createdBy",
           "description",
@@ -8971,6 +9016,10 @@
             "type": "number",
             "format": "double",
             "nullable": true
+          },
+          "appliesFrom": {
+            "type": "string",
+            "format": "date"
           },
           "createdBy": {
             "type": "string"
@@ -11627,6 +11676,17 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigPublishRequest": {
+        "type": "object",
+        "properties": {
+          "appliesFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigRequest": {
         "required": [
           "agreementCode",
@@ -12339,6 +12399,22 @@
           "description": {
             "type": "string",
             "nullable": true
+          },
+          "appliesFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.PositionOverrideTransitionRequest": {
+        "type": "object",
+        "properties": {
+          "appliesFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -12377,6 +12453,11 @@
           },
           "description": {
             "type": "string",
+            "nullable": true
+          },
+          "appliesFrom": {
+            "type": "string",
+            "format": "date",
             "nullable": true
           }
         },
