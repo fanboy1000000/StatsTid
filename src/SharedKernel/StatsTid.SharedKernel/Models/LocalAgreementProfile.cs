@@ -9,6 +9,8 @@ namespace StatsTid.SharedKernel.Models;
 /// Overridable columns (NULL = inherit central):
 ///   weekly_norm_hours, max_flex_balance, flex_carryover_max,
 ///   max_overtime_hours_per_period, overtime_requires_pre_approval.
+/// Settings added after S21, also NULL = not set: the flex settlement and cap columns, the ten
+/// office-hours columns and paid_absence_credit_basis (ADR-043 D6).
 /// </summary>
 public sealed class LocalAgreementProfile
 {
@@ -19,12 +21,34 @@ public sealed class LocalAgreementProfile
     public required DateOnly EffectiveFrom { get; init; }
     public DateOnly? EffectiveTo { get; init; }
 
-    // Overridable fields (5). NULL = inherit central.
+    // Legacy overridable fields (5). NULL = inherit central.
     public decimal? WeeklyNormHours { get; init; }
     public decimal? MaxFlexBalance { get; init; }
     public decimal? FlexCarryoverMax { get; init; }
     public decimal? MaxOvertimeHoursPerPeriod { get; init; }
     public bool? OvertimeRequiresPreApproval { get; init; }
+
+    // Flex-settlement, office-hours and credit-basis settings (ADR-043 D6; S148 C-4, C-8, C-9).
+    // NULL = not set. Their vocabularies and CHECKs live in init.sql; no repository reads them yet.
+    public string? FlexSettlementPeriod { get; init; }
+    public string? FlexCapTestPeriod { get; init; }
+    public decimal? FlexPlusCapHours { get; init; }
+    public decimal? FlexMinusCapHours { get; init; }
+    public decimal? FlexDailyCreditCapHours { get; init; }
+    public string? FlexAboveCapAction { get; init; }
+    /// <summary>The leaving default is provisional (ADR-043 provisional item 8).</summary>
+    public string? FlexLeavingAction { get; init; }
+    public TimeOnly? OfficeHoursMonStart { get; init; }
+    public TimeOnly? OfficeHoursMonEnd { get; init; }
+    public TimeOnly? OfficeHoursTueStart { get; init; }
+    public TimeOnly? OfficeHoursTueEnd { get; init; }
+    public TimeOnly? OfficeHoursWedStart { get; init; }
+    public TimeOnly? OfficeHoursWedEnd { get; init; }
+    public TimeOnly? OfficeHoursThuStart { get; init; }
+    public TimeOnly? OfficeHoursThuEnd { get; init; }
+    public TimeOnly? OfficeHoursFriStart { get; init; }
+    public TimeOnly? OfficeHoursFriEnd { get; init; }
+    public string? PaidAbsenceCreditBasis { get; init; }
 
     public required string CreatedBy { get; init; }
     public required DateTime CreatedAt { get; init; }
@@ -55,9 +79,10 @@ public static class LocalAgreementProfileMetadata
     /// LocalAgreementProfileMigrator (TASK-2106) and the migration's known-overridable-key
     /// classification logic (per ADR-017 D4 cycle-1 resolution).
     ///
-    /// New overridable columns added to LocalAgreementProfile must add an entry here.
-    /// Schema and this map are paired — drift between them is the silent-no-op-overrides
-    /// failure mode S21 is fixing (per the SPRINT-21 problem statement).
+    /// Columns added after S21 have no legacy key and no entry here (the migrator can never meet
+    /// them); a legacy per-key column would need one. Schema and this map are paired — drift
+    /// between them is the silent-no-op-overrides failure mode S21 is fixing (per the SPRINT-21
+    /// problem statement).
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> LegacyKeyToColumn =
         new Dictionary<string, string>(StringComparer.Ordinal)

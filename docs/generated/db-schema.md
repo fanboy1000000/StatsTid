@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 67 tables** (50 primary, 17 audit).
+**Total: 74 tables** (54 primary, 20 audit).
 
 ---
 
@@ -344,6 +344,43 @@
 - `idx_user_agreement_codes_audit_assignment_id` on (assignment_id)
 - `idx_user_agreement_codes_audit_user_id` on (user_id)
 
+## user_organisations
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| assignment_id | UUID | No | PK |  |
+| user_id | TEXT | No | FK→users |  |
+| org_id | TEXT | No | FK→organizations |  |
+| effective_from | DATE | No |  |  |
+| effective_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_user_organisations_live` (UNIQUE) on (user_id) WHERE effective_to IS NULL
+- `idx_user_organisations_history` (UNIQUE) on (user_id, effective_from)
+
+## user_organisations_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| assignment_id | UUID | No |  |  |
+| user_id | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| audit_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_user_organisations_audit_assignment_id` on (assignment_id)
+- `idx_user_organisations_audit_user_id` on (user_id)
+
 ## users_audit
 
 | Column | Type | Null | Key | Default |
@@ -470,9 +507,34 @@
 | flex_carryover_max | NUMERIC(6,2) | Yes |  |  |
 | max_overtime_hours_per_period | NUMERIC(6,2) | Yes |  |  |
 | overtime_requires_pre_approval | BOOLEAN | Yes |  |  |
+| flex_settlement_period | TEXT | Yes |  |  |
+| flex_cap_test_period | TEXT | Yes |  |  |
+| flex_plus_cap_hours | NUMERIC(6,2) | Yes |  |  |
+| flex_minus_cap_hours | NUMERIC(6,2) | Yes |  |  |
+| flex_daily_credit_cap_hours | NUMERIC(5,2) | Yes |  |  |
+| flex_above_cap_action | TEXT | Yes |  |  |
+| flex_leaving_action | TEXT | Yes |  |  |
+| office_hours_mon_start | TIME | Yes |  |  |
+| office_hours_mon_end | TIME | Yes |  |  |
+| office_hours_tue_start | TIME | Yes |  |  |
+| office_hours_tue_end | TIME | Yes |  |  |
+| office_hours_wed_start | TIME | Yes |  |  |
+| office_hours_wed_end | TIME | Yes |  |  |
+| office_hours_thu_start | TIME | Yes |  |  |
+| office_hours_thu_end | TIME | Yes |  |  |
+| office_hours_fri_start | TIME | Yes |  |  |
+| office_hours_fri_end | TIME | Yes |  |  |
+| paid_absence_credit_basis | TEXT | Yes |  |  |
 | created_by | TEXT | No |  |  |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | version | BIGINT | No |  | 1 |
+
+**Table constraints:**
+- CONSTRAINT local_agreement_profiles_office_hours_mon_check CHECK ((office_hours_mon_start IS NULL AND office_hours_mon_end IS NULL) OR (office_hours_mon_start IS NOT NULL AND office_hours_mon_end IS NOT NULL AND office_hours_mon_start < office_hours_mon_end))
+- CONSTRAINT local_agreement_profiles_office_hours_tue_check CHECK ((office_hours_tue_start IS NULL AND office_hours_tue_end IS NULL) OR (office_hours_tue_start IS NOT NULL AND office_hours_tue_end IS NOT NULL AND office_hours_tue_start < office_hours_tue_end))
+- CONSTRAINT local_agreement_profiles_office_hours_wed_check CHECK ((office_hours_wed_start IS NULL AND office_hours_wed_end IS NULL) OR (office_hours_wed_start IS NOT NULL AND office_hours_wed_end IS NOT NULL AND office_hours_wed_start < office_hours_wed_end))
+- CONSTRAINT local_agreement_profiles_office_hours_thu_check CHECK ((office_hours_thu_start IS NULL AND office_hours_thu_end IS NULL) OR (office_hours_thu_start IS NOT NULL AND office_hours_thu_end IS NOT NULL AND office_hours_thu_start < office_hours_thu_end))
+- CONSTRAINT local_agreement_profiles_office_hours_fri_check CHECK ((office_hours_fri_start IS NULL AND office_hours_fri_end IS NULL) OR (office_hours_fri_start IS NOT NULL AND office_hours_fri_end IS NOT NULL AND office_hours_fri_start < office_hours_fri_end))
 
 **Indexes:**
 - `uq_local_agreement_profile_active` (UNIQUE) on (org_id, agreement_code, ok_version) WHERE effective_to IS NULL
@@ -493,6 +555,95 @@
 
 **Indexes:**
 - `idx_local_profile_audit_profile` on (profile_id)
+
+## customary_days
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| custom_id | UUID | No | PK | gen_random_uuid() |
+| org_id | TEXT | No | FK→organizations |  |
+| agreement_code | TEXT | Yes |  |  |
+| recurring_month | SMALLINT | Yes |  |  |
+| recurring_day | SMALLINT | Yes |  |  |
+| single_date | DATE | Yes |  |  |
+| kind | TEXT | No |  |  |
+| part | TEXT | No |  |  |
+| part_from_time | TIME | Yes |  |  |
+| part_hours | NUMERIC(4,2) | Yes |  |  |
+| paid_mode | TEXT | Yes |  |  |
+| valid_from | DATE | No |  |  |
+| valid_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_by | TEXT | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Table constraints:**
+- CONSTRAINT customary_days_one_day_form_check CHECK ( (single_date IS NOT NULL AND recurring_month IS NULL AND recurring_day IS NULL) OR (single_date IS NULL AND recurring_month IS NOT NULL AND recurring_day IS NOT NULL))
+- CONSTRAINT customary_days_part_from_time_check CHECK ((part = 'FROM_TIME') = (part_from_time IS NOT NULL))
+- CONSTRAINT customary_days_part_hours_check CHECK ((part = 'HOURS') = (part_hours IS NOT NULL))
+- CONSTRAINT customary_days_paid_mode_check CHECK ((kind = 'PAID_DAY_OFF') = (paid_mode IS NOT NULL))
+- CONSTRAINT customary_days_valid_to_check CHECK (valid_to IS NULL OR valid_to > valid_from)
+
+**Indexes:**
+- `idx_customary_days_org` on (org_id)
+
+## customary_days_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| custom_id | UUID | No |  |  |
+| org_id | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_customary_days_audit_custom` on (custom_id)
+
+## employee_hr_facts
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| facts_id | UUID | No | PK | gen_random_uuid() |
+| employee_id | TEXT | No | FK→users |  |
+| overtime_regime | TEXT | Yes |  |  |
+| on_flex_scheme | BOOLEAN | Yes |  |  |
+| effective_from | DATE | No |  |  |
+| effective_to | DATE | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| updated_at | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_employee_hr_facts_live` (UNIQUE) on (employee_id) WHERE effective_to IS NULL
+- `idx_employee_hr_facts_history` (UNIQUE) on (employee_id, effective_from)
+
+## employee_hr_facts_audit
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| audit_id | BIGSERIAL | No | PK |  |
+| facts_id | UUID | No |  |  |
+| employee_id | TEXT | No |  |  |
+| action | TEXT | No |  |  |
+| previous_data | JSONB | Yes |  |  |
+| new_data | JSONB | Yes |  |  |
+| version_before | BIGINT | Yes |  |  |
+| version_after | BIGINT | Yes |  |  |
+| actor_id | TEXT | No |  |  |
+| actor_role | TEXT | No |  |  |
+| timestamp | TIMESTAMPTZ | No |  | NOW() |
+
+**Indexes:**
+- `idx_employee_hr_facts_audit_facts` on (facts_id)
+- `idx_employee_hr_facts_audit_employee` on (employee_id)
 
 ## approval_periods
 
@@ -659,6 +810,7 @@
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
 | published_at | TIMESTAMPTZ | Yes |  |  |
 | archived_at | TIMESTAMPTZ | Yes |  |  |
+| applies_from | DATE | No |  |  |
 | cloned_from_id | UUID | Yes | FK→agreement_configs |  |
 | description | TEXT | Yes |  |  |
 | version | BIGINT | No |  | 1 |
@@ -718,6 +870,7 @@
 | flex_carryover_max | DECIMAL | Yes |  |  |
 | norm_period_weeks | INT | Yes |  |  |
 | weekly_norm_hours | DECIMAL | Yes |  |  |
+| applies_from | DATE | No |  |  |
 | created_by | TEXT | No |  | 'SYSTEM_SEED' |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
@@ -741,6 +894,23 @@
 | timestamp | TIMESTAMPTZ | No |  | NOW() |
 | version_before | BIGINT | Yes |  |  |
 | version_after | BIGINT | Yes |  |  |
+
+## position_override_config_versions
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| version_id | BIGSERIAL | No | PK |  |
+| override_id | UUID | No | FK→position_override_configs |  |
+| applies_from | DATE | No |  |  |
+| state | TEXT | No |  |  |
+| max_flex_balance | DECIMAL | Yes |  |  |
+| norm_period_weeks | INT | Yes |  |  |
+| weekly_norm_hours | DECIMAL | Yes |  |  |
+| recorded_at | TIMESTAMPTZ | No |  | clock_timestamp() |
+| recorded_by | TEXT | No |  |  |
+
+**Indexes:**
+- `idx_position_override_config_versions_read` on (override_id, applies_from, recorded_at)
 
 ## wage_type_mapping_audit
 
@@ -1453,53 +1623,60 @@
 | 16 | unit_leaders | -- |
 | 17 | user_agreement_codes | -- |
 | 18 | user_agreement_codes_audit | audit |
-| 19 | users_audit | audit |
-| 20 | roles | -- |
-| 21 | role_assignments | -- |
-| 22 | role_assignment_audit | audit |
-| 23 | local_configurations | -- |
-| 24 | local_configuration_audit | audit |
-| 25 | local_agreement_profiles | -- |
-| 26 | local_agreement_profile_audit | audit |
-| 27 | approval_periods | -- |
-| 28 | approval_audit | audit |
-| 29 | projects | -- |
-| 30 | user_project_selections | -- |
-| 31 | absence_type_visibility | -- |
-| 32 | positions | -- |
-| 33 | agreement_configs | -- |
-| 34 | agreement_config_audit | audit |
-| 35 | compensatory_rest | -- |
-| 36 | position_override_configs | -- |
-| 37 | position_override_config_audit | audit |
-| 38 | wage_type_mapping_audit | audit |
-| 39 | entitlement_configs | -- |
-| 40 | entitlement_config_audit | audit |
-| 41 | entitlement_balances | -- |
-| 42 | time_entries_projection | -- |
-| 43 | absences_projection | -- |
-| 44 | work_time_projection | -- |
-| 45 | overtime_balances | -- |
-| 46 | overtime_pre_approvals | -- |
-| 47 | segment_manifests | -- |
-| 48 | role_config_overrides | -- |
-| 49 | role_config_override_audit | audit |
-| 50 | overtime_authorization_audit | audit |
-| 51 | audit_projection | -- |
-| 52 | reporting_lines | -- |
-| 53 | reporting_line_audit | audit |
-| 54 | employee_entitlement_eligibility | -- |
-| 55 | employee_entitlement_eligibility_audit | audit |
-| 56 | vacation_settlements | -- |
-| 57 | vacation_transfer_agreements | -- |
-| 58 | vacation_settlement_audit | audit |
-| 59 | vacation_transfer_agreement_audit | audit |
-| 60 | settlement_payroll_inbox | -- |
-| 61 | settlement_export_lines | -- |
-| 62 | termination_payout_requests | -- |
-| 63 | user_skema_preferences | -- |
-| 64 | user_absence_selections | -- |
-| 65 | manager_vikar | -- |
-| 66 | payroll_export_records | -- |
-| 67 | hr_backdate_worklist | -- |
+| 19 | user_organisations | -- |
+| 20 | user_organisations_audit | audit |
+| 21 | users_audit | audit |
+| 22 | roles | -- |
+| 23 | role_assignments | -- |
+| 24 | role_assignment_audit | audit |
+| 25 | local_configurations | -- |
+| 26 | local_configuration_audit | audit |
+| 27 | local_agreement_profiles | -- |
+| 28 | local_agreement_profile_audit | audit |
+| 29 | customary_days | -- |
+| 30 | customary_days_audit | audit |
+| 31 | employee_hr_facts | -- |
+| 32 | employee_hr_facts_audit | audit |
+| 33 | approval_periods | -- |
+| 34 | approval_audit | audit |
+| 35 | projects | -- |
+| 36 | user_project_selections | -- |
+| 37 | absence_type_visibility | -- |
+| 38 | positions | -- |
+| 39 | agreement_configs | -- |
+| 40 | agreement_config_audit | audit |
+| 41 | compensatory_rest | -- |
+| 42 | position_override_configs | -- |
+| 43 | position_override_config_audit | audit |
+| 44 | position_override_config_versions | -- |
+| 45 | wage_type_mapping_audit | audit |
+| 46 | entitlement_configs | -- |
+| 47 | entitlement_config_audit | audit |
+| 48 | entitlement_balances | -- |
+| 49 | time_entries_projection | -- |
+| 50 | absences_projection | -- |
+| 51 | work_time_projection | -- |
+| 52 | overtime_balances | -- |
+| 53 | overtime_pre_approvals | -- |
+| 54 | segment_manifests | -- |
+| 55 | role_config_overrides | -- |
+| 56 | role_config_override_audit | audit |
+| 57 | overtime_authorization_audit | audit |
+| 58 | audit_projection | -- |
+| 59 | reporting_lines | -- |
+| 60 | reporting_line_audit | audit |
+| 61 | employee_entitlement_eligibility | -- |
+| 62 | employee_entitlement_eligibility_audit | audit |
+| 63 | vacation_settlements | -- |
+| 64 | vacation_transfer_agreements | -- |
+| 65 | vacation_settlement_audit | audit |
+| 66 | vacation_transfer_agreement_audit | audit |
+| 67 | settlement_payroll_inbox | -- |
+| 68 | settlement_export_lines | -- |
+| 69 | termination_payout_requests | -- |
+| 70 | user_skema_preferences | -- |
+| 71 | user_absence_selections | -- |
+| 72 | manager_vikar | -- |
+| 73 | payroll_export_records | -- |
+| 74 | hr_backdate_worklist | -- |
 

@@ -226,6 +226,14 @@ public static class EventSerializer
         // nothing recalculates automatically (ADR-013). Name-keyed; replay-safe.
         ["BackdateWorklistRowCreated"] = typeof(BackdateWorklistRowCreated),
         ["BackdateWorklistRowResolved"] = typeof(BackdateWorklistRowResolved),
+        // S148 config stage (C-10 customary days, C-11 HR facts, C-13 dated organisation, P-28 start
+        // date): the event shapes land here with their audit mappers; the writers arrive in later
+        // tasks. Name-keyed; replay-safe.
+        ["UserOrganisationSeeded"] = typeof(UserOrganisationSeeded),
+        ["UserOrganisationTransferred"] = typeof(UserOrganisationTransferred),
+        ["EmployeeEmploymentStartDateSet"] = typeof(EmployeeEmploymentStartDateSet),
+        ["CustomaryDayChanged"] = typeof(CustomaryDayChanged),
+        ["EmployeeHrFactsChanged"] = typeof(EmployeeHrFactsChanged),
     };
 
     public static string Serialize(IDomainEvent @event)

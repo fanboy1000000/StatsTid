@@ -428,6 +428,17 @@ builder.Services.AddSingleton<IAuditProjectionMapper<BackdateWorklistRowCreated>
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(BackdateWorklistRowCreated), nameof(BackdateWorklistRowCreated)));
 builder.Services.AddSingleton<IAuditProjectionMapper<BackdateWorklistRowResolved>, BackdateWorklistRowResolvedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(BackdateWorklistRowResolved), nameof(BackdateWorklistRowResolved)));
+// S148 config stage: the new events' mappers, each registered with its marker (ADR-026 D7).
+builder.Services.AddSingleton<IAuditProjectionMapper<UserOrganisationSeeded>, UserOrganisationSeededAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserOrganisationSeeded), nameof(UserOrganisationSeeded)));
+builder.Services.AddSingleton<IAuditProjectionMapper<UserOrganisationTransferred>, UserOrganisationTransferredAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserOrganisationTransferred), nameof(UserOrganisationTransferred)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeEmploymentStartDateSet>, EmployeeEmploymentStartDateSetAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeEmploymentStartDateSet), nameof(EmployeeEmploymentStartDateSet)));
+builder.Services.AddSingleton<IAuditProjectionMapper<CustomaryDayChanged>, CustomaryDayChangedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(CustomaryDayChanged), nameof(CustomaryDayChanged)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeHrFactsChanged>, EmployeeHrFactsChangedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeHrFactsChanged), nameof(EmployeeHrFactsChanged)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();

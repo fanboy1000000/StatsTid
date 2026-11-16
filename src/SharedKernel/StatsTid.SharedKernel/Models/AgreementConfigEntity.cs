@@ -78,6 +78,9 @@ public sealed class AgreementConfigEntity
     public Guid? ClonedFromId { get; init; }
     public string? Description { get; init; }
 
+    /// <summary>The stored applies-from date. Which writes set it and which reads use it is the repository's contract.</summary>
+    public DateOnly AppliesFrom { get; init; }
+
     /// <summary>
     /// Row-version optimistic-concurrency token (ADR-018 D7 + ADR-019 pending). Mirrors the
     /// <see cref="LocalAgreementProfile.Version"/> pattern: BIGINT (long) row-version, first-

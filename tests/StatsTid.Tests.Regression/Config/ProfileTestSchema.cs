@@ -83,11 +83,36 @@ internal static class ProfileTestSchema
             flex_carryover_max                  NUMERIC(6,2),
             max_overtime_hours_per_period       NUMERIC(6,2),
             overtime_requires_pre_approval      BOOLEAN,
+            -- S148 C-4, C-8, C-9: the eighteen flex-settlement and office-hours columns, all nullable
+            -- with no DEFAULT, with init.sql's CHECKs.
+            flex_settlement_period              TEXT            CHECK (flex_settlement_period IN ('MONTH')),
+            flex_cap_test_period                TEXT            CHECK (flex_cap_test_period IN ('MONTH')),
+            flex_plus_cap_hours                 NUMERIC(6,2)    CHECK (flex_plus_cap_hours >= 0),
+            flex_minus_cap_hours                NUMERIC(6,2)    CHECK (flex_minus_cap_hours >= 0),
+            flex_daily_credit_cap_hours         NUMERIC(5,2)    CHECK (flex_daily_credit_cap_hours >= 0),
+            flex_above_cap_action               TEXT            CHECK (flex_above_cap_action IN ('FORFEIT')),
+            flex_leaving_action                 TEXT            CHECK (flex_leaving_action IN ('FORFEIT_POSITIVE_RECORD_NEGATIVE')),
+            office_hours_mon_start              TIME,
+            office_hours_mon_end                TIME,
+            office_hours_tue_start              TIME,
+            office_hours_tue_end                TIME,
+            office_hours_wed_start              TIME,
+            office_hours_wed_end                TIME,
+            office_hours_thu_start              TIME,
+            office_hours_thu_end                TIME,
+            office_hours_fri_start              TIME,
+            office_hours_fri_end                TIME,
+            paid_absence_credit_basis           TEXT            CHECK (paid_absence_credit_basis IN ('PARAGRAPH_7_NR_2', 'OFFICE_HOURS')),
             created_by                          TEXT            NOT NULL,
             created_at                          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
             -- S22 / ADR-018 D7: row-version optimistic-concurrency token. First-insert is 1;
             -- each in-place UPDATE bumps it by one. Mirrors production init.sql DO $$ block.
-            version                             BIGINT          NOT NULL DEFAULT 1
+            version                             BIGINT          NOT NULL DEFAULT 1,
+            CONSTRAINT local_agreement_profiles_office_hours_mon_check CHECK ((office_hours_mon_start IS NULL AND office_hours_mon_end IS NULL) OR (office_hours_mon_start IS NOT NULL AND office_hours_mon_end IS NOT NULL AND office_hours_mon_start < office_hours_mon_end)),
+            CONSTRAINT local_agreement_profiles_office_hours_tue_check CHECK ((office_hours_tue_start IS NULL AND office_hours_tue_end IS NULL) OR (office_hours_tue_start IS NOT NULL AND office_hours_tue_end IS NOT NULL AND office_hours_tue_start < office_hours_tue_end)),
+            CONSTRAINT local_agreement_profiles_office_hours_wed_check CHECK ((office_hours_wed_start IS NULL AND office_hours_wed_end IS NULL) OR (office_hours_wed_start IS NOT NULL AND office_hours_wed_end IS NOT NULL AND office_hours_wed_start < office_hours_wed_end)),
+            CONSTRAINT local_agreement_profiles_office_hours_thu_check CHECK ((office_hours_thu_start IS NULL AND office_hours_thu_end IS NULL) OR (office_hours_thu_start IS NOT NULL AND office_hours_thu_end IS NOT NULL AND office_hours_thu_start < office_hours_thu_end)),
+            CONSTRAINT local_agreement_profiles_office_hours_fri_check CHECK ((office_hours_fri_start IS NULL AND office_hours_fri_end IS NULL) OR (office_hours_fri_start IS NOT NULL AND office_hours_fri_end IS NOT NULL AND office_hours_fri_start < office_hours_fri_end))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS uq_local_agreement_profile_active
             ON local_agreement_profiles (org_id, agreement_code, ok_version)

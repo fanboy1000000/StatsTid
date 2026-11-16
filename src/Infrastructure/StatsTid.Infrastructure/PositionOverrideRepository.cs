@@ -102,11 +102,11 @@ public sealed class PositionOverrideRepository
         INSERT INTO position_override_configs (
             override_id, agreement_code, ok_version, position_code, status,
             max_flex_balance, flex_carryover_max, norm_period_weeks, weekly_norm_hours,
-            created_by, description, created_at, updated_at
+            applies_from, created_by, description, created_at, updated_at
         ) VALUES (
             @overrideId, @agreementCode, @okVersion, @positionCode, 'ACTIVE',
             @maxFlexBalance, @flexCarryoverMax, @normPeriodWeeks, @weeklyNormHours,
-            @createdBy, @description, NOW(), NOW()
+            @appliesFrom, @createdBy, @description, NOW(), NOW()
         )
         """;
 
@@ -167,6 +167,7 @@ public sealed class PositionOverrideRepository
         cmd.Parameters.AddWithValue("flexCarryoverMax", (object?)entity.FlexCarryoverMax ?? DBNull.Value);
         cmd.Parameters.AddWithValue("normPeriodWeeks", (object?)entity.NormPeriodWeeks ?? DBNull.Value);
         cmd.Parameters.AddWithValue("weeklyNormHours", (object?)entity.WeeklyNormHours ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("appliesFrom", entity.AppliesFrom);
         cmd.Parameters.AddWithValue("createdBy", entity.CreatedBy);
         cmd.Parameters.AddWithValue("description", (object?)entity.Description ?? DBNull.Value);
     }
@@ -556,6 +557,7 @@ public sealed class PositionOverrideRepository
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at")),
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
+        AppliesFrom = reader.GetFieldValue<DateOnly>(reader.GetOrdinal("applies_from")),
         Version = reader.GetInt64(reader.GetOrdinal("version")),
     };
 }
