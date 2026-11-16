@@ -1653,3 +1653,19 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
 - **Plan "final + 12"** and TASK-14843 brief item 4.6 (the engine owns the month cut). M-34, M-35, M-36 added; 129 AC ids unchanged.
 
 **GATE after wave 3b** (`2810ebeb`): **green.** Build `-m:2 --no-incremental` 0 errors / 143 warnings / CA2100 113 distinct (both unchanged); Unit 1768 (1746 + 22: 17 new table rows and 5 new facts); DemoSeed 170; Regression non-Docker 140 (the Regression project builds with the new marker fact, settling the cycle-2 NOTE); frontend tsc, lint, `typecheck:e2e`, build green; vitest 99 files, 1199 tests (1169 + 30); `tools/check_docs.py` all hard checks pass. **CI-W3b next**, on a throwaway branch and draft PR.
+
+**CI-W3b** (run 43851473962, draft PR #61, at `ea684941`, headSha confirmed): **green, all seven jobs.**
+- **What it shows:** wave 3b's Docker facts ran for the first time, and all of them passed. Read from the run's trx files, by name, not from the job colour.
+- **Tests:**
+  - Unit 1768, DemoSeed 170, and Regression 2578 of 2578, Docker included (CI-W3 had 2574).
+  - Nothing failed and nothing was skipped.
+  - The Unit run on Linux time-zone data passed all 33 table rows, so the daylight-saving answers match the Windows host (an `(unproven)` item of TASK-14843 and -T, now settled).
+- **Facts seen passing, by name:**
+  - `RestFromSkemaIntervalsTests`: AC-S0-3a (`Interval2200To2359_Then0600To1400_DailyRestFinding`, now 8.0 dated 11 March), AC-S0-3c, AC-S0-3f (dated 1 October), and **AC-S0-3k** (`WorkEndOnTheFirst_AfterA23HourDay_IsJudgedFromTwoDaysBack`: the harness accepted the 2024 dates);
+  - `RestLeaderVisibilityTests`, all 15 methods (19 cases), including the four re-pinned facts, **AC-S0-3l** (`LeaderRead_PreviousMonthUnsent_WithholdsBothDaysBefore`), **AC-S0-3m** (`Skema_TwoPreviousBoundaryDays_ServedToTheEmployee_ToALeaderOnlyWhenSent`) and the new marker fact `Marker_HiredOnThePreviousMonthsLastDay_ListsTheFirst` (M-36's guard);
+  - `SkemaRowPreferencesMonthGetTests.BoundaryWorkTime_ExactlyThreeDays_NoiseExcluded` and the re-pinned `RestCheckNotCheckedDaysTests`;
+  - both PIN-1 worlds (`World20260115_December2025_EqualsGolden`, `World20260715_June2026_EqualsGolden`), so pay is unchanged by wave 3b (AC-S0-3n); `ConfigSeedParityTests` and `DemoPinSeedSelectionTests`.
+- **The other jobs:** smoke (the composed compliance probe non-503, so the engine container resolves the Copenhagen zone at boot, the other `(unproven)` item, settled), E2E, the frontend build, docs, lizard and gitleaks are all green.
+- **Run time:** about two hours (10:44 to 12:45 UTC on 2026-11-16).
+- **Status change:** wave 3b's Docker facts move from "CI-pending" to "CI-verified". **QUAL-253 marked FIXED** in the register. PR #61 is closed unmerged and `ci/s148-w3b` deleted. The six wave-3b worktrees were removed after the merge (their two `node_modules` junctions unlinked first; the main `node_modules` intact).
+- **Wave 3b is complete.** Next: wave 4 per the plan.
