@@ -113,7 +113,7 @@ public sealed class AgreementConfigRepository
         INSERT INTO agreement_configs (
             config_id, agreement_code, ok_version, status,
             weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours,
-            max_flex_balance, flex_carryover_max,
+            max_flex_balance,
             has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100,
             evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled,
             evening_start, evening_end, night_start, night_end,
@@ -130,7 +130,7 @@ public sealed class AgreementConfigRepository
         ) VALUES (
             @configId, @agreementCode, @okVersion, @status,
             @weeklyNormHours, @normPeriodWeeks, @normModel, @annualNormHours,
-            @maxFlexBalance, @flexCarryoverMax,
+            @maxFlexBalance,
             @hasOvertime, @hasMerarbejde, @overtimeThreshold50, @overtimeThreshold100,
             @eveningSupplementEnabled, @nightSupplementEnabled, @weekendSupplementEnabled, @holidaySupplementEnabled,
             @eveningStart, @eveningEnd, @nightStart, @nightEnd,
@@ -288,7 +288,6 @@ public sealed class AgreementConfigRepository
                 norm_model = @normModel,
                 annual_norm_hours = @annualNormHours,
                 max_flex_balance = @maxFlexBalance,
-                flex_carryover_max = @flexCarryoverMax,
                 has_overtime = @hasOvertime,
                 has_merarbejde = @hasMerarbejde,
                 overtime_threshold_50 = @overtimeThreshold50,
@@ -628,7 +627,6 @@ public sealed class AgreementConfigRepository
         cmd.Parameters.AddWithValue("normModel", entity.NormModel.ToString());
         cmd.Parameters.AddWithValue("annualNormHours", entity.AnnualNormHours);
         cmd.Parameters.AddWithValue("maxFlexBalance", entity.MaxFlexBalance);
-        cmd.Parameters.AddWithValue("flexCarryoverMax", entity.FlexCarryoverMax);
         cmd.Parameters.AddWithValue("hasOvertime", entity.HasOvertime);
         cmd.Parameters.AddWithValue("hasMerarbejde", entity.HasMerarbejde);
         cmd.Parameters.AddWithValue("overtimeThreshold50", entity.OvertimeThreshold50);
@@ -686,7 +684,6 @@ public sealed class AgreementConfigRepository
         NormModel = Enum.Parse<NormModel>(reader.GetString(reader.GetOrdinal("norm_model"))),
         AnnualNormHours = reader.GetDecimal(reader.GetOrdinal("annual_norm_hours")),
         MaxFlexBalance = reader.GetDecimal(reader.GetOrdinal("max_flex_balance")),
-        FlexCarryoverMax = reader.GetDecimal(reader.GetOrdinal("flex_carryover_max")),
         HasOvertime = reader.GetBoolean(reader.GetOrdinal("has_overtime")),
         HasMerarbejde = reader.GetBoolean(reader.GetOrdinal("has_merarbejde")),
         OvertimeThreshold50 = reader.GetDecimal(reader.GetOrdinal("overtime_threshold_50")),

@@ -41,7 +41,6 @@ const profile = {
   effectiveTo: null,
   weeklyNormHours: 37,
   maxFlexBalance: null,
-  flexCarryoverMax: null,
   maxOvertimeHoursPerPeriod: null,
   overtimeRequiresPreApproval: null,
   createdBy: 'admin1',
@@ -145,7 +144,6 @@ const saveBody = {
   effectiveFrom: '2026-05-04',
   weeklyNormHours: 37,
   maxFlexBalance: null,
-  flexCarryoverMax: null,
   maxOvertimeHoursPerPeriod: null,
   overtimeRequiresPreApproval: null,
 }

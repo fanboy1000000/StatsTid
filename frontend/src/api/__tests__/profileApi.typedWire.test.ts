@@ -74,7 +74,7 @@ beforeEach(() => {
   mockFetch.mockReset()
 })
 
-// A full 14-member spec profile (LocalAgreementProfileResponse).
+// A full 13-member spec profile (LocalAgreementProfileResponse).
 const profile = {
   profileId: '11111111-2222-3333-4444-555555555555',
   orgId: 'STY02',
@@ -84,7 +84,6 @@ const profile = {
   effectiveTo: null,
   weeklyNormHours: 37,
   maxFlexBalance: null,
-  flexCarryoverMax: null,
   maxOvertimeHoursPerPeriod: null,
   overtimeRequiresPreApproval: null,
   createdBy: 'admin1',
@@ -96,7 +95,6 @@ const saveBody: ProfileSaveRequest = {
   effectiveFrom: '2026-07-20',
   weeklyNormHours: 37,
   maxFlexBalance: null,
-  flexCarryoverMax: null,
   maxOvertimeHoursPerPeriod: null,
   overtimeRequiresPreApproval: null,
 }
@@ -169,13 +167,12 @@ describe('saveProfile — BOTH precondition branches, byte-identical', () => {
     expect(calls[0].headers['If-None-Match']).toBeUndefined()
   })
 
-  it('the PUT body is byte-identical: exactly the 6 ProfileSaveRequest keys', async () => {
+  it('the PUT body is byte-identical: exactly the 5 ProfileSaveRequest keys (S148 C-7)', async () => {
     const calls = captureCalls(() => ({ body: profile, etag: '"6"' }))
     await saveProfile('STY02', 'HK', 'OK24', saveBody, '"5"')
     expect(calls[0].body).toEqual(saveBody)
     expect(Object.keys(calls[0].body as Record<string, unknown>).sort()).toEqual([
       'effectiveFrom',
-      'flexCarryoverMax',
       'maxFlexBalance',
       'maxOvertimeHoursPerPeriod',
       'overtimeRequiresPreApproval',

@@ -56,7 +56,6 @@ public class Sprint17OvertimeGovernanceTests
         HasOvertime = true,
         HasMerarbejde = false,
         MaxFlexBalance = 0m,
-        FlexCarryoverMax = 0m,
         EveningSupplementEnabled = false,
         NightSupplementEnabled = false,
         WeekendSupplementEnabled = false,

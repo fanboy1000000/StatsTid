@@ -37,7 +37,6 @@ const draftConfig = {
   normModel: 'WEEKLY_HOURS',
   annualNormHours: 1924,
   maxFlexBalance: 150,
-  flexCarryoverMax: 37,
   hasOvertime: false,
   hasMerarbejde: false,
   overtimeThreshold50: 0,

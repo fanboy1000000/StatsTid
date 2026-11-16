@@ -5243,7 +5243,6 @@
           "eveningRate",
           "eveningStart",
           "eveningSupplementEnabled",
-          "flexCarryoverMax",
           "hasMerarbejde",
           "hasOvertime",
           "holidayRate",
@@ -5321,10 +5320,6 @@
             "format": "double"
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double"
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double"
           },
@@ -5489,7 +5484,6 @@
           "eveningRate",
           "eveningStart",
           "eveningSupplementEnabled",
-          "flexCarryoverMax",
           "hasMerarbejde",
           "hasOvertime",
           "holidayRate",
@@ -5567,10 +5561,6 @@
             "format": "double"
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double"
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double"
           },
@@ -6602,7 +6592,6 @@
         "required": [
           "agreementCode",
           "eveningSupplementEnabled",
-          "flexCarryoverMax",
           "hasMerarbejde",
           "hasOvertime",
           "holidaySupplementEnabled",
@@ -6627,10 +6616,6 @@
             "format": "double"
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double"
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double"
           },
@@ -6832,7 +6817,6 @@
         "required": [
           "agreementCode",
           "eveningSupplementEnabled",
-          "flexCarryoverMax",
           "hasMerarbejde",
           "hasOvertime",
           "holidaySupplementEnabled",
@@ -6861,10 +6845,6 @@
             "format": "double"
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double"
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double"
           },
@@ -7940,7 +7920,6 @@
           "createdBy",
           "effectiveFrom",
           "effectiveTo",
-          "flexCarryoverMax",
           "maxFlexBalance",
           "maxOvertimeHoursPerPeriod",
           "okVersion",
@@ -7980,11 +7959,6 @@
             "nullable": true
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double",
-            "nullable": true
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double",
             "nullable": true
@@ -8947,7 +8921,6 @@
           "createdAt",
           "createdBy",
           "description",
-          "flexCarryoverMax",
           "maxFlexBalance",
           "normPeriodWeeks",
           "okVersion",
@@ -8985,11 +8958,6 @@
             "format": "int64"
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double",
-            "nullable": true
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double",
             "nullable": true
@@ -11670,7 +11638,6 @@
           "eveningRate",
           "eveningStart",
           "eveningSupplementEnabled",
-          "flexCarryoverMax",
           "hasMerarbejde",
           "hasOvertime",
           "holidayRate",
@@ -11723,10 +11690,6 @@
             "format": "double"
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double"
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double"
           },
@@ -12042,11 +12005,6 @@
             "nullable": true
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double",
-            "nullable": true
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double",
             "nullable": true
@@ -12368,11 +12326,6 @@
             "format": "double",
             "nullable": true
           },
-          "flexCarryoverMax": {
-            "type": "number",
-            "format": "double",
-            "nullable": true
-          },
           "normPeriodWeeks": {
             "type": "integer",
             "format": "int32",
@@ -12408,11 +12361,6 @@
             "type": "string"
           },
           "maxFlexBalance": {
-            "type": "number",
-            "format": "double",
-            "nullable": true
-          },
-          "flexCarryoverMax": {
             "type": "number",
             "format": "double",
             "nullable": true

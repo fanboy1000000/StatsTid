@@ -283,7 +283,7 @@ public sealed class LocalAgreementProfileRepository
                 //     Detection happens AFTER lock + ValidatePrecondition (Codex Step 0b
                 //     BLOCKER fix): a stale caller cannot reach this path because their
                 //     If-Match is rejected by ValidatePrecondition first. If we reach here
-                //     and all 5 overridable fields match the predecessor, do NOT bump
+                //     and all 4 overridable fields match the predecessor, do NOT bump
                 //     version, do NOT UPDATE the row. Return predecessor.Version unchanged
                 //     with IsNoOp = true; the PUT handler skips audit + outbox emission.
                 if (AllOverridableFieldsMatch(predecessor, newProfile))
@@ -338,17 +338,17 @@ public sealed class LocalAgreementProfileRepository
     }
 
     /// <summary>
-    /// Returns true when all 5 admin-overridable fields on <paramref name="predecessor"/>
+    /// Returns true when all 4 admin-overridable fields on <paramref name="predecessor"/>
     /// equal the corresponding values on <paramref name="candidate"/>. Used by the S23
     /// same-day no-op short-circuit to skip the UPDATE + audit + outbox emission when an
     /// admin saves a profile with no field changes (typical "open the form, change nothing,
     /// hit Save" admin flow).
     ///
     /// <para>
-    /// The 5 fields are the entire whitelist of overridable columns on
+    /// The 4 fields are the entire whitelist of overridable columns on
     /// <c>local_agreement_profiles</c> per ADR-017 D9a (the schema columns ARE the
     /// whitelist; protected keys are absent from the schema by design):
-    /// <c>WeeklyNormHours</c>, <c>MaxFlexBalance</c>, <c>FlexCarryoverMax</c>,
+    /// <c>WeeklyNormHours</c>, <c>MaxFlexBalance</c>,
     /// <c>MaxOvertimeHoursPerPeriod</c>, <c>OvertimeRequiresPreApproval</c>. C# nullable
     /// equality (<c>==</c>) handles the (null, null) ⇒ true case correctly for both
     /// <c>decimal?</c> and <c>bool?</c>. Identity (<c>profile_id</c>, <c>effective_from</c>,
@@ -361,7 +361,6 @@ public sealed class LocalAgreementProfileRepository
     {
         return predecessor.WeeklyNormHours == candidate.WeeklyNormHours
             && predecessor.MaxFlexBalance == candidate.MaxFlexBalance
-            && predecessor.FlexCarryoverMax == candidate.FlexCarryoverMax
             && predecessor.MaxOvertimeHoursPerPeriod == candidate.MaxOvertimeHoursPerPeriod
             && predecessor.OvertimeRequiresPreApproval == candidate.OvertimeRequiresPreApproval;
     }
@@ -467,13 +466,13 @@ public sealed class LocalAgreementProfileRepository
             INSERT INTO local_agreement_profiles (
                 profile_id, org_id, agreement_code, ok_version,
                 effective_from, effective_to,
-                weekly_norm_hours, max_flex_balance, flex_carryover_max,
+                weekly_norm_hours, max_flex_balance,
                 max_overtime_hours_per_period, overtime_requires_pre_approval,
                 created_by, created_at, version)
             VALUES (
                 @profileId, @orgId, @agreementCode, @okVersion,
                 @effectiveFrom, NULL,
-                @weeklyNormHours, @maxFlexBalance, @flexCarryoverMax,
+                @weeklyNormHours, @maxFlexBalance,
                 @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
                 @createdBy, @createdAt, @version)
             """, conn, tx);
@@ -484,7 +483,6 @@ public sealed class LocalAgreementProfileRepository
         insertCmd.Parameters.AddWithValue("effectiveFrom", newProfile.EffectiveFrom);
         insertCmd.Parameters.AddWithValue("weeklyNormHours", (object?)newProfile.WeeklyNormHours ?? DBNull.Value);
         insertCmd.Parameters.AddWithValue("maxFlexBalance", (object?)newProfile.MaxFlexBalance ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("flexCarryoverMax", (object?)newProfile.FlexCarryoverMax ?? DBNull.Value);
         insertCmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", (object?)newProfile.MaxOvertimeHoursPerPeriod ?? DBNull.Value);
         insertCmd.Parameters.AddWithValue("overtimeRequiresPreApproval", (object?)newProfile.OvertimeRequiresPreApproval ?? DBNull.Value);
         insertCmd.Parameters.AddWithValue("createdBy", newProfile.CreatedBy);
@@ -499,7 +497,7 @@ public sealed class LocalAgreementProfileRepository
 
     /// <summary>
     /// UPDATE-in-place path for same-day saves (ADR-018 D9 MODIFIED branch). Updates the
-    /// 5 overridable columns and bumps <c>version</c> by one; <c>effective_from</c>,
+    /// 4 overridable columns and bumps <c>version</c> by one; <c>effective_from</c>,
     /// <c>effective_to</c>, <c>created_by</c>, <c>created_at</c> are immutable across
     /// in-place edits. Returns the post-bump version (sourced from
     /// <c>UPDATE ... RETURNING version</c>).
@@ -522,7 +520,6 @@ public sealed class LocalAgreementProfileRepository
             UPDATE local_agreement_profiles
             SET weekly_norm_hours = @weeklyNormHours,
                 max_flex_balance = @maxFlexBalance,
-                flex_carryover_max = @flexCarryoverMax,
                 max_overtime_hours_per_period = @maxOvertimeHoursPerPeriod,
                 overtime_requires_pre_approval = @overtimeRequiresPreApproval,
                 version = version + 1
@@ -532,7 +529,6 @@ public sealed class LocalAgreementProfileRepository
             """, conn, tx);
         updateCmd.Parameters.AddWithValue("weeklyNormHours", (object?)newProfile.WeeklyNormHours ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("maxFlexBalance", (object?)newProfile.MaxFlexBalance ?? DBNull.Value);
-        updateCmd.Parameters.AddWithValue("flexCarryoverMax", (object?)newProfile.FlexCarryoverMax ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", (object?)newProfile.MaxOvertimeHoursPerPeriod ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("overtimeRequiresPreApproval", (object?)newProfile.OvertimeRequiresPreApproval ?? DBNull.Value);
         updateCmd.Parameters.AddWithValue("profileId", profileId);
@@ -582,9 +578,6 @@ public sealed class LocalAgreementProfileRepository
         MaxFlexBalance = reader.IsDBNull(reader.GetOrdinal("max_flex_balance"))
             ? null
             : reader.GetDecimal(reader.GetOrdinal("max_flex_balance")),
-        FlexCarryoverMax = reader.IsDBNull(reader.GetOrdinal("flex_carryover_max"))
-            ? null
-            : reader.GetDecimal(reader.GetOrdinal("flex_carryover_max")),
         MaxOvertimeHoursPerPeriod = reader.IsDBNull(reader.GetOrdinal("max_overtime_hours_per_period"))
             ? null
             : reader.GetDecimal(reader.GetOrdinal("max_overtime_hours_per_period")),

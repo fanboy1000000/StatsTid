@@ -54,12 +54,12 @@ public sealed class ProfileNoOpShortCircuitTests : IAsyncLifetime
         var monday = new DateOnly(2026, 5, 4);
         var seedResult = await _repo.SupersedeAndCreateAsync(
             expectedCurrentVersion: null,
-            NewProfile(monday, weeklyNormHours: 37m, maxFlexBalance: 50m, flexCarryoverMax: 10m));
+            NewProfile(monday, weeklyNormHours: 37m, maxFlexBalance: 50m));
         Assert.False(seedResult.IsNoOp);
         Assert.Equal(1L, seedResult.Version);
 
         // Re-save with all fields identical — must be detected as a no-op.
-        var candidate = NewProfile(monday, weeklyNormHours: 37m, maxFlexBalance: 50m, flexCarryoverMax: 10m);
+        var candidate = NewProfile(monday, weeklyNormHours: 37m, maxFlexBalance: 50m);
         var noOpResult = await _repo.SupersedeAndCreateAsync(
             expectedCurrentVersion: seedResult.Version, candidate);
 
@@ -199,7 +199,6 @@ public sealed class ProfileNoOpShortCircuitTests : IAsyncLifetime
         DateOnly effectiveFrom,
         decimal? weeklyNormHours = null,
         decimal? maxFlexBalance = null,
-        decimal? flexCarryoverMax = null,
         decimal? maxOvertimeHoursPerPeriod = null,
         bool? overtimeRequiresPreApproval = null) => new()
         {
@@ -210,7 +209,6 @@ public sealed class ProfileNoOpShortCircuitTests : IAsyncLifetime
             EffectiveFrom = effectiveFrom,
             WeeklyNormHours = weeklyNormHours,
             MaxFlexBalance = maxFlexBalance,
-            FlexCarryoverMax = flexCarryoverMax,
             MaxOvertimeHoursPerPeriod = maxOvertimeHoursPerPeriod,
             OvertimeRequiresPreApproval = overtimeRequiresPreApproval,
             CreatedBy = "admin",

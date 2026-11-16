@@ -105,8 +105,8 @@ public sealed class ConfigFingerprintTests
     public void Timeline_ConfigFingerprint_EnumeratesAtLeastTheKnownConfigSurface()
     {
         // Guards the guard: the theory above is driven by reflection, so an accidental empty or
-        // truncated enumeration would pass vacuously. The config has 42 public instance properties
-        // (counted at cdd8253); a floor of 40 catches a reflection filter that went wrong without
+        // truncated enumeration would pass vacuously. The config has 41 public instance properties
+        // (42 counted at cdd8253, 41 once the flex carryover maximum was retired, ADR-043 D6); a floor of 40 catches a reflection filter that went wrong without
         // forcing an edit every time a property is added.
         Assert.True(ConfigProperties.Length >= 40, $"Only {ConfigProperties.Length} properties enumerated.");
         Assert.Contains(ConfigProperties, p => p.Name == "WeeklyNormHours");

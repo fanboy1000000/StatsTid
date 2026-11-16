@@ -395,7 +395,6 @@ public sealed class LocalAgreementProfileMigrator
             SELECT COUNT(*) FROM local_agreement_profiles
             WHERE weekly_norm_hours IS NULL
               AND max_flex_balance IS NULL
-              AND flex_carryover_max IS NULL
               AND max_overtime_hours_per_period IS NULL
               AND overtime_requires_pre_approval IS NULL
             """, conn, tx))
@@ -565,13 +564,13 @@ public sealed class LocalAgreementProfileMigrator
             INSERT INTO local_agreement_profiles (
                 profile_id, org_id, agreement_code, ok_version,
                 effective_from, effective_to,
-                weekly_norm_hours, max_flex_balance, flex_carryover_max,
+                weekly_norm_hours, max_flex_balance,
                 max_overtime_hours_per_period, overtime_requires_pre_approval,
                 created_by, created_at)
             VALUES (
                 @profileId, @orgId, @agreementCode, @okVersion,
                 @effectiveFrom, NULL,
-                @weeklyNormHours, @maxFlexBalance, @flexCarryoverMax,
+                @weeklyNormHours, @maxFlexBalance,
                 @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
                 @createdBy, @createdAt)
             """, conn, tx);
@@ -582,7 +581,6 @@ public sealed class LocalAgreementProfileMigrator
         cmd.Parameters.AddWithValue("effectiveFrom", effectiveFrom);
         cmd.Parameters.AddWithValue("weeklyNormHours", ColumnOrNull(profileColumns, "weekly_norm_hours"));
         cmd.Parameters.AddWithValue("maxFlexBalance", ColumnOrNull(profileColumns, "max_flex_balance"));
-        cmd.Parameters.AddWithValue("flexCarryoverMax", ColumnOrNull(profileColumns, "flex_carryover_max"));
         cmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", ColumnOrNull(profileColumns, "max_overtime_hours_per_period"));
         cmd.Parameters.AddWithValue("overtimeRequiresPreApproval", ColumnOrNull(profileColumns, "overtime_requires_pre_approval"));
         cmd.Parameters.AddWithValue("createdBy", SystemActorId);
@@ -630,8 +628,8 @@ public sealed class LocalAgreementProfileMigrator
     // -------------------------------------------------------------------
     /// <summary>
     /// Parses the JSON-encoded <c>config_value</c> string into the type expected by the
-    /// matching profile column. Mirrors <c>ConfigResolutionService.TryParseDecimal</c>:
-    /// values may be raw numbers/booleans or JSON-quoted strings containing a number/bool.
+    /// matching profile column. Values may be raw numbers/booleans or JSON-quoted strings
+    /// containing a number/bool.
     /// </summary>
     private static bool TryParseConfigValue(
         string configKey, string rawJson, out object? parsedValue, out string? error)

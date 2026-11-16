@@ -231,7 +231,7 @@ Publishing a DRAFT automatically archives the current ACTIVE config for the same
 #### Configurable Parameters (31 fields per agreement)
 All parameters on `AgreementRuleConfig` are configurable:
 - **Identity**: AgreementCode, OkVersion
-- **Norm & Flex**: WeeklyNormHours, NormPeriodWeeks, NormModel (WEEKLY_HOURS/ANNUAL_ACTIVITY), AnnualNormHours, MaxFlexBalance *(retires, ADR-043 D6; S148 stage 1)*, FlexCarryoverMax *(retires, ADR-043 D6; S148 stage 1)*
+- **Norm & Flex**: WeeklyNormHours, NormPeriodWeeks, NormModel (WEEKLY_HOURS/ANNUAL_ACTIVITY), AnnualNormHours, MaxFlexBalance *(retires, ADR-043 D6; S148 stage 1)*, FlexCarryoverMax *(retired in S148, ADR-043 D6; no longer a parameter)*
 - **Overtime & Merarbejde**: HasOvertime, HasMerarbejde, OvertimeThreshold50 *(retires, ADR-043 D4; S148 stage 1)*, OvertimeThreshold100 *(retires, ADR-043 D4; S148 stage 1)*
 - **Supplements**: Evening/Night/Weekend/Holiday enabled flags, time windows (Start/End hours), and rates
 - **On-call & Call-in**: OnCallDutyEnabled, OnCallDutyRate *(retires, ADR-043 D11; S148 stage 2 or later)*, CallInWorkEnabled, CallInMinimumHours, CallInRate

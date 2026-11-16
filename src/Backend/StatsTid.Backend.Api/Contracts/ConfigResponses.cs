@@ -17,7 +17,7 @@ namespace StatsTid.Backend.Api.Contracts;
 // .Produces — the exclusion boundary holds at the spec level.
 
 /// <summary>
-/// One row of GET /api/config/constraints (bare array, 13 members) — the central ACTIVE
+/// One row of GET /api/config/constraints (bare array, 12 members) — the central ACTIVE
 /// agreement-config constraint reference (ADR-014). A deliberate SUBSET projection of
 /// AgreementConfigEntity — do NOT merge with <see cref="EffectiveConfigResponse"/> (sibling
 /// shapes differ: bare-array rows here vs object root + orgId there).
@@ -27,7 +27,6 @@ public sealed record ConfigConstraintResponse(
     string OkVersion,
     decimal WeeklyNormHours,
     decimal MaxFlexBalance,
-    decimal FlexCarryoverMax,
     bool HasOvertime,
     bool HasMerarbejde,
     bool EveningSupplementEnabled,
@@ -38,10 +37,10 @@ public sealed record ConfigConstraintResponse(
     decimal OnCallDutyRate);
 
 /// <summary>
-/// The GET /api/config/{orgId} 200 body (object root, 14 members) — the effective (merged
+/// The GET /api/config/{orgId} 200 body (object root, 13 members) — the effective (merged
 /// central + local-override) config for the org, projected from AgreementRuleConfig plus the
 /// echoed route orgId. A SEPARATE sibling of <see cref="ConfigConstraintResponse"/> — the two
-/// shapes share 13 fields but differ structurally (object root + orgId vs bare-array rows);
+/// shapes share 12 fields but differ structurally (object root + orgId vs bare-array rows);
 /// merging them would be a wire change (PAT-010-forbidden).
 /// </summary>
 public sealed record EffectiveConfigResponse(
@@ -50,7 +49,6 @@ public sealed record EffectiveConfigResponse(
     string OkVersion,
     decimal WeeklyNormHours,
     decimal MaxFlexBalance,
-    decimal FlexCarryoverMax,
     bool HasOvertime,
     bool HasMerarbejde,
     bool EveningSupplementEnabled,
@@ -80,9 +78,9 @@ public sealed record AbsenceTypeVisibilityResponse(
     bool IsHidden);
 
 /// <summary>
-/// The local-agreement-profile row (14 members) — ONE record for the THREE success sites
+/// The local-agreement-profile row (13 members) — ONE record for the THREE success sites
 /// (PUT 200, GET 200, history-list rows; the S112 sibling-record rule), replacing the
-/// MapProfileResponse anonymous shape. The five overridable members are nullable BY CONTRACT
+/// MapProfileResponse anonymous shape. The four overridable members are nullable BY CONTRACT
 /// (NULL = inherit central, ADR-017). <c>version</c> is the row-version optimistic-concurrency
 /// token (ADR-018 D7) surfaced in-body so the frontend can round-trip it as the next If-Match;
 /// the wire ETag header carries the same value RFC-7232-quoted. The 412 error-body
@@ -98,7 +96,6 @@ public sealed record LocalAgreementProfileResponse(
     DateOnly? EffectiveTo,
     decimal? WeeklyNormHours,
     decimal? MaxFlexBalance,
-    decimal? FlexCarryoverMax,
     decimal? MaxOvertimeHoursPerPeriod,
     bool? OvertimeRequiresPreApproval,
     string CreatedBy,

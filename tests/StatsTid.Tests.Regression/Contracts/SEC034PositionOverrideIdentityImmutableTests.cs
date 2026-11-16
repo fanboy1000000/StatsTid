@@ -189,7 +189,7 @@ public sealed class SEC034PositionOverrideIdentityImmutableTests : IAsyncLifetim
         => $$"""
            { "agreementCode": "{{agreementCode}}", "okVersion": "{{okVersion}}",
              "positionCode": "{{positionCode}}",
-             "maxFlexBalance": 120.5, "flexCarryoverMax": 40.25, "normPeriodWeeks": 4,
+             "maxFlexBalance": 120.5, "normPeriodWeeks": 4,
              "weeklyNormHours": {{weeklyNormHours}}, "description": "SEC-034 positionsundtagelse" }
            """;
 }

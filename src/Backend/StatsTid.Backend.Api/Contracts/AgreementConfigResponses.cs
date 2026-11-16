@@ -20,7 +20,7 @@ namespace StatsTid.Backend.Api.Contracts;
 // data, open sets.
 
 /// <summary>
-/// The 48-member agreement-config row — ONE record for the five non-by-id success sites
+/// The 47-member agreement-config row — ONE record for the five non-by-id success sites
 /// (list, by-code list, create 201, clone 201, PUT 200; the S112 sibling-record rule).
 /// <c>version</c> is the row-version optimistic-concurrency token surfaced in-body so list
 /// consumers can compose <c>If-Match: "&lt;version&gt;"</c> without a by-id GET.
@@ -40,7 +40,6 @@ public sealed record AgreementConfigResponse(
     decimal AnnualNormHours,
     // Flex settings
     decimal MaxFlexBalance,
-    decimal FlexCarryoverMax,
     // Overtime settings
     bool HasOvertime,
     bool HasMerarbejde,
@@ -89,7 +88,7 @@ public sealed record AgreementConfigResponse(
     string? Description);
 
 /// <summary>
-/// The GET /api/agreement-configs/{configId} 200 body — the 48 row members PLUS the inline
+/// The GET /api/agreement-configs/{configId} 200 body — the 47 row members PLUS the inline
 /// <c>entitlements</c> array (each row the shared 16-member <see cref="EntitlementConfigResponse"/>,
 /// carrying its own <c>version</c> for child If-Match composition) and the
 /// <c>entitlementsReadOnly</c> flag (true when sibling configs share the
@@ -110,7 +109,6 @@ public sealed record AgreementConfigWithEntitlementsResponse(
     decimal AnnualNormHours,
     // Flex settings
     decimal MaxFlexBalance,
-    decimal FlexCarryoverMax,
     // Overtime settings
     bool HasOvertime,
     bool HasMerarbejde,

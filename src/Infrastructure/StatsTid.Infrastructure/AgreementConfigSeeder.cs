@@ -54,7 +54,6 @@ public static class AgreementConfigSeeder
                 NormModel = config.NormModel,
                 AnnualNormHours = config.AnnualNormHours,
                 MaxFlexBalance = config.MaxFlexBalance,
-                FlexCarryoverMax = config.FlexCarryoverMax,
                 HasOvertime = config.HasOvertime,
                 HasMerarbejde = config.HasMerarbejde,
                 OvertimeThreshold50 = config.OvertimeThreshold50,

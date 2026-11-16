@@ -13,7 +13,7 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// <summary>
 /// S119 / TASK-11902 — the per-route spec≡runtime gate for the org-CONFIG read/visibility
 /// surface drained in retrofit Pass 6 (TASK-11900): constraints GET (bare array, the
-/// 13-member <c>ConfigConstraintResponse</c>), effective-config GET /{orgId} (the 14-member
+/// 12-member <c>ConfigConstraintResponse</c>), effective-config GET /{orgId} (the 13-member
 /// <c>EffectiveConfigResponse</c> SIBLING — the two hand-maintained inline copies became TWO
 /// separate records, shapes deliberately NOT merged), absence-types GET (the 2-member rows
 /// off the hard-coded C# dict — and the binder-REQUIRED-but-dead <c>agreementCode</c>/
@@ -21,7 +21,7 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// them, plus the 400 pin when omitted), and visibility POST (the 3-member echo).
 ///
 /// <para><b>The two-sibling pin (the fact-sheet drift-risk closure):</b> constraints rows and
-/// the effective-config object share 13 fields but are DISTINCT wire shapes (bare-array rows
+/// the effective-config object share 12 fields but are DISTINCT wire shapes (bare-array rows
 /// with no <c>orgId</c> vs an object root WITH <c>orgId</c>). Each is exact-key-set-pinned
 /// independently, and the sibling relation itself is asserted (effective = constraints + the
 /// <c>orgId</c> echo) — a future "merge the copies" wire change goes RED in both directions.</para>
@@ -48,17 +48,18 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
     private const string EffectiveOrg = "S119CFG1";
     private const string AbsenceOrg = "S119CFG2";
 
-    /// <summary>The EXACT 13 camelCase members of <c>ConfigConstraintResponse</c> (bare-array rows).</summary>
+    /// <summary>The EXACT 12 camelCase members of <c>ConfigConstraintResponse</c> (bare-array rows).</summary>
+    // S148 C-7: kind F (CI, Docker; not run locally). The retired flex carryover key is no longer served; on the code before C-7 the response still serves it, so the exact-key-set assertion fails (the extra key is named).
     private static readonly string[] ConstraintKeys =
     {
-        "agreementCode", "okVersion", "weeklyNormHours", "maxFlexBalance", "flexCarryoverMax",
+        "agreementCode", "okVersion", "weeklyNormHours", "maxFlexBalance",
         "hasOvertime", "hasMerarbejde",
         "eveningSupplementEnabled", "nightSupplementEnabled", "weekendSupplementEnabled", "holidaySupplementEnabled",
         "onCallDutyEnabled", "onCallDutyRate",
     };
 
-    /// <summary>The EXACT 14 members of the <c>EffectiveConfigResponse</c> SIBLING —
-    /// <c>orgId</c> + the 13 shared fields (shapes NOT merged; the sibling-record rule).</summary>
+    /// <summary>The EXACT 13 members of the <c>EffectiveConfigResponse</c> SIBLING —
+    /// <c>orgId</c> + the 12 shared fields (shapes NOT merged; the sibling-record rule).</summary>
     private static readonly string[] EffectiveKeys =
         new[] { "orgId" }.Concat(ConstraintKeys).ToArray();
 
@@ -90,11 +91,11 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  Op 1 — GET /api/config/constraints (bare array; the 13-member sibling).
+    //  Op 1 — GET /api/config/constraints (bare array; the 12-member sibling).
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>The DB-backed central constraint reference (ADR-014): the matcher walks EVERY
-    /// row of the bare array against the declared 13-member record; the boot/init ACTIVE
+    /// row of the bare array against the declared 12-member record; the boot/init ACTIVE
     /// AC/OK24 row is byte-asserted (exact key set — no <c>orgId</c> on this sibling) with
     /// decimal fidelity off the seed values. Driven by the EMPLOYEE client — the
     /// EmployeeOrAbove read floor pinned positively.</summary>
@@ -111,7 +112,7 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
         Assert.True(rows.GetArrayLength() >= 3); // at least the AC/HK/PROSA ACTIVE seeds
 
         var row = FindByAgreement(rows, "AC", "OK24");
-        S118ContractAssert.AssertExactKeySet(row, ConstraintKeys, "constraints row (13-member sibling)");
+        S118ContractAssert.AssertExactKeySet(row, ConstraintKeys, "constraints row (12-member sibling)");
         Assert.Equal(37.0m, row.GetProperty("weeklyNormHours").GetDecimal());
         Assert.Equal(150.0m, row.GetProperty("maxFlexBalance").GetDecimal());
         Assert.False(row.GetProperty("hasOvertime").GetBoolean());
@@ -120,10 +121,10 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  Op 2 — GET /api/config/{orgId} (the 14-member sibling; orgId echo).
+    //  Op 2 — GET /api/config/{orgId} (the 13-member sibling; orgId echo).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>The merged effective-config object: matcher + the EXACT 14-member key set,
+    /// <summary>The merged effective-config object: matcher + the EXACT 13-member key set,
     /// the <c>orgId</c> echo, and THE SIBLING RELATION itself — the effective key set is
     /// PROVABLY constraints-keys + <c>orgId</c> and nothing else, so a future merge of the two
     /// hand-maintained shapes (the drift risk the two records closed) is RED here AND in
@@ -140,7 +141,7 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
             "/api/config/{orgId}", "get");
 
         var root = JsonDocument.Parse(body).RootElement;
-        S118ContractAssert.AssertExactKeySet(root, EffectiveKeys, "effective-config 200 (14-member sibling)");
+        S118ContractAssert.AssertExactKeySet(root, EffectiveKeys, "effective-config 200 (13-member sibling)");
         Assert.Equal(EffectiveOrg, root.GetProperty("orgId").GetString()); // THE echo pin
         Assert.Equal("AC", root.GetProperty("agreementCode").GetString());
         Assert.Equal("OK24", root.GetProperty("okVersion").GetString());

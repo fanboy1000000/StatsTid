@@ -18,7 +18,7 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// drained in retrofit Pass 6 (TASK-11900): the flexible-precondition PUT (the program's FIRST
 /// live <c>If-None-Match: *</c> surface — ADR-018 D7), the by-key GET (ETag fidelity
 /// <c>"&lt;version&gt;"</c>), and the history GET (immutable rows — NO ETag), all on the ONE
-/// shared 14-member <c>LocalAgreementProfileResponse</c> serving the THREE success sites.
+/// shared 13-member <c>LocalAgreementProfileResponse</c> serving the THREE success sites.
 ///
 /// <para><b>The create path IS the proof:</b> <c>local_agreement_profiles</c> has NO seed —
 /// every profile in this class is born through the REAL <c>If-None-Match: *</c> PUT
@@ -52,13 +52,14 @@ public sealed class S119ProfileSpecRuntimeTests : IAsyncLifetime
     private const string AgreementCode = "S119AGR";
     private const string OkVersion = "OKS119";
 
-    /// <summary>The EXACT 14 camelCase members of <c>LocalAgreementProfileResponse</c> — the
+    /// <summary>The EXACT 13 camelCase members of <c>LocalAgreementProfileResponse</c> — the
     /// ONE shared record at all three success sites (PUT 200 / GET 200 / history rows).</summary>
+    // S148 C-7: kind F (CI, Docker; not run locally). The retired flex carryover key is no longer served; on the code before C-7 the response still serves it, so the exact-key-set assertion fails (the extra key is named).
     private static readonly string[] ProfileKeys =
     {
         "profileId", "orgId", "agreementCode", "okVersion",
         "effectiveFrom", "effectiveTo",
-        "weeklyNormHours", "maxFlexBalance", "flexCarryoverMax",
+        "weeklyNormHours", "maxFlexBalance",
         "maxOvertimeHoursPerPeriod", "overtimeRequiresPreApproval",
         "createdBy", "createdAt", "version",
     };
@@ -90,7 +91,7 @@ public sealed class S119ProfileSpecRuntimeTests : IAsyncLifetime
 
     /// <summary>The no-seed create path: <c>If-None-Match: *</c> PUT → 200 (the declared
     /// single success status — never a 201 on this op), matcher against the committed
-    /// <c>LocalAgreementProfileResponse</c>, the EXACT 14-member key set, ETag <c>"1"</c>
+    /// <c>LocalAgreementProfileResponse</c>, the EXACT 13-member key set, ETag <c>"1"</c>
     /// (the repo-assigned first version), <c>effectiveTo</c> PRESENT-and-null (the open
     /// profile), nulls preserved on the inherit-central members, and the actor echo.</summary>
     [Fact]
@@ -126,7 +127,7 @@ public sealed class S119ProfileSpecRuntimeTests : IAsyncLifetime
     //  Op 2 — GET .../profile/... (ETag fidelity "<version>", not a constant).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>Self-create (v1) → in-place If-Match edit (v2) → GET: matcher + the 14-member
+    /// <summary>Self-create (v1) → in-place If-Match edit (v2) → GET: matcher + the 13-member
     /// key set, and ETag FIDELITY — the header is <c>"2"</c> equal to the body's
     /// <c>version</c>, proving <c>"&lt;version&gt;"</c> tracks the row rather than echoing a
     /// constant <c>"1"</c>. The MODIFIED branch's created_by/created_at preservation rides the
@@ -162,7 +163,7 @@ public sealed class S119ProfileSpecRuntimeTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>Self-create (v1) → same-day If-Match <c>"1"</c> PUT: 200 through the matcher,
-    /// the 14-member key set, version bumped to 2 with ETag <c>"2"</c>, the SAME profileId
+    /// the 13-member key set, version bumped to 2 with ETag <c>"2"</c>, the SAME profileId
     /// (MODIFIED in place, not a supersession), and the edited value round-tripped.</summary>
     [Fact]
     public async Task IfMatchPut200_InPlaceEdit_VersionBumpsOnTheSameRow()
@@ -195,7 +196,7 @@ public sealed class S119ProfileSpecRuntimeTests : IAsyncLifetime
 
     /// <summary>Self-create BACKDATED (today−14) → supersede via If-Match <c>"1"</c> at a later
     /// effectiveFrom (today) ⇒ close-then-insert. The history GET serves the CLOSED predecessor
-    /// through the matcher (bare array of the shared 14-member record), with <c>effectiveTo</c>
+    /// through the matcher (bare array of the shared 13-member record), with <c>effectiveTo</c>
     /// now POPULATED (the other nullable state, live) — and NO ETag header (history rows are
     /// immutable; the header's absence is the pin).</summary>
     [Fact]

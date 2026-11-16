@@ -236,7 +236,6 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
         PositionCode = positionCode,
         Status = "ACTIVE",
         MaxFlexBalance = maxFlex,
-        FlexCarryoverMax = null,
         NormPeriodWeeks = 4,
         WeeklyNormHours = null,
         CreatedBy = "tester",

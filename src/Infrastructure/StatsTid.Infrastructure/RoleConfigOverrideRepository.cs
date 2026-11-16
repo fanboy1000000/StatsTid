@@ -538,7 +538,7 @@ public sealed class RoleConfigOverrideRepository
                 has_merarbejde, has_overtime,
                 has_evening_supplement, has_night_supplement,
                 has_weekend_supplement, has_holiday_supplement,
-                max_flex_balance, flex_carryover_max,
+                max_flex_balance,
                 norm_period_weeks, weekly_norm_hours,
                 created_by, created_by_role)
             VALUES (
@@ -548,7 +548,7 @@ public sealed class RoleConfigOverrideRepository
                 @hasMerarbejde, @hasOvertime,
                 @hasEveningSupplement, @hasNightSupplement,
                 @hasWeekendSupplement, @hasHolidaySupplement,
-                @maxFlexBalance, @flexCarryoverMax,
+                @maxFlexBalance,
                 @normPeriodWeeks, @weeklyNormHours,
                 @createdBy, @createdByRole)
             RETURNING override_id, version
@@ -576,7 +576,7 @@ public sealed class RoleConfigOverrideRepository
 
     /// <summary>
     /// Case B (UpdatedInPlace) — same-day UPDATE-in-place. Targets the (still-locked)
-    /// live row by its <paramref name="overrideId"/>; refreshes the 11 mutable
+    /// live row by its <paramref name="overrideId"/>; refreshes the 10 mutable
     /// fields and bumps <c>version = version + 1</c>; <c>override_id</c>,
     /// natural-key triple, <c>effective_from</c>, and audit metadata are immutable
     /// across same-day edits (the original creator's identity stays on the row).
@@ -596,7 +596,6 @@ public sealed class RoleConfigOverrideRepository
                 has_weekend_supplement = @hasWeekendSupplement,
                 has_holiday_supplement = @hasHolidaySupplement,
                 max_flex_balance = @maxFlexBalance,
-                flex_carryover_max = @flexCarryoverMax,
                 norm_period_weeks = @normPeriodWeeks,
                 weekly_norm_hours = @weeklyNormHours,
                 version = version + 1
@@ -653,8 +652,6 @@ public sealed class RoleConfigOverrideRepository
         cmd.Parameters.AddWithValue(
             "hasHolidaySupplement", (object?)fields.HasHolidaySupplement ?? DBNull.Value);
         cmd.Parameters.AddWithValue("maxFlexBalance", (object?)fields.MaxFlexBalance ?? DBNull.Value);
-        cmd.Parameters.AddWithValue(
-            "flexCarryoverMax", (object?)fields.FlexCarryoverMax ?? DBNull.Value);
         cmd.Parameters.AddWithValue("normPeriodWeeks", (object?)fields.NormPeriodWeeks ?? DBNull.Value);
         cmd.Parameters.AddWithValue("weeklyNormHours", (object?)fields.WeeklyNormHours ?? DBNull.Value);
     }
@@ -704,9 +701,6 @@ public sealed class RoleConfigOverrideRepository
         MaxFlexBalance = reader.IsDBNull(reader.GetOrdinal("max_flex_balance"))
             ? null
             : reader.GetDecimal(reader.GetOrdinal("max_flex_balance")),
-        FlexCarryoverMax = reader.IsDBNull(reader.GetOrdinal("flex_carryover_max"))
-            ? null
-            : reader.GetDecimal(reader.GetOrdinal("flex_carryover_max")),
         NormPeriodWeeks = reader.IsDBNull(reader.GetOrdinal("norm_period_weeks"))
             ? null
             : reader.GetInt32(reader.GetOrdinal("norm_period_weeks")),

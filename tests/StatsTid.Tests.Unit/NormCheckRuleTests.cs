@@ -33,7 +33,6 @@ public class NormCheckRuleTests
             HasOvertime = true,
             HasMerarbejde = false,
             MaxFlexBalance = 100.0m,
-            FlexCarryoverMax = 100.0m,
             EveningSupplementEnabled = true,
             NightSupplementEnabled = true,
             WeekendSupplementEnabled = true,

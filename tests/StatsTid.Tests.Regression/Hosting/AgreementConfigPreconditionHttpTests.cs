@@ -160,7 +160,7 @@ public sealed class AgreementConfigPreconditionHttpTests : IAsyncLifetime
              "agreementCode": "{{agreementCode}}", "okVersion": "{{OkVersion}}",
              "description": "QUAL-111 precondition 428", "normModel": "WEEKLY_HOURS",
              "weeklyNormHours": 37.0, "normPeriodWeeks": 4, "annualNormHours": 1924.0,
-             "maxFlexBalance": 74.0, "flexCarryoverMax": 37.0,
+             "maxFlexBalance": 74.0,
              "hasOvertime": true, "hasMerarbejde": false,
              "overtimeThreshold50": 37.0, "overtimeThreshold100": 44.0,
              "eveningSupplementEnabled": true, "nightSupplementEnabled": true,

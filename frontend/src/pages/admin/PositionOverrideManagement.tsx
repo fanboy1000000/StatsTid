@@ -8,7 +8,6 @@ interface CreateForm {
   okVersion: string
   positionCode: string
   maxFlexBalance: string
-  flexCarryoverMax: string
   normPeriodWeeks: string
   weeklyNormHours: string
   description: string
@@ -19,7 +18,6 @@ const emptyForm: CreateForm = {
   okVersion: '',
   positionCode: '',
   maxFlexBalance: '',
-  flexCarryoverMax: '',
   normPeriodWeeks: '',
   weeklyNormHours: '',
   description: '',
@@ -77,7 +75,6 @@ export function PositionOverrideManagement() {
         okVersion: form.okVersion,
         positionCode: form.positionCode,
         maxFlexBalance: parseOptionalNumber(form.maxFlexBalance),
-        flexCarryoverMax: parseOptionalNumber(form.flexCarryoverMax),
         normPeriodWeeks: parseOptionalNumber(form.normPeriodWeeks),
         weeklyNormHours: parseOptionalNumber(form.weeklyNormHours),
         description: form.description || null,
@@ -95,7 +92,6 @@ export function PositionOverrideManagement() {
     setEditingId(item.overrideId)
     setEditForm({
       maxFlexBalance: item.maxFlexBalance?.toString() ?? '',
-      flexCarryoverMax: item.flexCarryoverMax?.toString() ?? '',
       normPeriodWeeks: item.normPeriodWeeks?.toString() ?? '',
       weeklyNormHours: item.weeklyNormHours?.toString() ?? '',
       description: item.description ?? '',
@@ -115,7 +111,6 @@ export function PositionOverrideManagement() {
         okVersion: item.okVersion,
         positionCode: item.positionCode,
         maxFlexBalance: parseOptionalNumber(editForm.maxFlexBalance ?? ''),
-        flexCarryoverMax: parseOptionalNumber(editForm.flexCarryoverMax ?? ''),
         normPeriodWeeks: parseOptionalNumber(editForm.normPeriodWeeks ?? ''),
         weeklyNormHours: parseOptionalNumber(editForm.weeklyNormHours ?? ''),
         description: editForm.description || null,
@@ -242,20 +237,6 @@ export function PositionOverrideManagement() {
                   step="any"
                   value={form.maxFlexBalance}
                   onChange={handleChange('maxFlexBalance')}
-                  placeholder="Timer"
-                />
-              </div>
-              <div className={styles.formField}>
-                <label className={styles.formLabel} htmlFor="po-carryover">
-                  Flex overfoersel maks
-                </label>
-                <input
-                  className={styles.input}
-                  id="po-carryover"
-                  type="number"
-                  step="any"
-                  value={form.flexCarryoverMax}
-                  onChange={handleChange('flexCarryoverMax')}
                   placeholder="Timer"
                 />
               </div>

@@ -80,7 +80,6 @@ internal static class ProfileTestSchema
             effective_to                        DATE,
             weekly_norm_hours                   NUMERIC(5,2),
             max_flex_balance                    NUMERIC(6,2),
-            flex_carryover_max                  NUMERIC(6,2),
             max_overtime_hours_per_period       NUMERIC(6,2),
             overtime_requires_pre_approval      BOOLEAN,
             -- S148 C-4, C-8, C-9: the eighteen flex-settlement and office-hours columns, all nullable

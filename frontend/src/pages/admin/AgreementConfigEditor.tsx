@@ -48,7 +48,6 @@ function emptyForm(): ConfigForm {
     normPeriodWeeks: 1,
     annualNormHours: 1924,
     maxFlexBalance: 150,
-    flexCarryoverMax: 37,
     hasOvertime: false,
     hasMerarbejde: false,
     overtimeThreshold50: 0,
@@ -88,7 +87,6 @@ function configToForm(config: AgreementConfig): ConfigForm {
     normPeriodWeeks: config.normPeriodWeeks,
     annualNormHours: config.annualNormHours,
     maxFlexBalance: config.maxFlexBalance,
-    flexCarryoverMax: config.flexCarryoverMax,
     hasOvertime: config.hasOvertime,
     hasMerarbejde: config.hasMerarbejde,
     overtimeThreshold50: config.overtimeThreshold50,
@@ -444,10 +442,6 @@ export function AgreementConfigEditor() {
           <div className={styles.formField}>
             <label className={styles.formLabel}>Maks. flexsaldo (timer)</label>
             <input className={styles.input} type="number" step="0.01" value={form.maxFlexBalance} onChange={handleNumberChange('maxFlexBalance')} readOnly={isReadOnly} />
-          </div>
-          <div className={styles.formField}>
-            <label className={styles.formLabel}>Maks. flexoverforsel (timer)</label>
-            <input className={styles.input} type="number" step="0.01" value={form.flexCarryoverMax} onChange={handleNumberChange('flexCarryoverMax')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>

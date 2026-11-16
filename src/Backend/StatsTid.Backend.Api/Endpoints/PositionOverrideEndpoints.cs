@@ -94,7 +94,7 @@ public static class PositionOverrideEndpoints
             // SEC-033: numeric range validation (→ 400) before persist. Every field is nullable;
             // null means "don't override" and is skipped — only supplied values are range-checked.
             var (rangesValid, rangeError) = PositionOverrideValidator.ValidateRanges(
-                body.WeeklyNormHours, body.NormPeriodWeeks, body.MaxFlexBalance, body.FlexCarryoverMax);
+                body.WeeklyNormHours, body.NormPeriodWeeks, body.MaxFlexBalance);
             if (!rangesValid)
                 return Results.BadRequest(new { error = rangeError });
 
@@ -105,7 +105,6 @@ public static class PositionOverrideEndpoints
                 OkVersion = body.OkVersion,
                 PositionCode = body.PositionCode,
                 MaxFlexBalance = body.MaxFlexBalance,
-                FlexCarryoverMax = body.FlexCarryoverMax,
                 NormPeriodWeeks = body.NormPeriodWeeks,
                 WeeklyNormHours = body.WeeklyNormHours,
                 Description = body.Description,
@@ -197,7 +196,7 @@ public static class PositionOverrideEndpoints
             // SEC-033: numeric range validation (→ 400) before persist. Every field is nullable;
             // null means "don't override" and is skipped — only supplied values are range-checked.
             var (rangesValid, rangeError) = PositionOverrideValidator.ValidateRanges(
-                body.WeeklyNormHours, body.NormPeriodWeeks, body.MaxFlexBalance, body.FlexCarryoverMax);
+                body.WeeklyNormHours, body.NormPeriodWeeks, body.MaxFlexBalance);
             if (!rangesValid)
                 return Results.BadRequest(new { error = rangeError });
 
@@ -248,7 +247,6 @@ public static class PositionOverrideEndpoints
                 OkVersion = previous.OkVersion,
                 PositionCode = previous.PositionCode,
                 MaxFlexBalance = body.MaxFlexBalance,
-                FlexCarryoverMax = body.FlexCarryoverMax,
                 NormPeriodWeeks = body.NormPeriodWeeks,
                 WeeklyNormHours = body.WeeklyNormHours,
                 Description = body.Description,
@@ -579,7 +577,6 @@ public static class PositionOverrideEndpoints
         Status: e.Status,
         Version: e.Version,
         MaxFlexBalance: e.MaxFlexBalance,
-        FlexCarryoverMax: e.FlexCarryoverMax,
         NormPeriodWeeks: e.NormPeriodWeeks,
         WeeklyNormHours: e.WeeklyNormHours,
         CreatedBy: e.CreatedBy,
@@ -595,7 +592,6 @@ public static class PositionOverrideEndpoints
         public required string OkVersion { get; init; }
         public required string PositionCode { get; init; }
         public decimal? MaxFlexBalance { get; init; }
-        public decimal? FlexCarryoverMax { get; init; }
         public int? NormPeriodWeeks { get; init; }
         public decimal? WeeklyNormHours { get; init; }
         public string? Description { get; init; }
@@ -607,7 +603,6 @@ public static class PositionOverrideEndpoints
         public required string OkVersion { get; init; }
         public required string PositionCode { get; init; }
         public decimal? MaxFlexBalance { get; init; }
-        public decimal? FlexCarryoverMax { get; init; }
         public int? NormPeriodWeeks { get; init; }
         public decimal? WeeklyNormHours { get; init; }
         public string? Description { get; init; }

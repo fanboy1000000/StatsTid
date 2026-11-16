@@ -78,9 +78,9 @@ public sealed class S122CompensationVocabularyTests : IAsyncLifetime
                 """
                 INSERT INTO agreement_configs
                     (agreement_code, ok_version, weekly_norm_hours, max_flex_balance,
-                     flex_carryover_max, has_overtime, has_merarbejde, default_compensation_model,
+                     has_overtime, has_merarbejde, default_compensation_model,
                      applies_from) -- applies_from: mandatory since S148 C-2 (no DEFAULT)
-                VALUES ('S122CHK_AGC', 'OKS122', 37.0, 100, 50, true, false, 'PAYOUT',
+                VALUES ('S122CHK_AGC', 'OKS122', 37.0, 100, true, false, 'PAYOUT',
                         '0001-01-01')
                 """, conn);
             await cmd.ExecuteNonQueryAsync();
@@ -193,7 +193,6 @@ public sealed class S122CompensationVocabularyTests : IAsyncLifetime
         HasOvertime = true,
         HasMerarbejde = false,
         MaxFlexBalance = 100m,
-        FlexCarryoverMax = 50m,
         EveningSupplementEnabled = false,
         NightSupplementEnabled = false,
         WeekendSupplementEnabled = false,
@@ -209,7 +208,6 @@ public sealed class S122CompensationVocabularyTests : IAsyncLifetime
         HasOvertime = true,
         HasMerarbejde = false,
         MaxFlexBalance = 100m,
-        FlexCarryoverMax = 50m,
         EveningSupplementEnabled = false,
         NightSupplementEnabled = false,
         WeekendSupplementEnabled = false,

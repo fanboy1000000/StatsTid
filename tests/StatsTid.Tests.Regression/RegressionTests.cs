@@ -514,7 +514,6 @@ public class RegressionTests
             HasOvertime = baseConfig.HasOvertime,
             HasMerarbejde = baseConfig.HasMerarbejde,
             MaxFlexBalance = baseConfig.MaxFlexBalance,
-            FlexCarryoverMax = baseConfig.FlexCarryoverMax,
             EveningSupplementEnabled = baseConfig.EveningSupplementEnabled,
             NightSupplementEnabled = baseConfig.NightSupplementEnabled,
             WeekendSupplementEnabled = baseConfig.WeekendSupplementEnabled,

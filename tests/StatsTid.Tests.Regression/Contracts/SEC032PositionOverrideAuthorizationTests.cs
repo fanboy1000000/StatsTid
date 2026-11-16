@@ -216,7 +216,7 @@ public sealed class SEC032PositionOverrideAuthorizationTests : IAsyncLifetime
         => $$"""
            { "agreementCode": "{{agreementCode}}", "okVersion": "{{OkVersion}}",
              "positionCode": "{{PositionCode}}",
-             "maxFlexBalance": 120.5, "flexCarryoverMax": 40.25, "normPeriodWeeks": 4,
+             "maxFlexBalance": 120.5, "normPeriodWeeks": 4,
              "weeklyNormHours": {{weeklyNormHours}}, "description": "SEC-032 positionsundtagelse" }
            """;
 }

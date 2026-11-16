@@ -84,7 +84,6 @@ const constraintRow: ConfigConstraint = {
   okVersion: 'OK24',
   weeklyNormHours: 37,
   maxFlexBalance: 150,
-  flexCarryoverMax: 37,
   hasOvertime: false,
   hasMerarbejde: true,
   eveningSupplementEnabled: false,

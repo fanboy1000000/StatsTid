@@ -151,7 +151,6 @@ public sealed class AgreementConfigCreateAtomicHttpTests : IAsyncLifetime
         normPeriodWeeks = 1,
         annualNormHours = 1924m,
         maxFlexBalance = 100m,
-        flexCarryoverMax = 50m,
         hasOvertime = true,
         hasMerarbejde = false,
         overtimeThreshold50 = 37m,

@@ -504,7 +504,6 @@
 | effective_to | DATE | Yes |  |  |
 | weekly_norm_hours | NUMERIC(5,2) | Yes |  |  |
 | max_flex_balance | NUMERIC(6,2) | Yes |  |  |
-| flex_carryover_max | NUMERIC(6,2) | Yes |  |  |
 | max_overtime_hours_per_period | NUMERIC(6,2) | Yes |  |  |
 | overtime_requires_pre_approval | BOOLEAN | Yes |  |  |
 | flex_settlement_period | TEXT | Yes |  |  |
@@ -770,7 +769,6 @@
 | norm_model | TEXT | No |  | 'WEEKLY_HOURS' |
 | annual_norm_hours | DECIMAL | No |  | 1924 |
 | max_flex_balance | DECIMAL | No |  |  |
-| flex_carryover_max | DECIMAL | No |  |  |
 | has_overtime | BOOLEAN | No |  |  |
 | has_merarbejde | BOOLEAN | No |  |  |
 | overtime_threshold_50 | DECIMAL | No |  | 37.0 |
@@ -867,7 +865,6 @@
 | position_code | TEXT | No | FK→positions |  |
 | status | TEXT | No |  | 'ACTIVE' |
 | max_flex_balance | DECIMAL | Yes |  |  |
-| flex_carryover_max | DECIMAL | Yes |  |  |
 | norm_period_weeks | INT | Yes |  |  |
 | weekly_norm_hours | DECIMAL | Yes |  |  |
 | applies_from | DATE | No |  |  |
@@ -1154,7 +1151,6 @@
 | has_weekend_supplement | BOOLEAN | Yes |  |  |
 | has_holiday_supplement | BOOLEAN | Yes |  |  |
 | max_flex_balance | NUMERIC(7,2) | Yes |  |  |
-| flex_carryover_max | NUMERIC(7,2) | Yes |  |  |
 | norm_period_weeks | INT | Yes |  |  |
 | weekly_norm_hours | NUMERIC(5,2) | Yes |  |  |
 | created_at | TIMESTAMPTZ | No |  | NOW() |

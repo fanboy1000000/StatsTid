@@ -35,7 +35,6 @@ public sealed class ProfileResolutionTests
         HasOvertime = true,
         HasMerarbejde = false,
         MaxFlexBalance = 80m,
-        FlexCarryoverMax = 20m,
         EveningSupplementEnabled = true,
         NightSupplementEnabled = true,
         WeekendSupplementEnabled = true,
@@ -52,7 +51,6 @@ public sealed class ProfileResolutionTests
         var profile = NewProfile(
             weeklyNormHours: null,
             maxFlexBalance: null,
-            flexCarryoverMax: null,
             maxOvertimeHoursPerPeriod: null,
             overtimeRequiresPreApproval: null);
 
@@ -60,7 +58,6 @@ public sealed class ProfileResolutionTests
 
         Assert.Equal(CentralConfig.WeeklyNormHours, resolved.WeeklyNormHours);
         Assert.Equal(CentralConfig.MaxFlexBalance, resolved.MaxFlexBalance);
-        Assert.Equal(CentralConfig.FlexCarryoverMax, resolved.FlexCarryoverMax);
         Assert.Equal(CentralConfig.MaxOvertimeHoursPerPeriod, resolved.MaxOvertimeHoursPerPeriod);
         Assert.Equal(CentralConfig.OvertimeRequiresPreApproval, resolved.OvertimeRequiresPreApproval);
 
@@ -73,21 +70,19 @@ public sealed class ProfileResolutionTests
     [Fact]
     public void OneNonNullColumn_OverridesOnlyThatField()
     {
-        // Single overridable field set; the other four columns NULL → only MaxFlexBalance
+        // Single overridable field set; the other three columns NULL → only MaxFlexBalance
         // should differ from central in the resolved config.
         var profile = NewProfile(
             weeklyNormHours: null,
             maxFlexBalance: 100m,
-            flexCarryoverMax: null,
             maxOvertimeHoursPerPeriod: null,
             overtimeRequiresPreApproval: null);
 
         var resolved = InvokeApplyProfileOverlay(CentralConfig, profile);
 
         Assert.Equal(100m, resolved.MaxFlexBalance);
-        // The other four overridable fields must come from central.
+        // The other three overridable fields must come from central.
         Assert.Equal(CentralConfig.WeeklyNormHours, resolved.WeeklyNormHours);
-        Assert.Equal(CentralConfig.FlexCarryoverMax, resolved.FlexCarryoverMax);
         Assert.Equal(CentralConfig.MaxOvertimeHoursPerPeriod, resolved.MaxOvertimeHoursPerPeriod);
         Assert.Equal(CentralConfig.OvertimeRequiresPreApproval, resolved.OvertimeRequiresPreApproval);
     }
@@ -102,7 +97,6 @@ public sealed class ProfileResolutionTests
         var firstProfile = NewProfile(
             weeklyNormHours: null,
             maxFlexBalance: 100m,
-            flexCarryoverMax: null,
             maxOvertimeHoursPerPeriod: null,
             overtimeRequiresPreApproval: null);
         var firstResolved = InvokeApplyProfileOverlay(CentralConfig, firstProfile);
@@ -112,7 +106,6 @@ public sealed class ProfileResolutionTests
         var secondProfile = NewProfile(
             weeklyNormHours: null,
             maxFlexBalance: null,
-            flexCarryoverMax: null,
             maxOvertimeHoursPerPeriod: null,
             overtimeRequiresPreApproval: null);
         var secondResolved = InvokeApplyProfileOverlay(CentralConfig, secondProfile);
@@ -123,7 +116,6 @@ public sealed class ProfileResolutionTests
     private static LocalAgreementProfile NewProfile(
         decimal? weeklyNormHours,
         decimal? maxFlexBalance,
-        decimal? flexCarryoverMax,
         decimal? maxOvertimeHoursPerPeriod,
         bool? overtimeRequiresPreApproval) => new()
     {
@@ -134,7 +126,6 @@ public sealed class ProfileResolutionTests
         EffectiveFrom = new DateOnly(2026, 5, 4), // Monday — ignore alignment policy here
         WeeklyNormHours = weeklyNormHours,
         MaxFlexBalance = maxFlexBalance,
-        FlexCarryoverMax = flexCarryoverMax,
         MaxOvertimeHoursPerPeriod = maxOvertimeHoursPerPeriod,
         OvertimeRequiresPreApproval = overtimeRequiresPreApproval,
         CreatedBy = "test",

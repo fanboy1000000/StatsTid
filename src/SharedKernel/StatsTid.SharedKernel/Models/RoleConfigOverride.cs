@@ -5,7 +5,7 @@ namespace StatsTid.SharedKernel.Models;
 /// <see cref="AgreementConfigEntity"/> and <c>position_override_configs</c> in the
 /// ConfigResolutionService chain (S41 cutover wires it up). Allows admins to disable
 /// specific compensation features (6 boolean disablers) or override quantitative agreement
-/// settings (4 nullable quantitative columns) for a given
+/// settings (3 nullable quantitative columns) for a given
 /// <c>(employment_category, agreement_code, ok_version)</c> triple — without forking the
 /// underlying agreement config.
 ///
@@ -26,7 +26,7 @@ namespace StatsTid.SharedKernel.Models;
 /// </para>
 ///
 /// <para>
-/// <b>NULL = inherit</b> for all 11 override fields (1 tri-state + 6 booleans + 4
+/// <b>NULL = inherit</b> for all 10 override fields (1 tri-state + 6 booleans + 3
 /// quantitative). The ConfigResolutionService chain (S41) walks
 /// agreement_configs → role_config_overrides → position_override_configs, picking the first
 /// non-null value at each layer. This model is a faithful row projection — no merging
@@ -59,9 +59,8 @@ public sealed record class RoleConfigOverride
     public bool? HasWeekendSupplement { get; init; }
     public bool? HasHolidaySupplement { get; init; }
 
-    // -- 4 quantitative overrides (null = inherit) ------------------------
+    // -- 3 quantitative overrides (null = inherit) ------------------------
     public decimal? MaxFlexBalance { get; init; }
-    public decimal? FlexCarryoverMax { get; init; }
     public int? NormPeriodWeeks { get; init; }
     public decimal? WeeklyNormHours { get; init; }
 
@@ -73,8 +72,8 @@ public sealed record class RoleConfigOverride
 
 /// <summary>
 /// S40 / TASK-4003 — mutable-fields projection consumed by
-/// <c>RoleConfigOverrideRepository.SupersedeAndCreateAsync</c>. Carries ONLY the 11
-/// override fields (1 tri-state + 6 booleans + 4 quantitative) that the caller chooses
+/// <c>RoleConfigOverrideRepository.SupersedeAndCreateAsync</c>. Carries ONLY the 10
+/// override fields (1 tri-state + 6 booleans + 3 quantitative) that the caller chooses
 /// per write; identity (override_id), natural key, history window, version, and audit
 /// metadata are not part of this shape — those are repository-owned or supplied as
 /// separate method parameters.
@@ -94,6 +93,5 @@ public sealed record RoleConfigOverrideFields(
     bool? HasWeekendSupplement,
     bool? HasHolidaySupplement,
     decimal? MaxFlexBalance,
-    decimal? FlexCarryoverMax,
     int? NormPeriodWeeks,
     decimal? WeeklyNormHours);
