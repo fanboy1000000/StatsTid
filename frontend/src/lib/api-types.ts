@@ -5217,8 +5217,6 @@ export interface components {
             annualNormHours: number;
             /** Format: double */
             maxFlexBalance: number;
-            /** Format: double */
-            flexCarryoverMax: number;
             hasOvertime: boolean;
             hasMerarbejde: boolean;
             /** Format: double */
@@ -5300,8 +5298,6 @@ export interface components {
             annualNormHours: number;
             /** Format: double */
             maxFlexBalance: number;
-            /** Format: double */
-            flexCarryoverMax: number;
             hasOvertime: boolean;
             hasMerarbejde: boolean;
             /** Format: double */
@@ -5626,8 +5622,6 @@ export interface components {
             weeklyNormHours: number;
             /** Format: double */
             maxFlexBalance: number;
-            /** Format: double */
-            flexCarryoverMax: number;
             hasOvertime: boolean;
             hasMerarbejde: boolean;
             eveningSupplementEnabled: boolean;
@@ -5695,8 +5689,6 @@ export interface components {
             weeklyNormHours: number;
             /** Format: double */
             maxFlexBalance: number;
-            /** Format: double */
-            flexCarryoverMax: number;
             hasOvertime: boolean;
             hasMerarbejde: boolean;
             eveningSupplementEnabled: boolean;
@@ -6010,8 +6002,6 @@ export interface components {
             /** Format: double */
             maxFlexBalance: number | null;
             /** Format: double */
-            flexCarryoverMax: number | null;
-            /** Format: double */
             maxOvertimeHoursPerPeriod: number | null;
             overtimeRequiresPreApproval: boolean | null;
             createdBy: string;
@@ -6290,8 +6280,6 @@ export interface components {
             version: number;
             /** Format: double */
             maxFlexBalance: number | null;
-            /** Format: double */
-            flexCarryoverMax: number | null;
             /** Format: int32 */
             normPeriodWeeks: number | null;
             /** Format: double */
@@ -7049,8 +7037,6 @@ export interface components {
             annualNormHours: number;
             /** Format: double */
             maxFlexBalance: number;
-            /** Format: double */
-            flexCarryoverMax: number;
             hasOvertime: boolean;
             hasMerarbejde: boolean;
             /** Format: double */
@@ -7166,8 +7152,6 @@ export interface components {
             /** Format: double */
             maxFlexBalance?: number | null;
             /** Format: double */
-            flexCarryoverMax?: number | null;
-            /** Format: double */
             maxOvertimeHoursPerPeriod?: number | null;
             overtimeRequiresPreApproval?: boolean | null;
         };
@@ -7273,8 +7257,6 @@ export interface components {
             positionCode: string;
             /** Format: double */
             maxFlexBalance?: number | null;
-            /** Format: double */
-            flexCarryoverMax?: number | null;
             /** Format: int32 */
             normPeriodWeeks?: number | null;
             /** Format: double */
@@ -7287,8 +7269,6 @@ export interface components {
             positionCode: string;
             /** Format: double */
             maxFlexBalance?: number | null;
-            /** Format: double */
-            flexCarryoverMax?: number | null;
             /** Format: int32 */
             normPeriodWeeks?: number | null;
             /** Format: double */

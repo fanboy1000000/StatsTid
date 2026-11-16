@@ -193,7 +193,6 @@ function RowWithDelta({ row, expanded, onToggle }: RowWithDeltaProps) {
               <ul style={{ margin: '0.25rem 0 0 1rem' }}>
                 <li>WeeklyNormHours: {valueOrInherit(row.weeklyNormHours)}</li>
                 <li>MaxFlexBalance: {valueOrInherit(row.maxFlexBalance)}</li>
-                <li>FlexCarryoverMax: {valueOrInherit(row.flexCarryoverMax)}</li>
                 <li>MaxOvertimeHoursPerPeriod: {valueOrInherit(row.maxOvertimeHoursPerPeriod)}</li>
                 <li>OvertimeRequiresPreApproval: {row.overtimeRequiresPreApproval === null ? '(arvet fra central)' : row.overtimeRequiresPreApproval ? 'Ja' : 'Nej'}</li>
               </ul>
@@ -242,7 +241,6 @@ function CentralConstraintsTab() {
             <th>OK-version</th>
             <th>Ugenorm</th>
             <th>Max flex</th>
-            <th>Flex overfoersel</th>
             <th>Overarbejde</th>
             <th>Merarbejde</th>
             <th>Aften</th>
@@ -260,7 +258,6 @@ function CentralConstraintsTab() {
               <td>{c.okVersion}</td>
               <td>{c.weeklyNormHours}</td>
               <td>{c.maxFlexBalance}</td>
-              <td>{c.flexCarryoverMax}</td>
               <td>{boolBadge(c.hasOvertime)}</td>
               <td>{boolBadge(c.hasMerarbejde)}</td>
               <td>{boolBadge(c.eveningSupplementEnabled)}</td>

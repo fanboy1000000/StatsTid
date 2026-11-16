@@ -29,16 +29,15 @@ import { MondayDatePicker } from './MondayDatePicker'
 
 // ── Field metadata. ──
 //
-// Five overridable fields — must mirror the backend's ProfileSaveRequest /
-// LocalAgreementProfile. Adding a sixth requires schema + alignment-policy
+// Four overridable fields — must mirror the backend's ProfileSaveRequest /
+// LocalAgreementProfile. Adding a fifth requires schema + alignment-policy
 // changes upstream; this list is the UI side of that contract.
-type OverridableNumberField = 'weeklyNormHours' | 'maxFlexBalance' | 'flexCarryoverMax' | 'maxOvertimeHoursPerPeriod'
+type OverridableNumberField = 'weeklyNormHours' | 'maxFlexBalance' | 'maxOvertimeHoursPerPeriod'
 type OverridableBoolField = 'overtimeRequiresPreApproval'
 
 const OVERRIDABLE_NUMBER_FIELDS: { key: OverridableNumberField; label: string; backendName: string }[] = [
   { key: 'weeklyNormHours',           label: 'Ugentlig normtimer',         backendName: 'WeeklyNormHours' },
   { key: 'maxFlexBalance',            label: 'Maks. flexsaldo',            backendName: 'MaxFlexBalance' },
-  { key: 'flexCarryoverMax',          label: 'Maks. flexoverfoersel',      backendName: 'FlexCarryoverMax' },
   { key: 'maxOvertimeHoursPerPeriod', label: 'Maks. overarbejde pr periode', backendName: 'MaxOvertimeHoursPerPeriod' },
 ]
 
@@ -191,7 +190,6 @@ export function ProfileEditor({
       effectiveFrom: state.effectiveFrom,
       weeklyNormHours: pickNumber(state.numbers.weeklyNormHours),
       maxFlexBalance: pickNumber(state.numbers.maxFlexBalance),
-      flexCarryoverMax: pickNumber(state.numbers.flexCarryoverMax),
       maxOvertimeHoursPerPeriod: pickNumber(state.numbers.maxOvertimeHoursPerPeriod),
       overtimeRequiresPreApproval: pickBool(state.bools.overtimeRequiresPreApproval),
     }
@@ -494,7 +492,6 @@ function buildInitialState(profile: LocalAgreementProfile | null): EditorState {
     numbers: {
       weeklyNormHours:           draftFromNumber(profile?.weeklyNormHours),
       maxFlexBalance:            draftFromNumber(profile?.maxFlexBalance),
-      flexCarryoverMax:          draftFromNumber(profile?.flexCarryoverMax),
       maxOvertimeHoursPerPeriod: draftFromNumber(profile?.maxOvertimeHoursPerPeriod),
     },
     bools: {
@@ -533,14 +530,13 @@ function pickBool(draft: BoolDraft): boolean | null {
 
 function readCentralNumber(cfg: AgreementConfig | null, key: OverridableNumberField): number | null {
   if (!cfg) return null
-  // The 4 overridable number fields exist on AgreementConfig with the same names
-  // (weeklyNormHours, maxFlexBalance, flexCarryoverMax, maxOvertimeHoursPerPeriod).
+  // Of the overridable number fields, weeklyNormHours and maxFlexBalance exist on AgreementConfig
+  // with the same names.
   // maxOvertimeHoursPerPeriod is NOT on the AgreementConfig interface — it's
   // overridable-only — so we return null for it (no central to display).
   switch (key) {
     case 'weeklyNormHours':           return cfg.weeklyNormHours
     case 'maxFlexBalance':            return cfg.maxFlexBalance
-    case 'flexCarryoverMax':          return cfg.flexCarryoverMax
     case 'maxOvertimeHoursPerPeriod': return null
   }
 }
