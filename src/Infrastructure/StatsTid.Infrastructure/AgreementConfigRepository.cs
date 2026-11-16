@@ -1021,7 +1021,7 @@ internal static class AppliesFromRules
     /// </summary>
     internal static void RequireMondayForChangedFields(DateOnly appliesFrom, IReadOnlyList<string> changedFields)
     {
-        // shortcut(pending): the Monday rule for week-read fields (A-16); upgrade when stage 1 removes the weekly basis
+        // shortcut(QUAL-BF-007): the Monday rule for week-read fields (A-16); upgrade when stage 1 removes the weekly basis
         if (changedFields.Count == 0)
             return;
 
