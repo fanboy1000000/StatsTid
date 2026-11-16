@@ -1651,3 +1651,5 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
 - **QUAL-254, -255, -256** registered (the research adjudication's § 4 texts; QUAL-255 cross-referenced to ADR-044, owed at close). QUAL-253 is marked FIXED after CI-W3b.
 - **`SYSTEM_TARGET.md`** (owner Q2 approved the wording): the daily rest stated as the 24-hour look-back in elapsed Danish time; the derogation's 8-hour floor and what is not checked (QUAL-254); the Skema analysis and its example in the ruled copy; the 13-hour implication.
 - **Plan "final + 12"** and TASK-14843 brief item 4.6 (the engine owns the month cut). M-34, M-35, M-36 added; 129 AC ids unchanged.
+
+**GATE after wave 3b** (`2810ebeb`): **green.** Build `-m:2 --no-incremental` 0 errors / 143 warnings / CA2100 113 distinct (both unchanged); Unit 1768 (1746 + 22: 17 new table rows and 5 new facts); DemoSeed 170; Regression non-Docker 140 (the Regression project builds with the new marker fact, settling the cycle-2 NOTE); frontend tsc, lint, `typecheck:e2e`, build green; vitest 99 files, 1199 tests (1169 + 30); `tools/check_docs.py` all hard checks pass. **CI-W3b next**, on a throwaway branch and draft PR.
