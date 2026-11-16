@@ -339,7 +339,7 @@ public sealed class S121EntitlementWriteSpecRuntimeTests : IAsyncLifetime
              "agreementCode": "{{agreementCode}}", "okVersion": "{{OkVersion}}",
              "description": "S121 kontrakttest", "normModel": "WEEKLY_HOURS",
              "weeklyNormHours": 37.0, "normPeriodWeeks": 4, "annualNormHours": 1924.0,
-             "maxFlexBalance": 74.0, "flexCarryoverMax": 37.0,
+             "maxFlexBalance": 74.0,
              "hasOvertime": true, "hasMerarbejde": false,
              "overtimeThreshold50": 37.0, "overtimeThreshold100": 44.0,
              "eveningSupplementEnabled": true, "nightSupplementEnabled": true,

@@ -10,11 +10,11 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// <summary>
 /// S118 / TASK-11802 — the per-route spec≡runtime gate for the POSITION-OVERRIDES admin family
 /// drained in retrofit Pass 5 (TASK-11800): list / by-id / by-agreement (bare array) / POST 201
-/// / PUT 200 on the ONE shared 14-member <c>PositionOverrideResponse</c>, plus the
+/// / PUT 200 on the ONE shared 13-member <c>PositionOverrideResponse</c>, plus the
 /// activate/deactivate lifecycle envelopes.
 ///
 /// <para><b>RULING #1 PIN (position-override create):</b> the create 201 is ALWAYS the full
-/// 14-member entity (INSERT…RETURNING killed the dead <c>{overrideId}</c> fallback) — asserted
+/// 13-member entity (INSERT…RETURNING killed the dead <c>{overrideId}</c> fallback) — asserted
 /// against the EXACT key set, both directions.</para>
 ///
 /// <para><b>init.sql seed respect (an explicit TASK constraint):</b> the 4 seeded overrides
@@ -42,12 +42,13 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
     private const string OkVersion = "OKS118";
     private const string PositionCode = "S118_POS"; // test-seeded positions row (FK target)
 
-    /// <summary>The ruling #1 anchor: the EXACT 14 camelCase members of
+    /// <summary>The ruling #1 anchor: the EXACT 13 camelCase members of
     /// <c>PositionOverrideResponse</c>.</summary>
+    // S148 C-7: kind F (CI, Docker; not run locally). The retired flex carryover key is no longer served; on the code before C-7 the response still serves it, so the exact-key-set assertion fails (the extra key is named).
     private static readonly string[] EntityKeys =
     {
         "overrideId", "agreementCode", "okVersion", "positionCode", "status", "version",
-        "maxFlexBalance", "flexCarryoverMax", "normPeriodWeeks", "weeklyNormHours",
+        "maxFlexBalance", "normPeriodWeeks", "weeklyNormHours",
         "createdBy", "createdAt", "updatedAt", "description",
     };
 
@@ -120,7 +121,7 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
     //  Op 4 — POST /api/admin/position-overrides (201) — RULING #1 PIN.
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>RULING #1: the create 201 is ALWAYS the full 14-member entity — never the dead
+    /// <summary>RULING #1: the create 201 is ALWAYS the full 13-member entity — never the dead
     /// <c>{overrideId}</c> fallback. Exact-201 + matcher + the EXACT key set; version 1 off
     /// RETURNING; nullable members served null-but-PRESENT.</summary>
     [Fact]
@@ -330,7 +331,7 @@ public sealed class S118PositionOverrideSpecRuntimeTests : IAsyncLifetime
         => $$"""
            { "agreementCode": "{{agreementCode}}", "okVersion": "{{OkVersion}}",
              "positionCode": "{{PositionCode}}",
-             "maxFlexBalance": 120.5, "flexCarryoverMax": 40.25, "normPeriodWeeks": 4,
+             "maxFlexBalance": 120.5, "normPeriodWeeks": 4,
              "weeklyNormHours": {{weeklyNormHours}}, "description": "S118 positionsundtagelse" }
            """;
 }

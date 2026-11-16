@@ -1,24 +1,14 @@
-using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Tests.Unit;
 
 /// <summary>
-/// Tests for Sprint 7: ConfigResolutionService — central config lookup,
-/// local override validation (protected keys, numeric constraints),
+/// Tests for Sprint 7: ConfigResolutionService — central config lookup
 /// and central config correctness per agreement code.
 /// </summary>
 public class Sprint7ConfigTests
 {
-    /// <summary>
-    /// Creates a ConfigResolutionService instance for testing ValidateLocalOverride.
-    /// ValidateLocalOverride is a pure function that doesn't touch the DB or logger,
-    /// so we safely pass null! for the repo and NullLogger for the logger.
-    /// </summary>
-    private static ConfigResolutionService CreateSut()
-        => new(null!, null!, null!, NullLogger<ConfigResolutionService>.Instance);
-
     // ---------------------------------------------------------------
     // 1. GetCentralConfig static method tests
     // ---------------------------------------------------------------

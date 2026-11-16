@@ -127,13 +127,13 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
             INSERT INTO local_agreement_profiles (
                 profile_id, org_id, agreement_code, ok_version,
                 effective_from, effective_to,
-                weekly_norm_hours, max_flex_balance, flex_carryover_max,
+                weekly_norm_hours, max_flex_balance,
                 max_overtime_hours_per_period, overtime_requires_pre_approval,
                 created_by)
             VALUES (
                 @id, @org, @ac, @ok,
                 @from, NULL,
-                36, NULL, NULL, NULL, NULL,
+                36, NULL, NULL, NULL,
                 'admin1')
             """, conn);
         cmd.Parameters.AddWithValue("id", profileId);

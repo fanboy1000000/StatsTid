@@ -159,7 +159,7 @@ public sealed class SEC033AdminConfigValidationTests : IAsyncLifetime
         using var admin = Admin();
         using var response = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Post, "/api/admin/position-overrides",
-            PositionOverrideJson(maxFlexBalance: "null", flexCarryoverMax: "null",
+            PositionOverrideJson(maxFlexBalance: "null",
                 normPeriodWeeks: "null", weeklyNormHours: "null")));
         var body = await response.Content.ReadAsStringAsync();
         Assert.True((int)response.StatusCode == 201, $"expected 201, got {(int)response.StatusCode}: {body}");
@@ -215,7 +215,7 @@ public sealed class SEC033AdminConfigValidationTests : IAsyncLifetime
              "description": "SEC-033 validation", "normModel": "WEEKLY_HOURS",
              "weeklyNormHours": {{weeklyNormHours}}, "normPeriodWeeks": {{normPeriodWeeks}},
              "annualNormHours": {{annualNormHours}},
-             "maxFlexBalance": 74.0, "flexCarryoverMax": 37.0,
+             "maxFlexBalance": 74.0,
              "hasOvertime": true, "hasMerarbejde": false,
              "overtimeThreshold50": 37.0, "overtimeThreshold100": 44.0,
              "eveningSupplementEnabled": true, "nightSupplementEnabled": true,
@@ -244,11 +244,11 @@ public sealed class SEC033AdminConfigValidationTests : IAsyncLifetime
     /// <summary>Position-override body; all four numeric fields are raw JSON tokens so "null"
     /// (don't-override) and literals both go on the wire verbatim.</summary>
     private static string PositionOverrideJson(
-        string maxFlexBalance = "120.5", string flexCarryoverMax = "40.25",
+        string maxFlexBalance = "120.5",
         string normPeriodWeeks = "4", string weeklyNormHours = "37.0")
         => $$"""
            { "agreementCode": "SEC033P", "okVersion": "{{OkVersion}}", "positionCode": "{{PositionCode}}",
-             "maxFlexBalance": {{maxFlexBalance}}, "flexCarryoverMax": {{flexCarryoverMax}},
+             "maxFlexBalance": {{maxFlexBalance}},
              "normPeriodWeeks": {{normPeriodWeeks}}, "weeklyNormHours": {{weeklyNormHours}},
              "description": "SEC-033 validation" }
            """;

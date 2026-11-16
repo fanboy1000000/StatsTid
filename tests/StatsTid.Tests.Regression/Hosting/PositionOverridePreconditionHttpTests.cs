@@ -160,7 +160,6 @@ public sealed class PositionOverridePreconditionHttpTests : IAsyncLifetime
         okVersion = OkVersion,
         positionCode = PositionCode,
         maxFlexBalance = maxFlex,
-        flexCarryoverMax = (decimal?)null,
         normPeriodWeeks = 4,
         weeklyNormHours = (decimal?)null,
         description = "QUAL-111 precondition 428",

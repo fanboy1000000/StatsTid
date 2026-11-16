@@ -17,10 +17,10 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// envelopes) + the 4 child entitlement ops (list / POST 201 / PUT 200 / DELETE 204).
 ///
 /// <para><b>RULING #1 PIN (the program's first wire-change ruling, the dead-branch class):</b>
-/// the create AND clone 201s are ALWAYS the full 48-member <c>AgreementConfigResponse</c> —
+/// the create AND clone 201s are ALWAYS the full 47-member <c>AgreementConfigResponse</c> —
 /// the backend now INSERT…RETURNINGs inside the tx, so the legacy <c>{configId}</c>-only
 /// fallback branch is structurally dead. These tests are the CONTRACT pin: the 201 bodies are
-/// asserted against the EXACT 48-member key set (missing AND extra keys both named-fail), so a
+/// asserted against the EXACT 47-member key set (missing AND extra keys both named-fail), so a
 /// resurrected fallback fork is RED forever.</para>
 ///
 /// <para><b>RULING #2 PIN (the drift-repair class):</b> the by-id GET's embedded
@@ -65,13 +65,14 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     private const string JwtOrg = "S118CM"; // JWT claim only — config-family audit rows are GLOBAL (no org FK)
     private const string OkVersion = "OKS118";
 
-    /// <summary>The ruling #1 anchor: the EXACT 48 camelCase members of
+    /// <summary>The ruling #1 anchor: the EXACT 47 camelCase members of
     /// <c>AgreementConfigResponse</c> — the create/clone/PUT wire truth.</summary>
+    // S148 C-7: kind F (CI, Docker; not run locally). The retired flex carryover key is no longer served; on the code before C-7 the response still serves it, so the exact-key-set assertion fails (the extra key is named).
     private static readonly string[] FullEntityKeys =
     {
         "configId", "agreementCode", "okVersion", "status", "version",
         "weeklyNormHours", "normPeriodWeeks", "normModel", "annualNormHours",
-        "maxFlexBalance", "flexCarryoverMax",
+        "maxFlexBalance",
         "hasOvertime", "hasMerarbejde", "overtimeThreshold50", "overtimeThreshold100",
         "eveningSupplementEnabled", "nightSupplementEnabled", "weekendSupplementEnabled", "holidaySupplementEnabled",
         "eveningStart", "eveningEnd", "nightStart", "nightEnd",
@@ -147,8 +148,8 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     //  Op 4 — POST /api/agreement-configs (201) — RULING #1 PIN (create).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>RULING #1: the create 201 is ALWAYS the full 48-member entity — never the dead
-    /// <c>{configId}</c> fallback. Exact-201 status + matcher + the EXACT 48-member key set
+    /// <summary>RULING #1: the create 201 is ALWAYS the full 47-member entity — never the dead
+    /// <c>{configId}</c> fallback. Exact-201 status + matcher + the EXACT 47-member key set
     /// (both directions). ETag "1" = the RETURNING-hydrated first-create version.</summary>
     [Fact]
     public async Task Create_Post201Exact_RulingOnePin_Always48MemberFullEntity()
@@ -182,7 +183,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     //  Op 5 — POST /api/agreement-configs/{configId}/clone (201) — RULING #1 PIN (clone).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>RULING #1 applied to the clone fork: same full-48-member pin, plus
+    /// <summary>RULING #1 applied to the clone fork: same full-47-member pin, plus
     /// <c>clonedFromId</c> = the source id (the lineage member the dead fallback could never
     /// carry) and the copied ANNUAL_ACTIVITY normModel exercising the second enum value.</summary>
     [Fact]
@@ -239,7 +240,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>If-Match composed AS THE FE DOES: the create 201's ETag is the version the PUT
-    /// sends. The 200 shares the same 48-member record (the sibling-record rule) — key-set
+    /// sends. The 200 shares the same 47-member record (the sibling-record rule) — key-set
     /// asserted here too; normModel flips to ANNUAL_ACTIVITY (the second enum value, live).</summary>
     [Fact]
     public async Task Update_Put200_IfMatchComposedFromTheCreateEtag()
@@ -271,7 +272,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     /// 16-member shared child shape incl. <c>fullDayOnly</c> (the member the drifted inline
     /// mapper omitted at this — the third — former mapper site). The child is a CARE_DAY row
     /// created through the REAL child POST, whose <c>fullDayOnly: true</c> is guard-forced, so
-    /// the pin is non-vacuous. Root = the 48 members + <c>entitlements</c> +
+    /// the pin is non-vacuous. Root = the 47 members + <c>entitlements</c> +
     /// <c>entitlementsReadOnly</c>.</summary>
     [Fact]
     public async Task ById_Get200_RulingTwoPin_EmbeddedEntitlementRowsCarryFullDayOnly()
@@ -650,7 +651,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
              "agreementCode": "{{agreementCode}}", "okVersion": "{{OkVersion}}",
              "description": "S118 kontrakttest", "normModel": "{{normModel}}",
              "weeklyNormHours": 37.0, "normPeriodWeeks": 4, "annualNormHours": 1924.0,
-             "maxFlexBalance": 74.0, "flexCarryoverMax": 37.0,
+             "maxFlexBalance": 74.0,
              "hasOvertime": true, "hasMerarbejde": false,
              "overtimeThreshold50": 37.0, "overtimeThreshold100": 44.0,
              "eveningSupplementEnabled": true, "nightSupplementEnabled": true,

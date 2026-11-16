@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Models;
@@ -7,9 +6,6 @@ namespace StatsTid.Tests.Unit;
 
 public class Sprint12AgreementConfigTests
 {
-    private static ConfigResolutionService CreateSut()
-        => new(null!, null!, null!, NullLogger<ConfigResolutionService>.Instance);
-
     // ========================================================================
     // 1. AgreementConfigEntity.ToRuleConfig() mapping
     // ========================================================================

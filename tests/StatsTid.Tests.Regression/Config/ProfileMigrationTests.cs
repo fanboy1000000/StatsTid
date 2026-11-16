@@ -184,11 +184,22 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
         Assert.Equal(1L, Convert.ToInt64(await cmd.ExecuteScalarAsync()));
     }
 
+    /// <summary>
+    /// One legacy row per overridable key, plus one for the retired flex carryover key, on one
+    /// (org, agreement, OK). The four live keys migrate into one profile; the retired key is dropped
+    /// as an unknown key and audited.
+    ///
+    /// <para><b>Kind F (CI, Docker; not run locally).</b> Red conditions: <c>RowsMigrated == 4</c>,
+    /// <c>RowsDroppedUnknown == 1</c> and the <c>DROPPED_UNKNOWN_KEY</c> audit row fail on the code before
+    /// S148 C-7, where <c>LegacyKeyToColumn</c> still mapped the key, so that row migrated (5 migrated,
+    /// 0 dropped, no audit row for it).</para>
+    /// </summary>
     [Fact]
     public async Task OneRowPerOverridableKey_HappyPath()
     {
-        // Seed: one row per overridable key (5 total) on (STY02, HK, OK24) with distinct
-        // effective_from dates → one profile row with all 5 columns populated; zero drops.
+        // S148 C-7: the retired key is now an unknown key. Seed: one row per live overridable key (4)
+        // plus the retired one on (STY02, HK, OK24), distinct effective_from dates → one profile row
+        // with all 4 columns populated; one drop (unknown key).
         var d1 = new DateOnly(2024, 1, 1);
         var d2 = new DateOnly(2024, 4, 1);
         var d3 = new DateOnly(2024, 7, 1);
@@ -197,7 +208,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
 
         await InsertLegacyConfigAsync("STY02", "HK", "OK24", "WeeklyNormHours", "36", d1);
         await InsertLegacyConfigAsync("STY02", "HK", "OK24", "MaxFlexBalance", "100", d2);
-        await InsertLegacyConfigAsync("STY02", "HK", "OK24", "FlexCarryoverMax", "10", d3);
+        var retiredKeyRowId = await InsertLegacyConfigAsync("STY02", "HK", "OK24", "FlexCarryoverMax", "10", d3);
         await InsertLegacyConfigAsync("STY02", "HK", "OK24", "MaxOvertimeHoursPerPeriod", "50", d4);
         await InsertLegacyConfigAsync("STY02", "HK", "OK24", "OvertimeRequiresPreApproval", "true", d5);
 
@@ -205,20 +216,20 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
         var result = await migrator.RebuildAsync();
 
         Assert.Equal(1, result.ProfilesCreated);
-        Assert.Equal(5, result.RowsMigrated);
+        Assert.Equal(4, result.RowsMigrated);
         Assert.Equal(0, result.RowsDroppedDuplicates);
         Assert.Equal(0, result.RowsDroppedInformational);
-        Assert.Equal(0, result.RowsDroppedUnknown);
+        Assert.Equal(1, result.RowsDroppedUnknown);
+        Assert.Equal("DROPPED_UNKNOWN_KEY", await GetAuditActionForConfigAsync(retiredKeyRowId));
 
         var profile = await GetSingleProfileAsync("STY02", "HK", "OK24");
         Assert.NotNull(profile);
         Assert.Equal(36m, profile!.Value.WeeklyNormHours);
         Assert.Equal(100m, profile.Value.MaxFlexBalance);
-        Assert.Equal(10m, profile.Value.FlexCarryoverMax);
         Assert.Equal(50m, profile.Value.MaxOvertimeHoursPerPeriod);
         Assert.True(profile.Value.OvertimeRequiresPreApproval);
 
-        // effective_from = MIN(picked rows' effective_from) — all 5 are winners, so MIN = d1.
+        // effective_from = MIN(picked rows' effective_from) — all 4 migrated rows are winners, so MIN = d1.
         Assert.Equal(d1, profile.Value.EffectiveFrom);
     }
 
@@ -468,7 +479,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT effective_from, weekly_norm_hours, max_flex_balance, flex_carryover_max,
+            SELECT effective_from, weekly_norm_hours, max_flex_balance,
                    max_overtime_hours_per_period, overtime_requires_pre_approval
             FROM local_agreement_profiles
             WHERE org_id = @org AND agreement_code = @ac AND ok_version = @ok
@@ -483,9 +494,8 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
             EffectiveFrom: DateOnly.FromDateTime(reader.GetDateTime(0)),
             WeeklyNormHours: reader.IsDBNull(1) ? null : reader.GetDecimal(1),
             MaxFlexBalance: reader.IsDBNull(2) ? null : reader.GetDecimal(2),
-            FlexCarryoverMax: reader.IsDBNull(3) ? null : reader.GetDecimal(3),
-            MaxOvertimeHoursPerPeriod: reader.IsDBNull(4) ? null : reader.GetDecimal(4),
-            OvertimeRequiresPreApproval: reader.IsDBNull(5) ? null : reader.GetBoolean(5));
+            MaxOvertimeHoursPerPeriod: reader.IsDBNull(3) ? null : reader.GetDecimal(3),
+            OvertimeRequiresPreApproval: reader.IsDBNull(4) ? null : reader.GetBoolean(4));
     }
 
     private async Task<string?> GetAuditActionForConfigAsync(Guid configId)
@@ -503,7 +513,6 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
         DateOnly EffectiveFrom,
         decimal? WeeklyNormHours,
         decimal? MaxFlexBalance,
-        decimal? FlexCarryoverMax,
         decimal? MaxOvertimeHoursPerPeriod,
         bool? OvertimeRequiresPreApproval);
 }

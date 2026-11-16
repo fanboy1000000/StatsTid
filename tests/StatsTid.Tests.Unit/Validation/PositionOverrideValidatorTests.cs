@@ -56,7 +56,7 @@ public class PositionOverrideValidatorTests
     public void InSetNormPeriodWeeks_IsValid(int weeks)
         => Assert.True(PositionOverrideValidator.ValidateRanges(null, weeks, null).IsValid);
 
-    // ── MaxFlexBalance / FlexCarryoverMax (when supplied, >= 0; NO upper cap) ──
+    // ── MaxFlexBalance (when supplied, >= 0; NO upper cap) ──
     [Fact]
     public void NegativeMaxFlexBalance_IsRejected()
     {
