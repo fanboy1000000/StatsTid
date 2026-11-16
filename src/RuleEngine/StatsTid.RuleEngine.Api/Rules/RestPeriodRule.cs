@@ -83,9 +83,10 @@ public static class RestPeriodRule
     /// </param>
     /// <param name="workIntervals">
     /// The clock intervals typed in Skema over the same dates, each on the date it was entered on.
-    /// The rest checks build their work periods from these alone. Absent means no interval: no
-    /// rest is measured, and every day of the period with project hours is listed in
-    /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/>.
+    /// The rest checks build their work periods from these alone. An interval dated after
+    /// <paramref name="periodEnd"/> is ignored by the daily rest check; the weekly check still
+    /// reads it. Absent means no interval: no rest is measured, and every day of the period with
+    /// project hours is listed in <see cref="ComplianceCheckResult.RestNotCheckedDays"/>.
     /// </param>
     /// <param name="copenhagenZone">
     /// Denmark's time zone (Europe/Copenhagen), passed by the host. The daily rest check measures
@@ -129,10 +130,16 @@ public static class RestPeriodRule
         CheckMaxDailyHours(periodEntries, config, violations, warnings);
 
         // 2 + 3. The rest checks measure work periods built from the intervals alone
-        //    (ADR-043 D10); each check then decides which of them the period owns. The zone is
-        //    non-null whenever a stint exists (checked above).
-        var stints = ReconstructStints(intervals, VoluntaryDays(entries, config), periodStart);
-        CheckDailyRest(stints, periodStart, periodEnd, config, copenhagenZone!, violations, warnings);
+        //    (ADR-043 D10); each check then decides which of them the period owns. The daily
+        //    check's are built without the intervals dated after the period, so work running past
+        //    its last midnight is judged as the period sees it whatever the caller sends
+        //    (QUAL-253); the weekly check's from every kept interval. The zone is non-null
+        //    whenever a stint exists (checked above).
+        var voluntaryDays = VoluntaryDays(entries, config);
+        var stints = ReconstructStints(intervals, voluntaryDays, periodStart);
+        var dailyStints = ReconstructStints(
+            intervals.Where(iv => iv.Date <= periodEnd).ToList(), voluntaryDays, periodStart);
+        CheckDailyRest(dailyStints, periodStart, config, copenhagenZone!, violations, warnings);
         CheckWeeklyRest(stints, periodStart, periodEnd, config, violations, warnings);
 
         // 4. 48h/week ceiling (works for all entries) — period-filtered per-day rows.
@@ -329,8 +336,11 @@ public static class RestPeriodRule
     /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/>.</item>
     /// <item><b>Judged ends.</b> One per stint: its latest end instant, dated the day of the
     /// interval that carries it (as typed: an end typed 23:59 on 31 March is 31 March's). The
-    /// period judges the ends dated inside it. Work running past the period's last minute is judged
-    /// as the period sees it, and again in full by the next period.</item>
+    /// period judges the ends dated inside it. The check ignores the intervals dated after the
+    /// period (<see cref="Evaluate"/> builds its stints without them), so a night shift over the
+    /// period's last midnight is judged as ending at 24:00 on the last day, and again in full by
+    /// the next period. Those intervals begin at or after every end the period judges, so they lie
+    /// outside every window it measures.</item>
     /// <item><b>The value.</b> The longest single unbroken rest inside the window; a rest that began
     /// before the window counts from the window's start, and short rests never add up. Below the
     /// minimum is a finding; exactly the minimum passes. The 13 hours this allows is 24 minus the
@@ -347,7 +357,6 @@ public static class RestPeriodRule
     private static void CheckDailyRest(
         IReadOnlyList<WorkStint> stints,
         DateOnly periodStart,
-        DateOnly periodEnd,
         AgreementRuleConfig config,
         TimeZoneInfo copenhagenZone,
         List<ComplianceViolation> violations,
@@ -368,7 +377,7 @@ public static class RestPeriodRule
             .Select(s => s.Intervals
                 .Select(iv => (iv.Date, Typed: iv.End, Instant: ToInstant(iv.Date, iv.End, isEnd: true, copenhagenZone)))
                 .MaxBy(end => (end.Instant, end.Date, end.Typed)))
-            .Where(end => end.Date >= periodStart && end.Date <= periodEnd);
+            .Where(end => end.Date >= periodStart);
 
         var failingByDay = judgedEnds
             .Select(end => (End: end, RestHours: LongestRestHours(work, end.Instant)))

@@ -240,7 +240,7 @@ public static class ComplianceEndpoints
                 && !ApprovalVisibility.IsSubmittedToManager(
                     (await approvalRepo.GetByEmployeeAndPeriodAsync(
                         employeeId, monthStart.AddMonths(-1), previousMonthEnd, ct))?.Status);
-            // shortcut(SEC-059): on a leader's withheld read a night shift begun the day before the month starts at monthStart 00:00, so it can add a worked day to the weekly check and its voluntary status rests on the month's days alone (monthStart is listed as not checked); upgrade when the voluntary flag gains a writer
+            // shortcut(SEC-059): on a leader's withheld read a night shift begun before the month starts at monthStart 00:00, so it can add a worked day to the weekly check and its voluntary status rests on the month's days alone (monthStart is listed as not checked); upgrade when the voluntary flag gains a writer
             var intervalReadStart = previousMonthWithheld ? monthStart : readStart;
             var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, intervalReadStart, monthEnd, ct);
             var workIntervals = new List<object>();
