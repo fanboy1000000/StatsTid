@@ -2,9 +2,11 @@ using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
+using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -102,6 +104,7 @@ public static class AgreementConfigEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<AgreementConfigCreated> createdMapper,
             AuditProjectionRepository auditRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -114,7 +117,10 @@ public static class AgreementConfigEndpoints
             if (!TryParseNormModel(request.NormModel, out var normModel))
                 return Results.BadRequest(new { error = "Invalid normModel. Must be WEEKLY_HOURS or ANNUAL_ACTIVITY" });
 
-            var entity = BuildEntityFromRequest(request, normModel, actor.ActorId ?? "system");
+            // A DRAFT's applies_from is a placeholder no read uses (B5; the publish writes the
+            // version's date), set explicitly to today so the insert never binds the entity default.
+            var entity = BuildEntityFromRequest(
+                request, normModel, actor.ActorId ?? "system", CopenhagenBusinessDate.Today(timeProvider));
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
             // Create uses the v2 AppendAuditAsync overload — the first-create has no prior
@@ -185,6 +191,7 @@ public static class AgreementConfigEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<AgreementConfigCloned> clonedMapper,
             AuditProjectionRepository auditRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -251,6 +258,9 @@ public static class AgreementConfigEndpoints
                 UpdatedAt = DateTime.UtcNow,
                 ClonedFromId = source.ConfigId,
                 Description = source.Description,
+                // A DRAFT's applies_from is a placeholder no read uses (B5; the publish writes the
+                // version's date), set explicitly to today so the insert never binds the entity default.
+                AppliesFrom = CopenhagenBusinessDate.Today(timeProvider),
             };
 
             // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
@@ -348,7 +358,9 @@ public static class AgreementConfigEndpoints
             if (!TryParseNormModel(request.NormModel, out var normModel))
                 return Results.BadRequest(new { error = "Invalid normModel. Must be WEEKLY_HOURS or ANNUAL_ACTIVITY" });
 
-            var updatedEntity = BuildEntityFromRequest(request, normModel, existing.CreatedBy, existing.ClonedFromId);
+            // The draft UPDATE writes no applies_from; the entity keeps the stored placeholder.
+            var updatedEntity = BuildEntityFromRequest(
+                request, normModel, existing.CreatedBy, existing.AppliesFrom, existing.ClonedFromId);
 
             // 3. Atomic state-change + audit (with version-transition pair) + outbox enqueue
             //    (ADR-018 D3). The v3 UpdateDraftAsync(conn, tx, configId, expectedVersion, ...)
@@ -425,20 +437,25 @@ public static class AgreementConfigEndpoints
         .Produces<AgreementConfigResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
-        // 7. POST /api/agreement-configs/{configId:guid}/publish — Publish DRAFT → ACTIVE
-        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT.
-        //    Atomically archives prior ACTIVE for (agreement_code, ok_version) + activates
-        //    DRAFT in a single tx. Concurrent state-change (S24 Step 7a P1) now manifests
-        //    as 412 (OptimisticConcurrencyException) — replaces the (Guid?, bool) tuple.
+        // 7. POST /api/agreement-configs/{configId:guid}/publish — Publish DRAFT → ACTIVE, dated
+        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT. An optional
+        //    body carries `appliesFrom` (QUAL-182, ADR-043 D12): omitted means today in
+        //    Copenhagen; a future date, one before the key's newest published version, or a
+        //    non-Monday for a Monday-only field answers 400 with nothing written. Atomically
+        //    archives the prior ACTIVE for (agreement_code, ok_version), which stays in force
+        //    for its own days, and activates the DRAFT from that date, in a single tx.
+        //    Concurrent state-change (S24 Step 7a P1) manifests as 412.
         // ═══════════════════════════════════════════
         app.MapPost("/api/agreement-configs/{configId:guid}/publish", async (
             Guid configId,
+            AgreementConfigPublishRequest? request,
             AgreementConfigRepository agreementConfigRepo,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<AgreementConfigPublished> publishedMapper,
             IAuditProjectionMapper<AgreementConfigArchived> archivedMapper,
             AuditProjectionRepository auditRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -458,12 +475,21 @@ public static class AgreementConfigEndpoints
             if (existing is null)
                 return Results.NotFound(new { error = "Agreement config not found" });
 
+            // 2b. The applies-from date: "today" is the Copenhagen business day, read once (PAT-028,
+            //     ADR-041); an absent body, {} and {"appliesFrom": null} all mean today. A future date
+            //     is refused here (R-18); the predecessor and Monday rules need the key lock and are
+            //     decided inside PublishAsync.
+            var (appliesFrom, dateRefusal) = AppliesFromValidation.Resolve(
+                request?.AppliesFrom, CopenhagenBusinessDate.Today(timeProvider));
+            if (dateRefusal is not null)
+                return dateRefusal;
+
             // 3. Atomic publish (ADR-018 D3): archive prior ACTIVE + activate DRAFT + audit
-            //    (with version-transition pair) + outbox enqueue, all in a single tx. The v3
-            //    PublishAsync(conn, tx, configId, expectedVersion, ...) enforces ETag/If-Match
-            //    + status='DRAFT' under SELECT ... FOR UPDATE; concurrent change manifests as
-            //    OptimisticConcurrencyException → 412 (S24 Step 7a P1 fix, restated under
-            //    the v3 contract).
+            //    (with version-transition pair) + outbox enqueue, all in a single tx at READ
+            //    COMMITTED. The v3 PublishAsync(conn, tx, configId, expectedVersion, appliesFrom, ...)
+            //    takes the key lock first (every row of the key FOR UPDATE, ruling B4), enforces
+            //    ETag/If-Match + status='DRAFT' (OptimisticConcurrencyException → 412), then the
+            //    date rules (AppliesFromRefusedException → 400), before it writes.
             //
             //    When the publish supersedes a prior ACTIVE config (saveResult.ArchivedId
             //    non-null), ADR-019 D1 mandates that we also emit a matching ARCHIVED audit
@@ -479,11 +505,14 @@ public static class AgreementConfigEndpoints
                 try
                 {
                     saveResult = await agreementConfigRepo.PublishAsync(
-                        conn, tx, configId, expectedVersion, actor.ActorId ?? "system", ct);
+                        conn, tx, configId, expectedVersion, appliesFrom, actor.ActorId ?? "system", ct);
 
+                    // The PUBLISHED row records the version's date (AC-C2d, AC-C2l): the resolved
+                    // date, so an omitted one is recorded as today, never null.
                     await agreementConfigRepo.AppendAuditAsync(
                         conn, tx, configId, "PUBLISHED",
-                        null, $"{{\"archivedConfigId\":\"{saveResult.ArchivedId}\"}}",
+                        null,
+                        $"{{\"archivedConfigId\":\"{saveResult.ArchivedId}\",\"appliesFrom\":\"{appliesFrom.ToString("O")}\"}}",
                         actor.ActorId ?? "system", actor.ActorRole ?? "GLOBAL_ADMIN",
                         versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
 
@@ -580,6 +609,11 @@ public static class AgreementConfigEndpoints
                     currentState = currentState is null ? null : MapEntityToResponse(currentState),
                 }, statusCode: 412);
             }
+            catch (AppliesFromRefusedException ex)
+            {
+                // Refused under the key lock, before any write; the inner catch rolled back.
+                return AppliesFromValidation.BadRequest(ex);
+            }
 
             // 4. Set ETag for the next If-Match (now pointing at the activated row's
             //    post-publish version) and return the publish-result envelope.
@@ -591,13 +625,16 @@ public static class AgreementConfigEndpoints
                 ConfigId: configId,
                 Status: "ACTIVE",
                 ArchivedConfigId: saveResult.ArchivedId,
-                PublishedAt: saveResult.Config.PublishedAt));
+                PublishedAt: saveResult.Config.PublishedAt,
+                AppliesFrom: saveResult.Config.AppliesFrom));
         }).RequireAuthorization("GlobalAdminOnly")
         .Produces<AgreementConfigPublishResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
-        // 8. POST /api/agreement-configs/{configId:guid}/archive — Archive ACTIVE/DRAFT config
-        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT.
+        // 8. POST /api/agreement-configs/{configId:guid}/archive — Archive a DRAFT config
+        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT. An ACTIVE
+        //    config answers 409 and nothing is written (A-6): under dated versions it is
+        //    replaced by publishing a successor, never archived.
         // ═══════════════════════════════════════════
         app.MapPost("/api/agreement-configs/{configId:guid}/archive", async (
             Guid configId,
@@ -630,7 +667,9 @@ public static class AgreementConfigEndpoints
             // 3. Atomic archive (ADR-018 D3) — v3 ArchiveAsync(conn, tx, configId,
             //    expectedVersion, ...) enforces ETag/If-Match optimistic concurrency. The v3
             //    path also rejects already-ARCHIVED via OCE so callers see a uniform 412
-            //    contract on both stale-version and double-archive cases.
+            //    contract on both stale-version and double-archive cases, and refuses an
+            //    ACTIVE row on its locked status (ActiveConfigArchiveRefusedException → 409),
+            //    whatever the If-Match (B7).
             SaveAgreementConfigResult saveResult;
             try
             {
@@ -646,9 +685,9 @@ public static class AgreementConfigEndpoints
                     // documents (::jsonb cast in the repo) — bare strings 22P02'd and rolled
                     // back EVERY direct archive. Hand-built single-key JSON per the file
                     // convention (CLONED/PUBLISHED sites). previousData carries the TRUE
-                    // pre-archive status (ACTIVE or DRAFT) from the FOR-UPDATE-locked row
-                    // (saveResult.PreviousStatus — the sanctioned repo result-member
-                    // extension), NOT the racy pre-flight `existing` read.
+                    // pre-archive status (DRAFT: an ACTIVE row is refused, A-6) from the
+                    // FOR-UPDATE-locked row (saveResult.PreviousStatus — the sanctioned repo
+                    // result-member extension), NOT the racy pre-flight `existing` read.
                     await agreementConfigRepo.AppendAuditAsync(
                         conn, tx, configId, "ARCHIVED",
                         $"{{\"status\":\"{saveResult.PreviousStatus}\"}}", "{\"status\":\"ARCHIVED\"}",
@@ -695,6 +734,14 @@ public static class AgreementConfigEndpoints
                     currentState = currentState is null ? null : MapEntityToResponse(currentState),
                 }, statusCode: 412);
             }
+            catch (ActiveConfigArchiveRefusedException)
+            {
+                // Refused on the locked status, before any write; the inner catch rolled back.
+                return Results.Json(new
+                {
+                    error = "Only a draft can be archived. Publish a successor to replace the active configuration.",
+                }, statusCode: 409);
+            }
 
             // S118 / TASK-11800: the bespoke lifecycle envelope is now a named record —
             // ALL keys always emitted, archivedAt nullable-valued (nullable-always-present).
@@ -711,11 +758,9 @@ public static class AgreementConfigEndpoints
 
     // ── Response Mapping ──
 
-    // S118 / TASK-11800 (PAT-012 retrofit Pass 5): the anonymous shape became the named
-    // 47-member AgreementConfigResponse record — an EXACT shape-copy (same member names, same
-    // order, same nullability; camelCase via JsonSerializerDefaults.Web — BYTE-IDENTICAL wire
-    // JSON). Also embedded (untyped) in the 412 error-body `currentState` envelopes, which
-    // stay anonymous per the S118 exclusions.
+    // S118 / TASK-11800 (PAT-012 retrofit Pass 5): the named 48-member AgreementConfigResponse
+    // record (camelCase via JsonSerializerDefaults.Web). Also embedded (untyped) in the 412
+    // error-body `currentState` envelopes, which stay anonymous per the S118 exclusions.
     private static AgreementConfigResponse MapEntityToResponse(AgreementConfigEntity e) => new(
         ConfigId: e.ConfigId,
         AgreementCode: e.AgreementCode,
@@ -775,6 +820,9 @@ public static class AgreementConfigEndpoints
         CreatedAt: e.CreatedAt,
         UpdatedAt: e.UpdatedAt,
         PublishedAt: e.PublishedAt,
+        // The version's applies-from date (QUAL-182): only a published version has one; a draft's
+        // stored date is a placeholder no read uses (B5), so an unpublished row shows null (B-5).
+        AppliesFrom: e.PublishedAt is null ? null : e.AppliesFrom,
         ArchivedAt: e.ArchivedAt,
         ClonedFromId: e.ClonedFromId,
         Description: e.Description);
@@ -930,7 +978,8 @@ public static class AgreementConfigEndpoints
     // ── Entity Builder ──
 
     private static AgreementConfigEntity BuildEntityFromRequest(
-        AgreementConfigRequest r, NormModel normModel, string createdBy, Guid? clonedFromId = null)
+        AgreementConfigRequest r, NormModel normModel, string createdBy, DateOnly appliesFrom,
+        Guid? clonedFromId = null)
     {
         return new AgreementConfigEntity
         {
@@ -978,6 +1027,7 @@ public static class AgreementConfigEndpoints
             UpdatedAt = DateTime.UtcNow,
             ClonedFromId = clonedFromId,
             Description = r.Description,
+            AppliesFrom = appliesFrom,
         };
     }
 
@@ -1060,7 +1110,13 @@ public static class AgreementConfigEndpoints
         };
     }
 
-    // ── Request DTO ──
+    // ── Request DTOs ──
+
+    /// <summary>
+    /// The publish's optional body (the house pattern of <c>OvertimeApprovalRequest?</c>): the date the
+    /// version applies from. Absent, <c>{}</c> or null means today in Copenhagen (A-14).
+    /// </summary>
+    public record AgreementConfigPublishRequest(DateOnly? AppliesFrom);
 
     private sealed class AgreementConfigRequest
     {

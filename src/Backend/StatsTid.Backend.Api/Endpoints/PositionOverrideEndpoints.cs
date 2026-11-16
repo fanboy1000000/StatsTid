@@ -7,6 +7,7 @@ using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -84,6 +85,7 @@ public static class PositionOverrideEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideCreated> createdMapper,
             AuditProjectionRepository auditRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -97,6 +99,14 @@ public static class PositionOverrideEndpoints
                 body.WeeklyNormHours, body.NormPeriodWeeks, body.MaxFlexBalance);
             if (!rangesValid)
                 return Results.BadRequest(new { error = rangeError });
+
+            // The applies-from date (NR-P8, QUAL-182): omitted means today in Copenhagen, read once
+            // (PAT-028); a future date is refused here (R-18). The predecessor and Monday rules need
+            // the key lock and are decided inside the repository writer.
+            var (appliesFrom, dateRefusal) = AppliesFromValidation.Resolve(
+                body.AppliesFrom, CopenhagenBusinessDate.Today(timeProvider));
+            if (dateRefusal is not null)
+                return dateRefusal;
 
             var entity = new PositionOverrideConfigEntity
             {
@@ -121,46 +131,63 @@ public static class PositionOverrideEndpoints
             // AFTER the INSERT, byte-order unchanged (moving them would be a P3 violation).
             Guid overrideId;
             PositionOverrideConfigEntity created;
-            await using (var conn = connectionFactory.Create())
+            try
             {
+                await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
-
-                created = await repo.CreateReturningAsync(conn, tx, entity, ct);
-                overrideId = created.OverrideId;
-
-                // Create still uses the v2 AppendAuditAsync overload — the first-create has
-                // no prior version-transition to record (version_before is NULL by design).
-                await repo.AppendAuditAsync(
-                    conn, tx, overrideId, "CREATED", null, JsonSerializer.Serialize(body),
-                    actorId, actorRole, ct);
-
-                // Emit domain event via outbox INSIDE the transaction so the publisher only
-                // sees the row after the position-override + audit commit together.
-                var @event = new PositionOverrideCreated
+                try
                 {
-                    OverrideId = overrideId,
-                    AgreementCode = body.AgreementCode,
-                    OkVersion = body.OkVersion,
-                    PositionCode = body.PositionCode,
-                    ActorId = actorId,
-                    ActorRole = actorRole,
-                    CorrelationId = actor.CorrelationId,
-                };
-                // S44 TASK-4413: capture outbox_id for audit_projection insert
-                // (ADR-026 D2 sync-in-tx projection write — atomic with the
-                // position_override row + outbox row per ADR-018 D3/D13).
-                var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+                    // The head row and its first version row, dated appliesFrom (NR-P8, NR-P21).
+                    created = await repo.CreateReturningAsync(conn, tx, entity, appliesFrom, ct);
+                    overrideId = created.OverrideId;
 
-                var auditCtx = new AuditProjectionContext(
-                    ActorId: actor.ActorId,
-                    ActorPrimaryOrgId: actor.OrgId,
-                    CorrelationId: actor.CorrelationId,
-                    OccurredAt: new DateTimeOffset(@event.OccurredAt));
-                var auditRow = createdMapper.Map(@event, auditCtx);
-                await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+                    // Create still uses the v2 AppendAuditAsync overload — the first-create has
+                    // no prior version-transition to record (version_before is NULL by design).
+                    await repo.AppendAuditAsync(
+                        conn, tx, overrideId, "CREATED", null,
+                        SerializeBodyForAudit(
+                            body.AgreementCode, body.OkVersion, body.PositionCode, body.MaxFlexBalance,
+                            body.NormPeriodWeeks, body.WeeklyNormHours, body.Description, appliesFrom),
+                        actorId, actorRole, ct);
 
-                await tx.CommitAsync(ct);
+                    // Emit domain event via outbox INSIDE the transaction so the publisher only
+                    // sees the row after the position-override + audit commit together.
+                    var @event = new PositionOverrideCreated
+                    {
+                        OverrideId = overrideId,
+                        AgreementCode = body.AgreementCode,
+                        OkVersion = body.OkVersion,
+                        PositionCode = body.PositionCode,
+                        ActorId = actorId,
+                        ActorRole = actorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    // S44 TASK-4413: capture outbox_id for audit_projection insert
+                    // (ADR-026 D2 sync-in-tx projection write — atomic with the
+                    // position_override row + outbox row per ADR-018 D3/D13).
+                    var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"position-override-{overrideId}", @event, ct);
+
+                    var auditCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(@event.OccurredAt));
+                    var auditRow = createdMapper.Map(@event, auditCtx);
+                    await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                    await tx.CommitAsync(ct);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(ct);
+                    throw;
+                }
+            }
+            catch (AppliesFromRefusedException ex)
+            {
+                // Refused under the key lock, before any write; the inner catch rolled back.
+                return AppliesFromValidation.BadRequest(ex);
             }
 
             // ETag for the 201 response — sourced from the RETURNING-hydrated row (DB DEFAULT 1
@@ -186,6 +213,7 @@ public static class PositionOverrideEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideUpdated> updatedMapper,
             AuditProjectionRepository auditRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -235,6 +263,14 @@ public static class PositionOverrideEndpoints
                 }, statusCode: 409);
             }
 
+            // The applies-from date (NR-P8): an edit writes a new dated version. Omitted means today in
+            // Copenhagen, read once; a future date is refused here (R-18); the predecessor and Monday
+            // rules are decided under the key lock inside UpdateAsync.
+            var (appliesFrom, dateRefusal) = AppliesFromValidation.Resolve(
+                body.AppliesFrom, CopenhagenBusinessDate.Today(timeProvider));
+            if (dateRefusal is not null)
+                return dateRefusal;
+
             var updatedEntity = new PositionOverrideConfigEntity
             {
                 OverrideId = overrideId,
@@ -269,15 +305,19 @@ public static class PositionOverrideEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
-                    saveResult = await repo.UpdateAsync(conn, tx, overrideId, expectedVersion, updatedEntity, ct);
+                    saveResult = await repo.UpdateAsync(
+                        conn, tx, overrideId, expectedVersion, updatedEntity, appliesFrom, actorId, ct);
 
                     // v3 audit overload — captures (versionBefore = expectedVersion,
                     // versionAfter = saveResult.Version) into position_override_config_audit's
-                    // new version_before / version_after columns (TASK-2501 schema).
+                    // new version_before / version_after columns (TASK-2501 schema). new_data is
+                    // the body with the resolved applies-from date (AC-C2l).
                     await repo.AppendAuditAsync(
                         conn, tx, overrideId, "UPDATED",
                         JsonSerializer.Serialize(previous),
-                        JsonSerializer.Serialize(body),
+                        SerializeBodyForAudit(
+                            body.AgreementCode, body.OkVersion, body.PositionCode, body.MaxFlexBalance,
+                            body.NormPeriodWeeks, body.WeeklyNormHours, body.Description, appliesFrom),
                         actorId, actorRole,
                         versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
 
@@ -324,6 +364,11 @@ public static class PositionOverrideEndpoints
                     currentState = currentState is null ? null : MapEntityToResponse(currentState),
                 }, statusCode: 412);
             }
+            catch (AppliesFromRefusedException ex)
+            {
+                // Refused under the key lock, before any write; the inner catch rolled back.
+                return AppliesFromValidation.BadRequest(ex);
+            }
 
             // 4. Set ETag for the next If-Match and return the post-write snapshot.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
@@ -333,15 +378,19 @@ public static class PositionOverrideEndpoints
 
         // ═══════════════════════════════════════════
         // 6. POST /api/admin/position-overrides/{overrideId:guid}/deactivate — Deactivate
-        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT.
+        //    Admin-strict If-Match required. Same 412/428/ETag contract as PUT. An optional
+        //    body carries `appliesFrom`: "no override from this date" (NR-P8); omitted means
+        //    today in Copenhagen.
         // ═══════════════════════════════════════════
         app.MapPost("/api/admin/position-overrides/{overrideId:guid}/deactivate", async (
             Guid overrideId,
+            PositionOverrideTransitionRequest? request,
             DbConnectionFactory connectionFactory,
             PositionOverrideRepository repo,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideDeactivated> deactivatedMapper,
             AuditProjectionRepository auditRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -362,8 +411,17 @@ public static class PositionOverrideEndpoints
             if (!string.Equals(existing.Status, "ACTIVE", StringComparison.Ordinal))
                 return Results.Json(new { error = "Only ACTIVE position overrides can be deactivated" }, statusCode: 409);
 
+            // 2b. The applies-from date: omitted means today in Copenhagen, read once; a future
+            //     date is refused here (R-18); the predecessor and Monday rules (switching off an
+            //     override that sets the weekly norm needs a Monday) inside DeactivateAsync.
+            var (appliesFrom, dateRefusal) = AppliesFromValidation.Resolve(
+                request?.AppliesFrom, CopenhagenBusinessDate.Today(timeProvider));
+            if (dateRefusal is not null)
+                return dateRefusal;
+
             // 3. Atomic deactivate (ADR-018 D3) — v3 DeactivateAsync(conn, tx, overrideId,
-            //    expectedVersion, ...) enforces ETag/If-Match optimistic concurrency.
+            //    expectedVersion, appliesFrom, ...) takes the key lock, enforces ETag/If-Match
+            //    optimistic concurrency, then the date rules, and writes the INACTIVE version row.
             SavePositionOverrideResult saveResult;
             try
             {
@@ -372,11 +430,13 @@ public static class PositionOverrideEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
-                    saveResult = await repo.DeactivateAsync(conn, tx, overrideId, expectedVersion, ct);
+                    saveResult = await repo.DeactivateAsync(
+                        conn, tx, overrideId, expectedVersion, appliesFrom, actorId, ct);
 
+                    // new_data is the head as written: INACTIVE, dated appliesFrom (AC-C2l).
                     await repo.AppendAuditAsync(
                         conn, tx, overrideId, "DEACTIVATED",
-                        JsonSerializer.Serialize(existing), null,
+                        JsonSerializer.Serialize(existing), JsonSerializer.Serialize(saveResult.Override),
                         actorId, actorRole,
                         versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
 
@@ -421,6 +481,11 @@ public static class PositionOverrideEndpoints
                     currentState = currentState is null ? null : MapEntityToResponse(currentState),
                 }, statusCode: 412);
             }
+            catch (AppliesFromRefusedException ex)
+            {
+                // Refused under the key lock, before any write; the inner catch rolled back.
+                return AppliesFromValidation.BadRequest(ex);
+            }
 
             // S118 / TASK-11800: the bespoke lifecycle envelope is now a named record.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
@@ -440,16 +505,21 @@ public static class PositionOverrideEndpoints
         //      - 412 (OptimisticConcurrencyException): caller's If-Match version stale OR
         //        the row is no longer INACTIVE on the FOR UPDATE re-read.
         //      - 409 (PostgresException SqlState=23505): a sibling override for the same
-        //        (agreement, ok, position) was concurrently activated, violating the
+        //        (agreement, ok, position) is ACTIVE, violating the
         //        partial-unique-index `idx_position_override_active_unique`.
+        //      - 400: the optional body's `appliesFrom` (NR-P8; omitted means today in
+        //        Copenhagen) is in the future, before the key's newest version, or not a
+        //        Monday when the activation changes the in-force weekly norm.
         // ═══════════════════════════════════════════
         app.MapPost("/api/admin/position-overrides/{overrideId:guid}/activate", async (
             Guid overrideId,
+            PositionOverrideTransitionRequest? request,
             DbConnectionFactory connectionFactory,
             PositionOverrideRepository repo,
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideActivated> activatedMapper,
             AuditProjectionRepository auditRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -470,12 +540,19 @@ public static class PositionOverrideEndpoints
             if (!string.Equals(existing.Status, "INACTIVE", StringComparison.Ordinal))
                 return Results.Json(new { error = "Only INACTIVE position overrides can be activated" }, statusCode: 409);
 
+            // 2b. The applies-from date: omitted means today in Copenhagen, read once; a future
+            //     date is refused here (R-18); the predecessor and Monday rules inside ActivateAsync.
+            var (appliesFrom, dateRefusal) = AppliesFromValidation.Resolve(
+                request?.AppliesFrom, CopenhagenBusinessDate.Today(timeProvider));
+            if (dateRefusal is not null)
+                return dateRefusal;
+
             // 3. Atomic activate (ADR-018 D3) — v3 ActivateAsync(conn, tx, overrideId,
-            //    expectedVersion, ...) enforces ETag/If-Match optimistic concurrency under
-            //    SELECT ... FOR UPDATE. The partial-unique-index may fire 23505 on the
-            //    UPDATE if a sibling override for the same (agreement, ok, position) raced
-            //    in an activation; that's a different race class than version concurrency,
-            //    so it's caught + mapped to 409 (NOT 412).
+            //    expectedVersion, appliesFrom, ...) takes the key lock, enforces ETag/If-Match
+            //    optimistic concurrency, then the date rules, and writes the ACTIVE version row.
+            //    The partial-unique-index may fire 23505 on the UPDATE if a sibling override for
+            //    the same (agreement, ok, position) is ACTIVE; that's a different race class than
+            //    version concurrency, so it's caught + mapped to 409 (NOT 412).
             SavePositionOverrideResult saveResult;
             try
             {
@@ -484,11 +561,13 @@ public static class PositionOverrideEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
-                    saveResult = await repo.ActivateAsync(conn, tx, overrideId, expectedVersion, ct);
+                    saveResult = await repo.ActivateAsync(
+                        conn, tx, overrideId, expectedVersion, appliesFrom, actorId, ct);
 
+                    // new_data is the head as written: ACTIVE, dated appliesFrom (AC-C2l).
                     await repo.AppendAuditAsync(
                         conn, tx, overrideId, "ACTIVATED",
-                        null, JsonSerializer.Serialize(existing),
+                        null, JsonSerializer.Serialize(saveResult.Override),
                         actorId, actorRole,
                         versionBefore: expectedVersion, versionAfter: saveResult.Version, ct);
 
@@ -550,6 +629,11 @@ public static class PositionOverrideEndpoints
                     error = "Another override is already ACTIVE for this (agreement, ok, position)",
                 });
             }
+            catch (AppliesFromRefusedException ex)
+            {
+                // Refused under the key lock, before any write; the inner catch rolled back.
+                return AppliesFromValidation.BadRequest(ex);
+            }
 
             // S118 / TASK-11800: the bespoke lifecycle envelope is now a named record.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
@@ -579,13 +663,36 @@ public static class PositionOverrideEndpoints
         MaxFlexBalance: e.MaxFlexBalance,
         NormPeriodWeeks: e.NormPeriodWeeks,
         WeeklyNormHours: e.WeeklyNormHours,
+        AppliesFrom: e.AppliesFrom,
         CreatedBy: e.CreatedBy,
         CreatedAt: e.CreatedAt,
         UpdatedAt: e.UpdatedAt,
         Description: e.Description);
 
+    /// <summary>
+    /// The CREATED and UPDATED audit rows' <c>new_data</c>: the request body's members, with the RESOLVED
+    /// applies-from date in place of the body's (an omitted date is recorded as today, never null; AC-C2l).
+    /// </summary>
+    private static string SerializeBodyForAudit(
+        string agreementCode, string okVersion, string positionCode,
+        decimal? maxFlexBalance, int? normPeriodWeeks, decimal? weeklyNormHours, string? description,
+        DateOnly appliesFrom) =>
+        JsonSerializer.Serialize(new
+        {
+            AgreementCode = agreementCode,
+            OkVersion = okVersion,
+            PositionCode = positionCode,
+            MaxFlexBalance = maxFlexBalance,
+            NormPeriodWeeks = normPeriodWeeks,
+            WeeklyNormHours = weeklyNormHours,
+            Description = description,
+            AppliesFrom = appliesFrom,
+        });
+
     // ── Request DTOs (co-located) ──
 
+    // AppliesFrom on every write (NR-P8, QUAL-182): optional on the wire; omitted means today in
+    // Copenhagen, never 0001-01-01 (a nullable member, A-14).
     private sealed class CreatePositionOverrideRequest
     {
         public required string AgreementCode { get; init; }
@@ -595,6 +702,7 @@ public static class PositionOverrideEndpoints
         public int? NormPeriodWeeks { get; init; }
         public decimal? WeeklyNormHours { get; init; }
         public string? Description { get; init; }
+        public DateOnly? AppliesFrom { get; init; }
     }
 
     private sealed class UpdatePositionOverrideRequest
@@ -606,5 +714,13 @@ public static class PositionOverrideEndpoints
         public int? NormPeriodWeeks { get; init; }
         public decimal? WeeklyNormHours { get; init; }
         public string? Description { get; init; }
+        public DateOnly? AppliesFrom { get; init; }
     }
+
+    /// <summary>
+    /// The deactivate and activate routes' optional body (the house pattern of
+    /// <c>OvertimeApprovalRequest?</c>): the date the transition applies from. Absent, <c>{}</c> or null
+    /// means today in Copenhagen (A-14).
+    /// </summary>
+    public record PositionOverrideTransitionRequest(DateOnly? AppliesFrom);
 }

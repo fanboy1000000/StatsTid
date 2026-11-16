@@ -33,6 +33,8 @@ public sealed record PositionOverrideResponse(
     decimal? MaxFlexBalance,
     int? NormPeriodWeeks,
     decimal? WeeklyNormHours,
+    // The head's applies-from date: the date of the override's newest version (NR-P8, QUAL-182).
+    DateOnly AppliesFrom,
     string CreatedBy,
     DateTime CreatedAt,
     DateTime UpdatedAt,

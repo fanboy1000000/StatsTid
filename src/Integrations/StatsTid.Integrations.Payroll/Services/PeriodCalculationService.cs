@@ -181,6 +181,13 @@ public sealed class PeriodCalculationService
     // _employeeProfileRepo (ruled R2, S144); the host-level /recalculate pin
     // (PayrollHostRecalcBlockedTests) is what catches a dropped registration.
     private readonly UserAgreementCodeRepository? _userAgreementCodeRepo;
+    // S148 TASK-14818 (QUAL-182, ADR-043 D12; ruling B2): optional repositories for the dated agreement
+    // configs and position overrides — feed the AgreementConfigPromotion and PositionOverrideEffective
+    // boundaries, so a month in which a new version starts splits at that day (ReadConfigVersionDatesAsync).
+    // Null-tolerant like _userAgreementCodeRepo: when null, both sources stay empty. The payroll host
+    // registers neither until TASK-14825 (DV-8), so no payroll run splits on them before wave 5.
+    private readonly AgreementConfigRepository? _agreementConfigRepo;
+    private readonly PositionOverrideRepository? _positionOverrideRepo;
     // S145 TASK-14508 (rulings R14, R25): the ONE source of the hours a calculation consumes —
     // payroll reads the employee's recorded rows itself instead of taking them from its caller.
     // Optional in the constructor (fixtures that only PLAN — the reflection-driven planning tests —
@@ -316,7 +323,9 @@ public sealed class PeriodCalculationService
         IRecordedHoursReader? hoursReader = null,
         IPriorPeriodApprovalReader? priorPeriodApprovalReader = null,
         IFlexLedgerReader? flexLedgerReader = null,
-        IEmploymentWindowResolverInTx? employmentWindowResolverInTx = null)
+        IEmploymentWindowResolverInTx? employmentWindowResolverInTx = null,
+        AgreementConfigRepository? agreementConfigRepo = null,
+        PositionOverrideRepository? positionOverrideRepo = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -387,6 +396,10 @@ public sealed class PeriodCalculationService
         // accepted cost — a dropped registration fails silently HERE — is covered at host level by
         // PayrollHostRecalcBlockedTests (a null repository → one segment → 200 instead of 422).
         _userAgreementCodeRepo = userAgreementCodeRepo;
+        // S148 TASK-14818 (ruling B2): null-tolerant — when unregistered, no AgreementConfigPromotion or
+        // PositionOverrideEffective boundaries are hydrated (both sources empty, as before QUAL-182).
+        _agreementConfigRepo = agreementConfigRepo;
+        _positionOverrideRepo = positionOverrideRepo;
         // S145 TASK-14508 (R25): NOT enforced here, deliberately — unlike the window resolver above,
         // whose absence is only ever a wiring defect, a PCS without a reader is a legitimate
         // plan-only instance (a test fixture that only plans never reads hours; S147 TASK-14716 removed
@@ -1964,10 +1977,17 @@ public sealed class PeriodCalculationService
             profile, periodStart, periodEnd, okTransitions, agreementCodeEffectiveDates,
             employmentWindows, employmentStartedDates, datedResolutions, ct);
 
+        // The dated agreement-config and position-override versions (QUAL-182, ADR-043 D12) — asked of the
+        // same dated record, one read per run of an unchanged key, through the same per-date cache: see
+        // ReadConfigVersionDatesAsync. Both empty when the two repositories are not wired (ruling B2).
+        var (agreementConfigPromotions, positionOverrideEffectiveDates) = await ReadConfigVersionDatesAsync(
+            profile, periodStart, periodEnd, okTransitions, agreementCodeEffectiveDates,
+            employeeProfileEffectiveDates, employmentWindows, employmentStartedDates, datedResolutions, ct);
+
         var sources = new BoundarySources(
             OkTransitions: okTransitions,
-            AgreementConfigPromotions: Array.Empty<(DateOnly, string)>(),
-            PositionOverrideEffectiveDates: Array.Empty<(DateOnly, string)>(),
+            AgreementConfigPromotions: agreementConfigPromotions,
+            PositionOverrideEffectiveDates: positionOverrideEffectiveDates,
             EuWtdRulesetTransitions: Array.Empty<(DateOnly, int, int)>(),
             NonDatedSourceValues: new Dictionary<string, object?>(),
             LocalProfileActivations: localProfileActivations,
@@ -2084,8 +2104,8 @@ public sealed class PeriodCalculationService
     /// date of every boundary source that lies inside <c>(periodStart, periodEnd]</c> (the planner's
     /// <c>BoundaryDetector.IsInsidePeriod</c> window). The planner's segment starts are a subset by
     /// construction: <c>BoundaryDetector</c> derives its boundaries from exactly these sources. Listing
-    /// every member of <see cref="BoundarySources"/>, including the ones this service leaves empty, keeps
-    /// the superset true if one of them is ever hydrated.
+    /// every member of <see cref="BoundarySources"/>, including the EU working-time source this service
+    /// leaves empty (no table), keeps the superset true if it is ever hydrated.
     /// </summary>
     private static SortedSet<DateOnly> CandidateSegmentStarts(
         BoundarySources sources, DateOnly periodStart, DateOnly periodEnd)
@@ -2344,6 +2364,172 @@ public sealed class PeriodCalculationService
             OrgId: record.OrgId,
             AgreementCode: record.AgreementCode,
             OkVersion: OkVersionResolver.ResolveVersion(day));
+    }
+
+    /// <summary>
+    /// S148 / TASK-14818 (QUAL-182, ADR-043 D12; rulings B2, B6) — the planner's two configuration sources: the
+    /// dates on which a new agreement-config version (<c>AgreementConfigPromotions</c>) or a new position-override
+    /// version (<c>PositionOverrideEffectiveDates</c>) of the employee's own key starts inside the period.
+    ///
+    /// <para>
+    /// <b>Plain language.</b> A GlobalAdmin can publish a configuration, or change a position override, "from" a
+    /// day. A month in which such a version starts is split at that day, so that each part can be paid under its
+    /// own version (payroll prices on dated configurations from wave 5, the T14b stack). Only the versions of the
+    /// agreement and position the employee actually held count, and only on the days they held them.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The runs</b>, the shape of <see cref="ReadLocalProfileActivationsAsync"/>. The period is cut at its
+    /// interior OK transitions and agreement-code dates (a config's key is (agreement, OK version)), and for
+    /// overrides also at its interior profile dates, where the position can change (an override's key is
+    /// (agreement, OK version, position)). Each interval's key comes from the employee's dated record, read on
+    /// the interval's first day, or on its first employment start when the employee is not employed that day,
+    /// through the plan's per-date cache (both days are EMPLOYED candidate segment starts, so no extra resolver
+    /// read). Consecutive intervals with an unchanged key merge into one run; an interval with no key (no
+    /// employed day, a record gap, or no position for an override) ends a run.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One read per run, its lower bound strict:</b> (the run's first day, the run's last day]. A version dated
+    /// a run's first day is that run's starting state, not a boundary. That day is a boundary already (the period
+    /// start, or the OK transition, agreement change or position change that started the run), so no split is
+    /// lost, and the segment keeps the cause that actually changed the key: a version dated the day the employee
+    /// changes agreement or position leaves <c>AgreementCodeChange</c> or <c>EmployeeProfileChange</c> on the
+    /// manifest, and <c>BoundaryDetector</c>'s cause order is untouched.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A superset is safe, a subset is not</b> (S144's rule): an extra date only adds a split; a missed one
+    /// would pay part of a month under the wrong version once payroll prices day by day. Configs count only
+    /// published versions (<c>published_at IS NOT NULL</c>, B-5); overrides count every version row, ACTIVE or
+    /// INACTIVE (switching an override off is a dated fact). Two versions on one date give one boundary. The runs
+    /// are disjoint and ascending, so each union is in date order.
+    /// </para>
+    ///
+    /// <para>
+    /// Reads only. Each list is empty when its repository is not wired: direct-construction fixtures, and the
+    /// payroll host until TASK-14825 registers the two repositories (DV-8).
+    /// </para>
+    /// </summary>
+    private async Task<(IReadOnlyList<(DateOnly Date, string AgreementCode)> Promotions,
+        IReadOnlyList<(DateOnly Date, string PositionCode)> OverrideDates)> ReadConfigVersionDatesAsync(
+        EmploymentProfile callerProfile,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        IReadOnlyList<(DateOnly Date, string FromVersion, string ToVersion)> okTransitions,
+        IReadOnlyList<DateOnly>? agreementCodeEffectiveDates,
+        IReadOnlyList<DateOnly>? employeeProfileEffectiveDates,
+        IReadOnlyList<EmploymentWindow>? employmentWindows,
+        IReadOnlyList<DateOnly>? employmentStartedDates,
+        Dictionary<DateOnly, DatedProfile> datedResolutions,
+        CancellationToken ct)
+    {
+        var promotions = new List<(DateOnly Date, string AgreementCode)>();
+        var overrideDates = new List<(DateOnly Date, string PositionCode)>();
+        if (_agreementConfigRepo is null && _positionOverrideRepo is null)
+            return (promotions, overrideDates);
+
+        void AddInterior(SortedSet<DateOnly> cuts, DateOnly date)
+        {
+            if (date > periodStart && date <= periodEnd)
+                cuts.Add(date);
+        }
+
+        // The interior dates on which a config's key can change (the agreement or the OK version).
+        var configCuts = new SortedSet<DateOnly>();
+        foreach (var transition in okTransitions)
+            AddInterior(configCuts, transition.Date);
+        foreach (var date in agreementCodeEffectiveDates ?? Array.Empty<DateOnly>())
+            AddInterior(configCuts, date);
+
+        // An override's key can also change where the position can: the employee_profiles dates.
+        var overrideCuts = new SortedSet<DateOnly>(configCuts);
+        foreach (var date in employeeProfileEffectiveDates ?? Array.Empty<DateOnly>())
+            AddInterior(overrideCuts, date);
+
+        // The day an interval's key is read on (the rule of IntervalActivationKeyAsync).
+        DateOnly? KeyDay(DateOnly first, DateOnly last)
+        {
+            if (IsEmployedOn(employmentWindows, first))
+                return first;
+            DateOnly? keyDay = null;
+            foreach (var start in employmentStartedDates ?? Array.Empty<DateOnly>())
+            {
+                if (start > first && start <= last
+                    && (keyDay is null || start < keyDay.Value)
+                    && IsEmployedOn(employmentWindows, start))
+                {
+                    keyDay = start;
+                }
+            }
+            return keyDay;
+        }
+
+        // Each interval's key, merged into runs of an unchanged key: (key, the run's first day, its last day).
+        async Task<List<(TKey Key, DateOnly AfterExclusive, DateOnly ToInclusive)>> RunsAsync<TKey>(
+            SortedSet<DateOnly> cuts, Func<EmploymentProfile, DateOnly, TKey?> keyOf)
+            where TKey : struct
+        {
+            var intervalStarts = new List<DateOnly>(cuts.Count + 1) { periodStart };
+            intervalStarts.AddRange(cuts);
+
+            var runs = new List<(TKey Key, DateOnly AfterExclusive, DateOnly ToInclusive)>();
+            TKey? previousKey = null;
+            for (var i = 0; i < intervalStarts.Count; i++)
+            {
+                var first = intervalStarts[i];
+                var last = i + 1 < intervalStarts.Count ? intervalStarts[i + 1].AddDays(-1) : periodEnd;
+
+                TKey? key = null;
+                if (KeyDay(first, last) is { } day
+                    && (await DatedResolutionAsync(callerProfile, day, datedResolutions, ct)).Profile is { } record)
+                {
+                    key = keyOf(record, day);
+                }
+
+                if (key is { } current)
+                {
+                    if (previousKey is { } previous && EqualityComparer<TKey>.Default.Equals(previous, current))
+                        runs[^1] = runs[^1] with { ToInclusive = last };
+                    else
+                        runs.Add((current, first, last));
+                }
+
+                previousKey = key;
+            }
+
+            return runs;
+        }
+
+        if (_agreementConfigRepo is not null)
+        {
+            var runs = await RunsAsync<(string AgreementCode, string OkVersion)>(
+                configCuts, (record, day) => (record.AgreementCode, OkVersionResolver.ResolveVersion(day)));
+            foreach (var run in runs)
+            {
+                var dates = await _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
+                    run.Key.AgreementCode, run.Key.OkVersion, run.AfterExclusive, run.ToInclusive, ct);
+                promotions.AddRange(dates.Select(date => (date, run.Key.AgreementCode)));
+            }
+        }
+
+        if (_positionOverrideRepo is not null)
+        {
+            var runs = await RunsAsync<(string AgreementCode, string OkVersion, string PositionCode)>(
+                overrideCuts,
+                (record, day) => string.IsNullOrEmpty(record.Position)
+                    ? null // no position, no override
+                    : (record.AgreementCode, OkVersionResolver.ResolveVersion(day), record.Position));
+            foreach (var run in runs)
+            {
+                var dates = await _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
+                    run.Key.AgreementCode, run.Key.OkVersion, run.Key.PositionCode,
+                    run.AfterExclusive, run.ToInclusive, ct);
+                overrideDates.AddRange(dates.Select(date => (date, run.Key.PositionCode)));
+            }
+        }
+
+        return (promotions, overrideDates);
     }
 
     /// <summary>
