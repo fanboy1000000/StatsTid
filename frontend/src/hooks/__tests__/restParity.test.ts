@@ -13,11 +13,17 @@
 // helper. `derogationAllowed`, `projectHours`, `expectedEngineWarningDates` and
 // `expectedEngineRestNotCheckedDays` are engine-only.
 //
+// Every finding the screen returns is accounted for: well formed (a date, an end time, whole
+// non-negative seconds), then exactly one of kept (dated inside the period), dated after it
+// (`EXPECTED_DROPPED`) or dated before it (`EXPECTED_BEFORE`); the three sizes sum to the total, so
+// a finding with no date or an early one cannot fall between the buckets.
+//
 // Kinds per row. F (fail on the screen's earlier pair rule, which compared the gap between two
 // days): the rows whose verdict moved under the look-back rule (split-day, long-shift,
 // daylight-saving, seconds, rounding, month-cut and missing-hour rows, and the older rows that now
-// date on the day the work ends). R (regression pins, green before and after): the rows with no
-// finding on either side.
+// date on the day the work ends), including `fall-back-night-is-an-hour-longer`, whose wrong
+// warning on the old screen carried no date. R (regression pins, green before and after): the rows
+// with no finding on either side.
 import { describe, it, expect } from 'vitest'
 import { analyzeRestPeriods, restDisplayHours, type RestPeriodWarning } from '../useSkema'
 import type { WorkTimeDay } from '../../types'
@@ -77,6 +83,9 @@ const EXPECTED_DROPPED: Record<string, string[]> = {
   'night-shift-over-the-upper-month-edge': ['2026-04-01@6.0'],
 }
 
+// The findings the screen returns dated before the period; no row has one.
+const EXPECTED_BEFORE: Record<string, string[]> = {}
+
 // The house rule is `import.meta.glob`, never `node:fs` (`clockGuard.test.ts`); the table lives
 // outside `frontend/`, so the glob is tried first and the non-vacuity test below catches a miss.
 const found = import.meta.glob('../../../../tests/StatsTid.Tests.Unit/TestData/rest-parity-scenarios.json', {
@@ -135,11 +144,23 @@ describe('rest parity table — the screen judges every row as the engine does',
 
       const byDate = new Map<string, RestPeriodWarning>()
       for (const date of datesOf(sc.periodStart, sc.periodEnd)) {
-        for (const w of analyzeRestPeriods(month, boundary, date) ?? []) byDate.set(w.date, w)
+        for (const w of analyzeRestPeriods(month, boundary, date) ?? []) {
+          // Shape first, before any filter can drop a malformed finding.
+          const wellFormed =
+            typeof w.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(w.date) &&
+            typeof w.endsAt === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(w.endsAt) &&
+            Number.isInteger(w.restSeconds) && w.restSeconds >= 0
+          expect(wellFormed, `${id}: malformed finding ${JSON.stringify(w)}`).toBe(true)
+          const seen = byDate.get(w.date)
+          if (seen) expect(w, `${id}: two open dates disagree on ${w.date}`).toEqual(seen)
+          byDate.set(w.date, w)
+        }
       }
       const all = [...byDate.values()]
       const kept = all.filter((w) => inPeriod(w.date))
       const dropped = all.filter((w) => w.date > sc.periodEnd)
+      const before = all.filter((w) => w.date < sc.periodStart)
+      expect(kept.length + dropped.length + before.length, `${id}: every finding is kept, after or before`).toBe(all.length)
 
       // Actual side through the helper under test; expected side straight from the table's value.
       const shown = (w: RestPeriodWarning) => `${w.date}@${restDisplayHours(w.restSeconds).toFixed(1)}`
@@ -148,6 +169,7 @@ describe('rest parity table — the screen judges every row as the engine does',
       )
       // The filter must not hide a disagreement: the dropped findings are exactly the ones named.
       expect(dropped.map(shown).sort()).toEqual(EXPECTED_DROPPED[id] ?? [])
+      expect(before.map(shown).sort()).toEqual(EXPECTED_BEFORE[id] ?? [])
     })
   }
 })
