@@ -11,9 +11,11 @@
 //         Resterende value render at 1 decimal while ALL comparisons stay exact.
 //   R6  — BOTH warning triggers, WARNING-ONLY (no VoluntaryUnsocialHours toggle —
 //         recorded follow-up): (i) worked > 9 t → the amber merarbejde/hvile Alert
-//         in the meta area; (ii) the §J adjacent-day 11-hour analysis over the
-//         served month + boundary workTime (pure analyzeRestPeriods), evaluated
-//         LIVE against the panel's current periods.
+//         in the meta area; (ii) the 11-hour rest rule judged on the 24 elapsed
+//         hours before each work end (Europe/Copenhagen), over the served month +
+//         boundary workTime (pure analyzeRestPeriods), evaluated LIVE against the
+//         panel's current periods; a browser without Danish time-zone data shows
+//         one informational line instead (never the device's zone).
 //   R11 — step 2 DISABLED until step 1 has hours; Færdig closes; "ugyldig" inline
 //         on invalid/reversed/overlapping periods; NO absence section, NO
 //         clock-in/out; the step-2 header carries the "Administrer projekter" link
@@ -35,7 +37,8 @@ import {
   periodsTotalHours,
   LONG_DAY_WARNING_HOURS,
   MAX_DAY_HOURS,
-  restGapDisplayHours,
+  restDisplayHours,
+  RestZoneUnavailableError,
   type ClockPeriod,
 } from '../hooks/useSkema'
 import { classifyAllocation, unallocated } from '../lib/allocation'
@@ -176,15 +179,21 @@ export function SkemaDayPanel({
   // R6 (i): intra-day long-day trigger.
   const longDay = worked > LONG_DAY_WARNING_HOURS
 
-  // R6 (ii): adjacent-day rest analysis, LIVE — overlay the panel's CURRENT
-  // periods onto the served month before running the pure helper.
-  const restWarnings = useMemo(() => {
+  // R6 (ii): rest analysis, LIVE — overlay the panel's CURRENT periods onto the served
+  // month before running the pure helper. Only the missing-zone-data error is caught (it
+  // becomes the informational line); any other error still throws.
+  const { restWarnings, restZoneMissing } = useMemo(() => {
     const overlayDay: WorkTimeDay = {
       date,
       intervals: list.map((p) => ({ start: p.from, end: p.to })),
     }
     const overlay = [...monthWorkTime.filter((wt) => wt.date !== date), overlayDay]
-    return analyzeRestPeriods(overlay, boundaryWorkTime, date)
+    try {
+      return { restWarnings: analyzeRestPeriods(overlay, boundaryWorkTime, date), restZoneMissing: false }
+    } catch (e) {
+      if (e instanceof RestZoneUnavailableError) return { restWarnings: null, restZoneMissing: true }
+      throw e
+    }
   }, [monthWorkTime, boundaryWorkTime, date, list])
 
   // S58 advisory mirrors (backend 422 authoritative).
@@ -276,7 +285,7 @@ export function SkemaDayPanel({
 
       <div className={styles.body}>
         {/* R6 warnings — the panel meta area (both advisory; rule engine definitive) */}
-        {(longDay || restWarnings) && (
+        {(longDay || restWarnings || restZoneMissing) && (
           <div className={styles.warnings}>
             {longDay && (
               <Alert variant="warning">
@@ -284,14 +293,20 @@ export function SkemaDayPanel({
                 til næste vagt.
               </Alert>
             )}
-            {restWarnings?.map((w) => (
-              <Alert key={`${w.fromDate}-${w.toDate}`} variant="warning">
-                Denne registrering giver kun {formatDanishNumber(restGapDisplayHours(w.gapHours), 1)} timers hvile
-                mellem {formatLongDanishDate(w.fromDate)} og {formatLongDanishDate(w.toDate)}.
-                Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din
-                leder og kan udløse kompenserende hvile.
+            {restZoneMissing && (
+              <Alert variant="info">
+                Hviletiden kan ikke kontrolleres i denne browser, fordi tidszonedata for Danmark
+                mangler.
               </Alert>
-            ))}
+            )}
+            {restWarnings?.map((w) => {
+              const shown = restDisplayHours(w.restSeconds)
+              return (
+                <Alert key={`${w.date}-${w.endsAt}`} variant="warning">
+                  {`Denne registrering giver kun ${formatDanishNumber(shown, 1)} ${shown === 1 ? 'times' : 'timers'} sammenhængende hvile i de 24 timer før arbejdet slutter ${formatLongDanishDate(w.date)} kl. ${w.endsAt.slice(0, 5)}. Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile.`}
+                </Alert>
+              )
+            })}
           </div>
         )}
 

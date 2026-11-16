@@ -7,7 +7,15 @@
 // March 2026 reference: Mar 1 = Sunday, Mar 9 = Monday.
 import { render, fireEvent, screen } from '@testing-library/react'
 import { SkemaDayPanel, type DayPanelPeriod } from '../SkemaDayPanel'
+import { analyzeRestPeriods, RestZoneUnavailableError } from '../../hooks/useSkema'
 import type { WorkTimeDay } from '../../types'
+
+// The zone-notice arm overrides `analyzeRestPeriods` for one test; the wrapper keeps the real
+// implementation for every other test (a module mock reaches only what the panel imports).
+vi.mock('../../hooks/useSkema', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../hooks/useSkema')>()
+  return { ...original, analyzeRestPeriods: vi.fn(original.analyzeRestPeriods) }
+})
 
 const PROJECTS = [
   { key: 'PRJ-A', label: 'Projekt Alfa' },
@@ -99,38 +107,89 @@ describe('SkemaDayPanel — R6 warnings (warning-ONLY, panel meta area)', () => 
     expect(screen.getByText(/Mere end 9 timers arbejde/)).toBeInTheDocument()
   })
 
-  it('R6: the adjacent-day 11-hour analysis warns from the served month workTime, LIVE against the panel periods', () => {
+  // S148 3b (RR-1, AC-S0-4f): the warning names the judged work end, not two days. Kind F. Red
+  // conditions: the text says "giver kun 8 timers hvile mellem søndag 8. marts og mandag 9. marts".
+  it('R6: the 24-hour look-back analysis warns from the served month workTime, LIVE against the panel periods', () => {
     const monthWorkTime: WorkTimeDay[] = [
       { date: '2026-03-08', intervals: [{ start: '12:00', end: '23:00' }] },
     ]
-    renderPanel({ monthWorkTime, periods: [per('p1', '07:00', '15:00')] }) // gap 8h
-    const warning = screen.getByText(/giver kun 8 timers hvile/)
-    expect(warning.textContent).toContain('søndag 8. marts')
-    expect(warning.textContent).toContain('mandag 9. marts')
-    expect(warning.textContent).toContain('kompenserende hvile')
+    renderPanel({ monthWorkTime, periods: [per('p1', '07:00', '15:00')] }) // 8h rest before 15:00
+    const warning = screen.getByText(/giver kun 8 timers sammenhængende hvile/)
+    expect(warning.textContent).toBe(
+      'Denne registrering giver kun 8 timers sammenhængende hvile i de 24 timer før arbejdet slutter mandag 9. marts kl. 15:00. ' +
+        'Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile.',
+    )
     expect(warning.closest('[role="alert"]')?.className).toContain('warning')
   })
 
-  // Kind F (S148 14814 fix-up 1). Red conditions: a rest of 8 h 27 min (8.45) is shown with
-  // `toFixed`, which works on the binary value, as "8,4"; the server rounds half up to 8.5.
-  it('S148: a rest of 8 h 27 min is shown rounded half up, "8,5 timers hvile"', () => {
+  // Kind F (S148 3b, adjudication item 9). Red conditions: the shown rest is rounded half up,
+  // "8,5". A rest of 8 h 27 min (8,45) is shown rounded down, "8,4", as the server shows it.
+  it('S148: a rest of 8 h 27 min is shown rounded down, "8,4 timers sammenhængende hvile"', () => {
     const monthWorkTime: WorkTimeDay[] = [
       { date: '2026-03-08', intervals: [{ start: '14:00', end: '22:00' }] },
     ]
     renderPanel({ monthWorkTime, periods: [per('p1', '06:27', '14:00')] })
-    expect(screen.getByText(/giver kun 8,5 timers hvile/)).toBeInTheDocument()
+    expect(screen.getByText(/giver kun 8,4 timers sammenhængende hvile/)).toBeInTheDocument()
   })
 
-  it('R6: the adjacent-day analysis uses the served boundaryWorkTime at the month edge', () => {
+  // Kind F (AC-S0-4e). Red conditions: 8 h 29 min 50 s rounds to two decimals first (8,49) and then
+  // up to 8,5; rounded once and down it is 8,4. The panel shows the typed seconds' figure (the save
+  // keeps hours and minutes, `toHHmm`).
+  it('S148: a typed rest of 8 h 29 min 50 s is shown once and rounded down, "8,4"', () => {
+    const monthWorkTime: WorkTimeDay[] = [
+      { date: '2026-03-08', intervals: [{ start: '14:00', end: '22:00' }] },
+    ]
+    renderPanel({ monthWorkTime, periods: [per('p1', '06:29:50', '14:00')] })
+    expect(screen.getByText(/giver kun 8,4 timers sammenhængende hvile/)).toBeInTheDocument()
+  })
+
+  // Kind F. Red conditions: the old pair rule finds no pair in one 23-hour day and shows no rest
+  // warning. When the shown rest is exactly 1 the copy reads "1 times" (adjudication item 17).
+  it('S148: a 23-hour day shows "giver kun 1 times sammenhængende hvile" and names the judged end', () => {
+    renderPanel({ periods: [per('p1', '00:30', '23:30')] })
+    expect(
+      screen.getByText(
+        /giver kun 1 times sammenhængende hvile i de 24 timer før arbejdet slutter mandag 9\. marts kl\. 23:30/,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  // Kind F. Red conditions: today the panel neither catches the zone error nor shows a notice.
+  it('S148: a browser without Danish time-zone data shows one informational line instead of a rest warning', () => {
+    const monthWorkTime: WorkTimeDay[] = [
+      { date: '2026-03-08', intervals: [{ start: '12:00', end: '23:00' }] },
+    ]
+    const mocked = vi.mocked(analyzeRestPeriods)
+    const real = mocked.getMockImplementation()
+    mocked.mockImplementation(() => {
+      throw new RestZoneUnavailableError()
+    })
+    try {
+      renderPanel({ monthWorkTime, periods: [per('p1', '07:00', '15:00')] })
+      const notice = screen.getByText(
+        'Hviletiden kan ikke kontrolleres i denne browser, fordi tidszonedata for Danmark mangler.',
+      )
+      expect(notice.closest('[role="alert"]')?.className).toContain('info')
+      expect(screen.queryByText(/sammenhængende hvile/)).toBeNull()
+    } finally {
+      mocked.mockImplementation(real!)
+    }
+  })
+
+  it('R6: the look-back analysis uses the served boundaryWorkTime at the month edge', () => {
     const boundaryWorkTime: WorkTimeDay[] = [
       { date: '2026-02-28', intervals: [{ start: '14:00', end: '23:30' }] },
     ]
     renderPanel({
       date: '2026-03-01',
       boundaryWorkTime,
-      periods: [per('p1', '06:00', '10:00')], // gap 6.5h to Feb 28's 23:30 end
+      periods: [per('p1', '06:00', '10:00')], // 6.5h rest from Feb 28's 23:30 end to 06:00
     })
-    expect(screen.getByText(/giver kun 6,5 timers hvile/)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /giver kun 6,5 timers sammenhængende hvile i de 24 timer før arbejdet slutter søndag 1\. marts kl\. 10:00/,
+      ),
+    ).toBeInTheDocument()
   })
 
   it('R6: there is NO VoluntaryUnsocialHours toggle in the warning context (recorded follow-up — warning-only)', () => {

@@ -1802,8 +1802,10 @@ describe('SkemaPage — W2 §J rest analysis over LOCAL edits', () => {
     drawer = await screen.findByRole('dialog')
     fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '06:00' } })
     fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '12:00' } })
-    expect(within(drawer).getByText(/giver kun 7 timers hvile/)).toBeInTheDocument()
-    expect(within(drawer).getByText(/mandag 2\. marts og tirsdag 3\. marts/)).toBeInTheDocument()
+    // S148 3b (RR-1): the warning names the judged work end (3 March 12:00), and shows only the 3rd's
+    // finding (2 March's own 9 h finding has no 3 March work in its window).
+    expect(within(drawer).getByText(/giver kun 7 timers sammenhængende hvile/)).toBeInTheDocument()
+    expect(within(drawer).getByText(/tirsdag 3\. marts kl\. 12:00/)).toBeInTheDocument()
   })
 })
 
