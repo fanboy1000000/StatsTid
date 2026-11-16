@@ -516,7 +516,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- (NULL = homed directly at the Organisation, e.g. org-level admins/directors). The
     -- always-present primary_org_id above is the derived/denormalized Organisation ancestor
     -- (set directly when unit_id IS NULL, else = the unit's organisation_id) — the authority/
-    -- payroll/config/JWT anchor (ADR-038 D1; ~100 consumers read it unchanged). unit_id itself
+    -- payroll/config/JWT anchor (ADR-038 D1; ~100 consumers read it unchanged) and the cache of the
+    -- user's current user_organisations row; the organisation's dated history is user_organisations
+    -- (S148 C-13, ADR-040 D4). unit_id itself
     -- carries NO scope (ADR-038 D5). The Organisation-home invariant on primary_org_id is
     -- unchanged (app-enforced); the unit-derive logic lands in S104 with the units CRUD.
     unit_id             UUID        NULL REFERENCES units(unit_id),
@@ -716,6 +718,48 @@ CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_assignment_id
 CREATE INDEX IF NOT EXISTS idx_user_agreement_codes_audit_user_id
     ON user_agreement_codes_audit (user_id);
 
+-- S148 C-13 / ADR-040 D4: the user's organisation as a dated history, in the user_agreement_codes
+-- shape (Case A insert, Case B same-day update in place, Case C close-and-open). effective_to is
+-- end-exclusive (ADR-018 D8). users.primary_org_id stays the access and JWT anchor (ADR-038 D1) and
+-- the cache of the row covering today. effective_from has NO DEFAULT (the one departure from
+-- user_agreement_codes): a writer that forgets the date fails at insert, never silently means
+-- "since always". No seed rows here; the startup backfill seeder writes them.
+CREATE TABLE IF NOT EXISTS user_organisations (
+    assignment_id    UUID         PRIMARY KEY,
+    user_id          TEXT         NOT NULL REFERENCES users(user_id),
+    org_id           TEXT         NOT NULL REFERENCES organizations(org_id),
+    effective_from   DATE         NOT NULL,
+    effective_to     DATE         NULL,
+    version          BIGINT       NOT NULL DEFAULT 1,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_organisations_live
+    ON user_organisations (user_id) WHERE effective_to IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_organisations_history
+    ON user_organisations (user_id, effective_from);
+
+-- user_organisations_audit: the user_agreement_codes_audit shape. version_before/version_after
+-- record the organisation ROW's own version. No FK on assignment_id (supersession creates
+-- FK-invalidating histories).
+CREATE TABLE IF NOT EXISTS user_organisations_audit (
+    audit_id          BIGSERIAL    PRIMARY KEY,
+    assignment_id     UUID         NOT NULL,
+    user_id           TEXT         NOT NULL,
+    action            TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+    previous_data     JSONB        NULL,
+    new_data          JSONB        NULL,
+    version_before    BIGINT       NULL,
+    version_after     BIGINT       NULL,
+    actor_id          TEXT         NOT NULL,
+    actor_role        TEXT         NOT NULL,
+    audit_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_organisations_audit_assignment_id
+    ON user_organisations_audit (assignment_id);
+CREATE INDEX IF NOT EXISTS idx_user_organisations_audit_user_id
+    ON user_organisations_audit (user_id);
+
 -- schema_migrations ledger entry — documentary for S34 greenfield-only, forward-
 -- compat marker if init.sql ever runs against an older database.
 INSERT INTO schema_migrations (migration_id, applied_at)
@@ -872,9 +916,38 @@ CREATE TABLE IF NOT EXISTS local_agreement_profiles (
     flex_carryover_max                  NUMERIC(6,2),
     max_overtime_hours_per_period       NUMERIC(6,2),
     overtime_requires_pre_approval      BOOLEAN,
+    -- Flex-settlement and office-hours settings (ADR-043 D6; S148 C-4, C-8, C-9). All nullable with
+    -- no DEFAULT: NULL = not set (ADR-017 D1). No upper ceiling on a cap (SEC-033). Cross-column
+    -- rules (office hours must sum to the norm, OFFICE_HOURS basis only where windows are set) are
+    -- the write's validation, not CHECKs. Values whose machinery arrives later are not in a CHECK.
+    flex_settlement_period              TEXT            CHECK (flex_settlement_period IN ('MONTH')),
+    flex_cap_test_period                TEXT            CHECK (flex_cap_test_period IN ('MONTH')),
+    flex_plus_cap_hours                 NUMERIC(6,2)    CHECK (flex_plus_cap_hours >= 0),
+    flex_minus_cap_hours                NUMERIC(6,2)    CHECK (flex_minus_cap_hours >= 0),
+    flex_daily_credit_cap_hours         NUMERIC(5,2)    CHECK (flex_daily_credit_cap_hours >= 0),
+    flex_above_cap_action               TEXT            CHECK (flex_above_cap_action IN ('FORFEIT')),
+    -- The leaving default (a positive balance forfeited and recorded, a negative one recorded, not
+    -- deducted) is PROVISIONAL (ADR-043 provisional item 8).
+    flex_leaving_action                 TEXT            CHECK (flex_leaving_action IN ('FORFEIT_POSITIVE_RECORD_NEGATIVE')),
+    office_hours_mon_start              TIME,
+    office_hours_mon_end                TIME,
+    office_hours_tue_start              TIME,
+    office_hours_tue_end                TIME,
+    office_hours_wed_start              TIME,
+    office_hours_wed_end                TIME,
+    office_hours_thu_start              TIME,
+    office_hours_thu_end                TIME,
+    office_hours_fri_start              TIME,
+    office_hours_fri_end                TIME,
+    paid_absence_credit_basis           TEXT            CHECK (paid_absence_credit_basis IN ('PARAGRAPH_7_NR_2', 'OFFICE_HOURS')),
     -- Metadata
     created_by                          TEXT            NOT NULL,
-    created_at                          TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+    created_at                          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    CONSTRAINT local_agreement_profiles_office_hours_mon_check CHECK ((office_hours_mon_start IS NULL AND office_hours_mon_end IS NULL) OR (office_hours_mon_start IS NOT NULL AND office_hours_mon_end IS NOT NULL AND office_hours_mon_start < office_hours_mon_end)),
+    CONSTRAINT local_agreement_profiles_office_hours_tue_check CHECK ((office_hours_tue_start IS NULL AND office_hours_tue_end IS NULL) OR (office_hours_tue_start IS NOT NULL AND office_hours_tue_end IS NOT NULL AND office_hours_tue_start < office_hours_tue_end)),
+    CONSTRAINT local_agreement_profiles_office_hours_wed_check CHECK ((office_hours_wed_start IS NULL AND office_hours_wed_end IS NULL) OR (office_hours_wed_start IS NOT NULL AND office_hours_wed_end IS NOT NULL AND office_hours_wed_start < office_hours_wed_end)),
+    CONSTRAINT local_agreement_profiles_office_hours_thu_check CHECK ((office_hours_thu_start IS NULL AND office_hours_thu_end IS NULL) OR (office_hours_thu_start IS NOT NULL AND office_hours_thu_end IS NOT NULL AND office_hours_thu_start < office_hours_thu_end)),
+    CONSTRAINT local_agreement_profiles_office_hours_fri_check CHECK ((office_hours_fri_start IS NULL AND office_hours_fri_end IS NULL) OR (office_hours_fri_start IS NOT NULL AND office_hours_fri_end IS NOT NULL AND office_hours_fri_start < office_hours_fri_end))
 );
 -- ADR-017 D1: at most one active (effective_to IS NULL) profile per scope.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_local_agreement_profile_active
@@ -901,6 +974,91 @@ CREATE TABLE IF NOT EXISTS local_agreement_profile_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_local_profile_audit_profile
     ON local_agreement_profile_audit(profile_id);
+
+-- S148 C-10 / ADR-043 D9: an institution's customary days (a paid day off or a closure day). A list
+-- of days, not a value, so a dated table beside the profile, keyed by organisation, not OK version.
+-- The day is exactly one of two forms: recurring (month + day) or a single date. A real calendar
+-- day (no 30 February) is the write's validation, not a CHECK. valid_to is end-exclusive (ADR-018
+-- D8); withdrawal and reinstatement are dated facts, never deletions. agreement_code optionally
+-- narrows a custom to one agreement. Nothing reads this for pay yet.
+CREATE TABLE IF NOT EXISTS customary_days (
+    custom_id       UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id          TEXT         NOT NULL REFERENCES organizations(org_id),
+    agreement_code  TEXT         NULL,
+    recurring_month SMALLINT     NULL CHECK (recurring_month BETWEEN 1 AND 12),
+    recurring_day   SMALLINT     NULL CHECK (recurring_day BETWEEN 1 AND 31),
+    single_date     DATE         NULL,
+    kind            TEXT         NOT NULL CHECK (kind IN ('PAID_DAY_OFF', 'CLOSURE_DAY')),
+    part            TEXT         NOT NULL CHECK (part IN ('WHOLE_DAY', 'FROM_TIME', 'HOURS')),
+    part_from_time  TIME         NULL,
+    part_hours      NUMERIC(4,2) NULL CHECK (part_hours > 0),
+    paid_mode       TEXT         NULL CHECK (paid_mode IN ('GIVEN_TO_ALL', 'ON_REQUEST')),
+    valid_from      DATE         NOT NULL,
+    valid_to        DATE         NULL,
+    version         BIGINT       NOT NULL DEFAULT 1,
+    created_by      TEXT         NOT NULL,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT customary_days_one_day_form_check CHECK (
+        (single_date IS NOT NULL AND recurring_month IS NULL AND recurring_day IS NULL)
+        OR (single_date IS NULL AND recurring_month IS NOT NULL AND recurring_day IS NOT NULL)),
+    CONSTRAINT customary_days_part_from_time_check CHECK ((part = 'FROM_TIME') = (part_from_time IS NOT NULL)),
+    CONSTRAINT customary_days_part_hours_check CHECK ((part = 'HOURS') = (part_hours IS NOT NULL)),
+    CONSTRAINT customary_days_paid_mode_check CHECK ((kind = 'PAID_DAY_OFF') = (paid_mode IS NOT NULL)),
+    CONSTRAINT customary_days_valid_to_check CHECK (valid_to IS NULL OR valid_to > valid_from)
+);
+CREATE INDEX IF NOT EXISTS idx_customary_days_org ON customary_days (org_id);
+
+CREATE TABLE IF NOT EXISTS customary_days_audit (
+    audit_id        BIGSERIAL    PRIMARY KEY,
+    custom_id       UUID         NOT NULL,
+    org_id          TEXT         NOT NULL,
+    action          TEXT         NOT NULL CHECK (action IN ('CREATED', 'WITHDRAWN', 'REINSTATED')),
+    previous_data   JSONB        NULL,
+    new_data        JSONB        NULL,
+    version_before  BIGINT       NULL,
+    version_after   BIGINT       NULL,
+    actor_id        TEXT         NOT NULL,
+    actor_role      TEXT         NOT NULL,
+    timestamp       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_customary_days_audit_custom ON customary_days_audit (custom_id);
+
+-- S148 C-11 / ADR-043 D4: the two facts HR records about a person, dated in the employee_profiles
+-- shape. A separate table on purpose: as columns of employee_profiles every edit would be an
+-- employee-profile change, which payroll treats as a month boundary. NULL = not recorded. Which
+-- regime values an agreement allows is the write's validation, not a CHECK. effective_from has NO
+-- DEFAULT (the one departure from employee_profiles): a writer that forgets the date fails at insert.
+CREATE TABLE IF NOT EXISTS employee_hr_facts (
+    facts_id        UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    employee_id     TEXT         NOT NULL REFERENCES users(user_id),
+    overtime_regime TEXT         NULL CHECK (overtime_regime IN ('OVERTIME', 'EXEMPT', 'CONTRACTUAL', 'DISCRETIONARY', 'NONE')),
+    on_flex_scheme  BOOLEAN      NULL,
+    effective_from  DATE         NOT NULL,
+    effective_to    DATE         NULL,
+    version         BIGINT       NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_hr_facts_live
+    ON employee_hr_facts (employee_id) WHERE effective_to IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_hr_facts_history
+    ON employee_hr_facts (employee_id, effective_from);
+
+CREATE TABLE IF NOT EXISTS employee_hr_facts_audit (
+    audit_id        BIGSERIAL    PRIMARY KEY,
+    facts_id        UUID         NOT NULL,
+    employee_id     TEXT         NOT NULL,
+    action          TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
+    previous_data   JSONB        NULL,
+    new_data        JSONB        NULL,
+    version_before  BIGINT       NULL,
+    version_after   BIGINT       NULL,
+    actor_id        TEXT         NOT NULL,
+    actor_role      TEXT         NOT NULL,
+    timestamp       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_employee_hr_facts_audit_facts ON employee_hr_facts_audit (facts_id);
 
 -- Period approval workflow
 CREATE TABLE IF NOT EXISTS approval_periods (
@@ -1393,6 +1551,10 @@ CREATE TABLE IF NOT EXISTS agreement_configs (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     published_at            TIMESTAMPTZ,
     archived_at             TIMESTAMPTZ,
+    -- The day from which this config applies (ADR-014, ADR-043 D12). Mandatory and deliberately
+    -- WITHOUT a DEFAULT: a writer that forgets the date must fail at insert, never silently mean
+    -- "in force since always". The seeds below write '0001-01-01' (the history-covering anchor).
+    applies_from            DATE        NOT NULL,
     cloned_from_id          UUID        REFERENCES agreement_configs(config_id),
     description             TEXT,
     -- S122 / TASK-12200 (P6 compensation-vocabulary authority gap) construction-enforcement:
@@ -1461,63 +1623,63 @@ CREATE INDEX IF NOT EXISTS idx_compensatory_rest_status
 
 -- Seed 10 agreement configs from CentralAgreementConfigs (status=ACTIVE)
 -- AC OK24
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('AC', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'AC OK24 — Standard akademiker agreement')
+('AC', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'AC OK24 — Standard akademiker agreement')
 ON CONFLICT DO NOTHING;
 
 -- AC OK26
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('AC', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'AC OK26 — Standard akademiker agreement')
+('AC', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'AC OK26 — Standard akademiker agreement')
 ON CONFLICT DO NOTHING;
 
 -- HK OK24
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('HK', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 100.0, 100.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'HK OK24 — Handels- og kontorfunktionærer')
+('HK', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 100.0, 100.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'HK OK24 — Handels- og kontorfunktionærer')
 ON CONFLICT DO NOTHING;
 
 -- HK OK26
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('HK', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 100.0, 100.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'HK OK26 — Handels- og kontorfunktionærer')
+('HK', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 100.0, 100.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'HK OK26 — Handels- og kontorfunktionærer')
 ON CONFLICT DO NOTHING;
 
 -- PROSA OK24
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('PROSA', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 120.0, 120.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'PROSA OK24 — IT-faglig organisation')
+('PROSA', 'OK24', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 120.0, 120.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'PROSA OK24 — IT-faglig organisation')
 ON CONFLICT DO NOTHING;
 
 -- PROSA OK26
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('PROSA', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 120.0, 120.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'PROSA OK26 — IT-faglig organisation')
+('PROSA', 'OK26', 'ACTIVE', 37.0, 1, 'WEEKLY_HOURS', 1924, 120.0, 120.0, TRUE, FALSE, 37.0, 40.0, TRUE, TRUE, TRUE, TRUE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, TRUE, 0.33, TRUE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, TRUE, 17, TRUE, 'AFSPADSERING', TRUE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'PROSA OK26 — IT-faglig organisation')
 ON CONFLICT DO NOTHING;
 
 -- AC_RESEARCH OK24
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('AC_RESEARCH', 'OK24', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'AC_RESEARCH OK24 — Researchers (annual norm 1924h)')
+('AC_RESEARCH', 'OK24', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'AC_RESEARCH OK24 — Researchers (annual norm 1924h)')
 ON CONFLICT DO NOTHING;
 
 -- AC_RESEARCH OK26
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('AC_RESEARCH', 'OK26', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'AC_RESEARCH OK26 — Researchers (annual norm 1924h)')
+('AC_RESEARCH', 'OK26', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1924, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'AC_RESEARCH OK26 — Researchers (annual norm 1924h)')
 ON CONFLICT DO NOTHING;
 
 -- AC_TEACHING OK24
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('AC_TEACHING', 'OK24', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1680, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'AC_TEACHING OK24 — Teaching staff (1680h annual norm)')
+('AC_TEACHING', 'OK24', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1680, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'AC_TEACHING OK24 — Teaching staff (1680h annual norm)')
 ON CONFLICT DO NOTHING;
 
 -- AC_TEACHING OK26
-INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, description)
+INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_hours, norm_period_weeks, norm_model, annual_norm_hours, max_flex_balance, flex_carryover_max, has_overtime, has_merarbejde, overtime_threshold_50, overtime_threshold_100, evening_supplement_enabled, night_supplement_enabled, weekend_supplement_enabled, holiday_supplement_enabled, evening_start, evening_end, night_start, night_end, evening_rate, night_rate, weekend_saturday_rate, weekend_sunday_rate, holiday_rate, on_call_duty_enabled, on_call_duty_rate, call_in_work_enabled, call_in_minimum_hours, call_in_rate, travel_time_enabled, working_travel_rate, non_working_travel_rate, max_daily_hours, minimum_rest_hours, rest_period_derogation_allowed, weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed, default_compensation_model, employee_compensation_choice, max_overtime_hours_per_period, overtime_requires_pre_approval, created_by, published_at, applies_from, description)
 VALUES
-('AC_TEACHING', 'OK26', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1680, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), 'AC_TEACHING OK26 — Teaching staff (1680h annual norm)')
+('AC_TEACHING', 'OK26', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1680, 150.0, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'AC_TEACHING OK26 — Teaching staff (1680h annual norm)')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
@@ -1548,6 +1710,10 @@ CREATE TABLE IF NOT EXISTS position_override_configs (
     flex_carryover_max  DECIMAL,
     norm_period_weeks   INT,
     weekly_norm_hours   DECIMAL,
+    -- The date of this head row's current state (ADR-043 D12); the dated history is
+    -- position_override_config_versions. Mandatory, no DEFAULT: a writer that forgets the date
+    -- must fail at insert, never silently mean "in force since always".
+    applies_from        DATE        NOT NULL,
     created_by          TEXT        NOT NULL DEFAULT 'SYSTEM_SEED',
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1570,6 +1736,25 @@ CREATE TABLE IF NOT EXISTS position_override_config_audit (
     timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- The override's dated version history (NR-P8, ADR-043 D12). APPEND-ONLY: writers only insert;
+-- nothing updates or deletes a row. position_override_configs stays the editable head row and keeps
+-- its id, ETag and audit trail. The in-force read takes the newest version on or before the day
+-- (greatest applies_from, then greatest recorded_at). recorded_at comes from the clock at insert,
+-- never from a writer (NR-P16). applies_from has no DEFAULT: a writer that forgets it fails at insert.
+CREATE TABLE IF NOT EXISTS position_override_config_versions (
+    version_id          BIGSERIAL   PRIMARY KEY,
+    override_id         UUID        NOT NULL REFERENCES position_override_configs(override_id),
+    applies_from        DATE        NOT NULL,
+    state               TEXT        NOT NULL CHECK (state IN ('ACTIVE', 'INACTIVE')),
+    max_flex_balance    DECIMAL,
+    norm_period_weeks   INT,
+    weekly_norm_hours   DECIMAL,
+    recorded_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    recorded_by         TEXT        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_position_override_config_versions_read
+    ON position_override_config_versions (override_id, applies_from, recorded_at);
+
 CREATE TABLE IF NOT EXISTS wage_type_mapping_audit (
     audit_id        BIGSERIAL   PRIMARY KEY,
     time_type       TEXT        NOT NULL,
@@ -1586,12 +1771,20 @@ CREATE TABLE IF NOT EXISTS wage_type_mapping_audit (
 );
 
 -- Seed position overrides from PositionOverrideConfigs.cs (4 overrides)
-INSERT INTO position_override_configs (agreement_code, ok_version, position_code, status, max_flex_balance, norm_period_weeks, created_by, description) VALUES
-    ('AC', 'OK24', 'DEPARTMENT_HEAD', 'ACTIVE', 200.0, 4, 'SYSTEM_SEED', 'Kontorchef: higher flex cap, 4-week norm'),
-    ('AC', 'OK26', 'DEPARTMENT_HEAD', 'ACTIVE', 200.0, 4, 'SYSTEM_SEED', 'Kontorchef: higher flex cap, 4-week norm'),
-    ('AC', 'OK24', 'RESEARCHER', 'ACTIVE', NULL, 4, 'SYSTEM_SEED', 'Forsker: 4-week norm period'),
-    ('AC', 'OK26', 'RESEARCHER', 'ACTIVE', NULL, 4, 'SYSTEM_SEED', 'Forsker: 4-week norm period')
+INSERT INTO position_override_configs (agreement_code, ok_version, position_code, status, max_flex_balance, norm_period_weeks, applies_from, created_by, description) VALUES
+    ('AC', 'OK24', 'DEPARTMENT_HEAD', 'ACTIVE', 200.0, 4, '0001-01-01', 'SYSTEM_SEED', 'Kontorchef: higher flex cap, 4-week norm'),
+    ('AC', 'OK26', 'DEPARTMENT_HEAD', 'ACTIVE', 200.0, 4, '0001-01-01', 'SYSTEM_SEED', 'Kontorchef: higher flex cap, 4-week norm'),
+    ('AC', 'OK24', 'RESEARCHER', 'ACTIVE', NULL, 4, '0001-01-01', 'SYSTEM_SEED', 'Forsker: 4-week norm period'),
+    ('AC', 'OK26', 'RESEARCHER', 'ACTIVE', NULL, 4, '0001-01-01', 'SYSTEM_SEED', 'Forsker: 4-week norm period')
 ON CONFLICT DO NOTHING;
+
+-- One version row per seeded override, in force since always (state ACTIVE, the head's values).
+-- Idempotent on a re-run: an override that already has a version row is skipped.
+INSERT INTO position_override_config_versions (override_id, applies_from, state, max_flex_balance, norm_period_weeks, weekly_norm_hours, recorded_by)
+SELECT h.override_id, '0001-01-01', 'ACTIVE', h.max_flex_balance, h.norm_period_weeks, h.weekly_norm_hours, 'SYSTEM_SEED'
+FROM position_override_configs h
+WHERE h.created_by = 'SYSTEM_SEED'
+  AND NOT EXISTS (SELECT 1 FROM position_override_config_versions v WHERE v.override_id = h.override_id);
 
 -- ============================================================
 -- SPRINT 15: Entitlement Management Tables

@@ -125,7 +125,7 @@ public sealed class AgreementConfigRepository
             weekly_max_hours_reference_period, voluntary_unsocial_hours_allowed,
             default_compensation_model, employee_compensation_choice,
             max_overtime_hours_per_period, overtime_requires_pre_approval,
-            created_by, description, cloned_from_id,
+            created_by, description, cloned_from_id, applies_from,
             created_at, updated_at
         ) VALUES (
             @configId, @agreementCode, @okVersion, @status,
@@ -142,7 +142,7 @@ public sealed class AgreementConfigRepository
             @weeklyMaxHoursReferencePeriod, @voluntaryUnsocialHoursAllowed,
             @defaultCompensationModel, @employeeCompensationChoice,
             @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
-            @createdBy, @description, @clonedFromId,
+            @createdBy, @description, @clonedFromId, @appliesFrom,
             NOW(), NOW()
         )
         """;
@@ -663,6 +663,7 @@ public sealed class AgreementConfigRepository
         cmd.Parameters.AddWithValue("employeeCompensationChoice", entity.EmployeeCompensationChoice);
         cmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", entity.MaxOvertimeHoursPerPeriod);
         cmd.Parameters.AddWithValue("overtimeRequiresPreApproval", entity.OvertimeRequiresPreApproval);
+        cmd.Parameters.AddWithValue("appliesFrom", entity.AppliesFrom);
     }
 
     private static async Task<IReadOnlyList<AgreementConfigEntity>> ReadEntitiesAsync(NpgsqlCommand cmd, CancellationToken ct)
@@ -727,6 +728,7 @@ public sealed class AgreementConfigRepository
         ArchivedAt = reader.IsDBNull(reader.GetOrdinal("archived_at")) ? null : reader.GetDateTime(reader.GetOrdinal("archived_at")),
         ClonedFromId = reader.IsDBNull(reader.GetOrdinal("cloned_from_id")) ? null : reader.GetGuid(reader.GetOrdinal("cloned_from_id")),
         Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
+        AppliesFrom = reader.GetFieldValue<DateOnly>(reader.GetOrdinal("applies_from")),
         Version = reader.GetInt64(reader.GetOrdinal("version")),
     };
 }
