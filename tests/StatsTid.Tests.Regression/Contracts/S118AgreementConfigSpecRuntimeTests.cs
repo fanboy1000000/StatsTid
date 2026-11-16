@@ -152,7 +152,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     /// <c>{configId}</c> fallback. Exact-201 status + matcher + the EXACT 47-member key set
     /// (both directions). ETag "1" = the RETURNING-hydrated first-create version.</summary>
     [Fact]
-    public async Task Create_Post201Exact_RulingOnePin_Always48MemberFullEntity()
+    public async Task Create_Post201Exact_RulingOnePin_AlwaysFullEntity()
     {
         using var admin = Admin();
         using var response = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
@@ -187,7 +187,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     /// <c>clonedFromId</c> = the source id (the lineage member the dead fallback could never
     /// carry) and the copied ANNUAL_ACTIVITY normModel exercising the second enum value.</summary>
     [Fact]
-    public async Task Clone_Post201Exact_RulingOnePin_Always48MemberFullEntity()
+    public async Task Clone_Post201Exact_RulingOnePin_AlwaysFullEntity()
     {
         using var admin = Admin();
         var (sourceId, _, _) = await CreateConfigAsync(admin, "S118AGC_CLN", normModel: "ANNUAL_ACTIVITY");

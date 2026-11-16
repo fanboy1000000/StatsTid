@@ -3,7 +3,7 @@
 // One editor instance per (org, agreement, OkVersion). Renders:
 //   - A header with profile metadata + a disabled "deactivate" button
 //     (no DELETE endpoint yet — see deferred-items note below).
-//   - Five overridable fields with an "Override central" toggle. When the
+//   - Four overridable fields with an "Override central" toggle. When the
 //     toggle is OFF the central value is shown read-only and the saved
 //     value is NULL ("inherit central"). When ON the user types a value
 //     and that value is what gets PUT.
@@ -46,7 +46,7 @@ const OVERRIDABLE_BOOL_FIELDS: { key: OverridableBoolField; label: string; backe
 ]
 
 // Read-only central fields — every AgreementConfig field that is NOT one of the
-// 5 overridable ones, minus the bookkeeping fields (configId, status, dates,
+// 4 overridable ones, minus the bookkeeping fields (configId, status, dates,
 // etc.). The labels are Danish and intentionally minimal.
 interface ReadOnlyFieldSpec {
   key: keyof AgreementConfig

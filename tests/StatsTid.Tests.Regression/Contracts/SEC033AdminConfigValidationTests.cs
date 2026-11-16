@@ -241,7 +241,7 @@ public sealed class SEC033AdminConfigValidationTests : IAsyncLifetime
              "minAge": {{minAge}}, "description": "SEC-033 validation", "fullDayOnly": false }
            """;
 
-    /// <summary>Position-override body; all four numeric fields are raw JSON tokens so "null"
+    /// <summary>Position-override body; all three numeric fields are raw JSON tokens so "null"
     /// (don't-override) and literals both go on the wire verbatim.</summary>
     private static string PositionOverrideJson(
         string maxFlexBalance = "120.5",

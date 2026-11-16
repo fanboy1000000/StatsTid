@@ -619,7 +619,7 @@ public static class ConfigEndpoints
     }
 
     /// <summary>
-    /// PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion} request body. The five
+    /// PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion} request body. The four
     /// nullable fields map directly to the overridable columns of LocalAgreementProfile —
     /// NULL means "inherit central." EffectiveFrom is required and must align per
     /// LocalAgreementProfileAlignmentPolicies for any field whose value changed.

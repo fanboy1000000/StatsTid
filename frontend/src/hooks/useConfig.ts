@@ -36,7 +36,7 @@ export { parseVersionFromETag, formatVersionAsIfMatch } from '../lib/etag'
 
 /**
  * Local agreement profile (S21 / ADR-017 D1, S22 / ADR-018 D7) — the GENERATED
- * spec row. The five overridable fields are nullable — NULL means "inherit
+ * spec row. The four overridable fields are nullable — NULL means "inherit
  * central." `version` doubles as the optimistic-concurrency token; the ETag
  * wire form is the quoted decimal (see `lib/etag.ts`).
  */

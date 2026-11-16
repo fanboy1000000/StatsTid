@@ -628,8 +628,8 @@ public sealed class LocalAgreementProfileMigrator
     // -------------------------------------------------------------------
     /// <summary>
     /// Parses the JSON-encoded <c>config_value</c> string into the type expected by the
-    /// matching profile column. Mirrors <c>ConfigResolutionService.TryParseDecimal</c>:
-    /// values may be raw numbers/booleans or JSON-quoted strings containing a number/bool.
+    /// matching profile column. Values may be raw numbers/booleans or JSON-quoted strings
+    /// containing a number/bool.
     /// </summary>
     private static bool TryParseConfigValue(
         string configKey, string rawJson, out object? parsedValue, out string? error)

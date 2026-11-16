@@ -74,7 +74,7 @@ beforeEach(() => {
   mockFetch.mockReset()
 })
 
-// A full 14-member spec profile (LocalAgreementProfileResponse).
+// A full 13-member spec profile (LocalAgreementProfileResponse).
 const profile = {
   profileId: '11111111-2222-3333-4444-555555555555',
   orgId: 'STY02',

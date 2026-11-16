@@ -2660,7 +2660,7 @@ $$;
 --   EmployeeProfile (S31) / UserAgreementCode (S34).
 --
 -- Schema per ADR-024 L38: 6 boolean disablers + tri-state
--- merarbejde_compensation_right (D2) + 4 quantitative nullable overrides.
+-- merarbejde_compensation_right (D2) + 3 quantitative nullable overrides (ADR-024 listed four; the flex-carryover one retired in S148, ADR-043 D6).
 -- Composite natural key (employment_category, agreement_code, ok_version).
 --
 -- Audit columns follow agreement_config_audit pattern (actor_id, actor_role,

@@ -15,7 +15,7 @@ namespace StatsTid.Backend.Api.Contracts;
 // REFUSED (P4-open BY DESIGN): agreementCode / okVersion / positionCode — agreement data.
 
 /// <summary>
-/// The position-override row — ONE record for the four entity-success sites (list, by-id,
+/// The position-override row — ONE record for the five entity-success sites (list, by-id,
 /// agreement list, create 201, PUT 200; the S112 sibling-record rule). <c>version</c> is the
 /// row-version optimistic-concurrency token surfaced in-body for If-Match composition.
 /// The 412 error-body <c>currentState</c> envelopes stay anonymous/untyped (S118 exclusion).
