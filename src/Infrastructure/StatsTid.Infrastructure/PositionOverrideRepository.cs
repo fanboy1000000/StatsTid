@@ -174,13 +174,16 @@ public sealed class PositionOverrideRepository
     /// inside the same transaction BEFORE the caller's audit/outbox/audit-projection appends (ADR-018 D3).
     ///
     /// <para>
-    /// A dated write (NR-P8, NR-P21; TASK-14818 items 4.4, 4.5, 7): the key lock first (every head of the
-    /// key <c>FOR UPDATE</c> in id order, ruling B4), then the date rules against the key's newest version
+    /// A dated write (NR-P8, NR-P21; TASK-14818 items 4.4, 4.5, 7): the key lock first
+    /// (<see cref="LockKeyAsync"/>: the key's advisory lock, then every head of the key <c>FOR UPDATE</c> in
+    /// id order; ruling B4, S148 Step 5a ruling 1.1), then the date rules against the key's newest version
     /// (not before it; a Monday when the in-force weekly norm changes, the closed list's one override
     /// field), then the head row dated <paramref name="appliesFrom"/>, then its version row. The head's
-    /// <c>applies_from</c> is always <paramref name="appliesFrom"/>, never the entity's member. Two creates
-    /// of a key with no head lock nothing; the single-ACTIVE index refuses the second (23505), so they
-    /// cannot both commit. The caller commits or rolls back; this method does NOT.
+    /// <c>applies_from</c> is always <paramref name="appliesFrom"/>, never the entity's member. Creates of a
+    /// key take turns on the advisory lock even when the key has no head, so a later create's date rules see
+    /// every committed version; one that passes them while another override of the key is ACTIVE is refused
+    /// by the single-ACTIVE index (23505, the route's 409). The caller commits or rolls back; this method
+    /// does NOT.
     /// </para>
     /// </summary>
     /// <exception cref="AppliesFromRefusedException">Thrown before anything is written.</exception>
@@ -592,17 +595,42 @@ public sealed class PositionOverrideRepository
     }
 
     /// <summary>
-    /// The key lock (TASK-14818 item 4.4, ruling B4): every head of (agreement, OK version, position)
-    /// <c>FOR UPDATE</c>, in id order, as an override write's first lock. Every writer of the key takes the
-    /// same rows in the same order, so they take turns without deadlocking, and a waiter wakes holding all
-    /// of them (the key columns never change). Its next statement, at READ COMMITTED, sees the write it
-    /// waited for, so the key's newest version it reads is the committed one. In Block C's order
-    /// (PLAN:282-283) this is "the override row FOR UPDATE", ahead of the version row the write inserts.
+    /// The key lock of (agreement, OK version, position) (TASK-14818 item 4.4, ruling B4; S148 Step 5a
+    /// ruling 1.1), an override write's first lock, taken by all four writers. Two statements, in order:
+    /// <list type="number">
+    /// <item>A transaction-scoped advisory lock named after the key,
+    /// <c>hashtext('position-override-' || agreement || '|' || OK version || '|' || position)</c>, in the
+    /// single-key space (never the two-integer space). It exists even when the key has no row, so the first
+    /// writers of a key take turns too; a row lock alone would let a create that passed the date rules
+    /// commit after a later-dated create and switch-off, leaving a version dated before committed ones.
+    /// It is a statement of its own, so each statement after it, at READ COMMITTED, takes a fresh snapshot
+    /// and sees the write the waiter waited for.</item>
+    /// <item>Every head of the key <c>FOR UPDATE</c>, in id order (the rows the write then changes; every
+    /// writer takes them in the same order, so they cannot deadlock).</item>
+    /// </list>
+    /// <para>
+    /// The lock order of an override write (Block C, PLAN-s148, ruling 1.1): (1) the pay-inputs lock
+    /// (148, 1) at the route head, TASK-14823's, which these routes do not take yet; (2) this advisory lock;
+    /// (3) the heads <c>FOR UPDATE</c>; (4) the head write, then the version row; (5) the audit, outbox and
+    /// projection rows, then TASK-14823's worklist rows. Only override writers take the
+    /// <c>position-override-</c> lock, and a transaction holding it takes no other advisory lock afterwards,
+    /// so a 32-bit hash collision with another lock family costs a wait, never a deadlock.
+    /// </para>
     /// </summary>
     private static async Task LockKeyAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string agreementCode, string okVersion, string positionCode, CancellationToken ct)
     {
+        await using (var advisoryCmd = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('position-override-' || @agreementCode || '|' || @okVersion || '|' || @positionCode))",
+            conn, tx))
+        {
+            advisoryCmd.Parameters.AddWithValue("agreementCode", agreementCode);
+            advisoryCmd.Parameters.AddWithValue("okVersion", okVersion);
+            advisoryCmd.Parameters.AddWithValue("positionCode", positionCode);
+            await advisoryCmd.ExecuteScalarAsync(ct);
+        }
+
         await using var cmd = new NpgsqlCommand(
             """
             SELECT override_id FROM position_override_configs

@@ -892,6 +892,8 @@ public static class AgreementConfigEndpoints
         CreatedAt: e.CreatedAt,
         UpdatedAt: e.UpdatedAt,
         PublishedAt: e.PublishedAt,
+        // The row mapper's rule (B-5, QUAL-182): an unpublished row shows null.
+        AppliesFrom: e.PublishedAt is null ? null : e.AppliesFrom,
         ArchivedAt: e.ArchivedAt,
         ClonedFromId: e.ClonedFromId,
         Description: e.Description,

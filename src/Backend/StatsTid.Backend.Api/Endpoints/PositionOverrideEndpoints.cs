@@ -184,6 +184,17 @@ public static class PositionOverrideEndpoints
                     throw;
                 }
             }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                // Another override of this (agreement_code, ok_version, position_code) is ACTIVE:
+                // `idx_position_override_active_unique` (WHERE status='ACTIVE') refused the INSERT,
+                // after the key lock and the date rules (TASK-14818 item 4.4: 23505 → 409, the
+                // activate route's answer). The inner catch rolled back; nothing was written.
+                return Results.Conflict(new
+                {
+                    error = "Another override is already ACTIVE for this (agreement, ok, position)",
+                });
+            }
             catch (AppliesFromRefusedException ex)
             {
                 // Refused under the key lock, before any write; the inner catch rolled back.
