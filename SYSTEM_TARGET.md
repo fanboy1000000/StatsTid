@@ -269,17 +269,17 @@ The agreement management UI must support:
 The system must enforce working time limits mandated by EU directive 2003/88/EC and Danish implementation (Arbejdstidsloven). These constraints directly affect time registration validity and may generate compensatory payroll entries.
 
 #### Rest Period Validation
-- **Daily rest**: Minimum 11 consecutive hours rest per 24-hour period
+- **Daily rest**: Minimum 11 consecutive hours rest per 24-hour period: at the end of every piece of work, the 24 hours before it must hold at least 11 unbroken hours of rest, measured in elapsed Danish time, so no work may end more than 13 hours after the last full rest (owner Q2, S148)
 - **Weekly rest day**: Minimum 1 uninterrupted rest period of 24 hours per 7-day period (in addition to 11-hour daily rest)
 - The system must validate registered time entries against these limits
 - Violations must generate warnings visible to the employee and their leader
-- Some agreements allow temporary derogation from the 11-hour rule — this must be configurable per agreement (`RestPeriodDerogationAllowed`, `MinimumRestHours`)
+- Some agreements allow temporary derogation from the 11-hour rule — this must be configurable per agreement (`RestPeriodDerogationAllowed`, `MinimumRestHours`). The derogation softens only a rest of 8 hours or more (Statens arbejdstidsaftale § 12, BEK 606 § 19); its limit of once per 7 days and the compensatory rest it requires are not yet checked (QUAL-254)
 
 #### Real-Time Rest Period Feedback (Skema UI)
 
-When an employee registers time in Skema, the UI must perform **client-side rest period analysis** against existing registrations for adjacent days. If the new or edited entry would reduce the rest period below 11 hours (based on the previous day's end time or the next day's start time), the UI must:
+When an employee registers time in Skema, the UI must perform **client-side rest period analysis** against existing registrations for adjacent days. If the new or edited entry would reduce the rest period below 11 hours (the longest unbroken rest in the 24 hours before any work end, over the loaded month and its neighbouring days), the UI must:
 
-1. **Show an inline warning** on the time entry explaining the situation: e.g. "Denne registrering giver kun 9 timers hvile mellem [dato] og [dato]. Det udløser kompenserende hvile, medmindre du selv har valgt at arbejde på dette tidspunkt."
+1. **Show an inline warning** on the time entry explaining the situation: e.g. "Denne registrering giver kun 8 timers sammenhængende hvile i de 24 timer før arbejdet slutter onsdag 11. marts kl. 14:00. Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile."
 2. **Prompt the employee to decide**: Present the `VoluntaryUnsocialHours` toggle directly in the warning context — not buried in a settings menu. The employee makes an active, informed choice at the moment of registration.
 3. **Show the consequence**: If the employee does NOT mark it as voluntary, the warning should clarify that the registration will be flagged as a rest period breach, visible to their leader, and may trigger compensatory rest.
 
@@ -306,7 +306,7 @@ Implementation requirements:
 - Agreement-level configuration: `VoluntaryUnsocialHoursAllowed` (boolean) — some agreements may not permit this opt-out
 
 #### Daily Working Time Limits
-- `MaxDailyHours` per agreement config (default: no explicit limit, but implied by rest rules ≈ 13 hours)
+- `MaxDailyHours` per agreement config (default: no explicit limit, but implied by the rest rule: no work may end more than 13 hours after the last full 11-hour rest)
 - Registrations exceeding the daily maximum must be flagged
 - The NormCheckRule must validate daily limits in addition to period-based norm
 

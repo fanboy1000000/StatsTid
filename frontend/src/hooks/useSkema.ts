@@ -687,7 +687,7 @@ export const LONG_DAY_WARNING_HOURS = 9
     backend 422 guard stays authoritative — this is inline advisory only. */
 export const MAX_DAY_HOURS = 24
 
-/** §J / SYSTEM_TARGET minimum daily rest between two working days, in hours. */
+/** §J / SYSTEM_TARGET minimum rest, in hours: the longest unbroken rest in the 24 hours before a work end. */
 export const REST_MINIMUM_HOURS = 11
 
 /**
@@ -768,23 +768,28 @@ export function overlappingPeriodIndices(periods: readonly ClockPeriod[]): Set<n
   return out
 }
 
-/** One rest the 11-hour rule judged too short (R6 trigger ii). */
+/**
+ * One finding of the 24-hour look-back rule: the longest unbroken rest in the 24 elapsed hours
+ * before a work end was below the minimum.
+ */
 export interface RestPeriodWarning {
-  /** The exact rest gap in hours (2-decimal). */
-  gapHours: number
-  /** The earlier group's day: the day the shift whose end starts the rest began ("YYYY-MM-DD"). */
-  fromDate: string
-  /** The later group's day: the day whose first start ends the rest ("YYYY-MM-DD"). */
-  toDate: string
+  /** The day the judged work ends ("YYYY-MM-DD"); the server dates its finding the same way. */
+  date: string
+  /** The judged work end as typed, "HH:mm" or "HH:mm:ss" (a typed 23:59 stays "23:59"). */
+  endsAt: string
+  /** The longest unbroken rest in the window, whole seconds, unrounded. Show it through `restDisplayHours`. */
+  restSeconds: number
 }
 
-function addDays(date: string, delta: number): string {
-  const d = new Date(date + 'T00:00:00')
-  d.setDate(d.getDate() + delta)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${dd}`
+/**
+ * Raised when the runtime cannot resolve Europe/Copenhagen. There is no fallback to the device's
+ * zone (OQ-11, OQ-12); the day panel catches this error only and says the rest cannot be checked.
+ */
+export class RestZoneUnavailableError extends Error {
+  constructor() {
+    super('The runtime has no Europe/Copenhagen time-zone data')
+    this.name = 'RestZoneUnavailableError'
+  }
 }
 
 /** Whole days since the epoch for a "YYYY-MM-DD" date (UTC, so DST never shifts it). */
@@ -792,67 +797,184 @@ function dayNumber(date: string): number {
   return Math.round(Date.parse(date + 'T00:00:00Z') / 86_400_000)
 }
 
-/** One shift: valid intervals joined across midnight, on a continuous minute clock. */
-interface RestShift {
-  startDate: string
-  startMin: number
-  endDate: string
-  endMin: number
+/** Calendar-date arithmetic in UTC day numbers, never the browser's zone. */
+function addDays(date: string, delta: number): string {
+  return new Date((dayNumber(date) + delta) * 86_400_000).toISOString().slice(0, 10)
 }
 
-const LAST_CLOCK_MINUTE = 23 * 60 + 59
+/** The last day of the month `date` is in ("YYYY-MM-DD"). */
+function lastDayOfMonth(date: string): string {
+  const [y, m] = date.split('-').map(Number)
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+}
+
+let copenhagenWallFormat: Intl.DateTimeFormat | null = null
+
+/** The formatter that reads a UTC instant as Copenhagen wall time; throws `RestZoneUnavailableError`. */
+function copenhagenFormat(): Intl.DateTimeFormat {
+  if (copenhagenWallFormat) return copenhagenWallFormat
+  try {
+    const f = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Copenhagen',
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    if (f.resolvedOptions().timeZone !== 'Europe/Copenhagen') throw new RestZoneUnavailableError()
+    copenhagenWallFormat = f
+    return f
+  } catch {
+    throw new RestZoneUnavailableError()
+  }
+}
+
+/** Copenhagen wall time of a UTC instant (epoch seconds), as epoch seconds read as if UTC. */
+function copenhagenWallSeconds(utcSeconds: number): number {
+  const p: Record<string, number> = {}
+  for (const part of copenhagenFormat().formatToParts(new Date(utcSeconds * 1000))) {
+    if (part.type !== 'literal') p[part.type] = Number(part.value)
+  }
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) / 1000
+}
+
+const SECONDS_PER_DAY = 86_400
+/** A typed end at or after 23:59 is the end of the day: 00:00 of the next date (Skema cannot type 24:00). */
+const LAST_CLOCK_SECOND = 23 * 3600 + 59 * 60
 
 /**
- * Joins every day's VALID intervals (both ends parse, end after start) into shifts, as the engine
+ * A typed (date, time of day) as an instant in epoch seconds, in Europe/Copenhagen elapsed time.
+ * An end at 23:59 or later is 00:00 of the next date. October's repeated hour (02:00-02:59) is the
+ * earlier instant for a start and the later for an end; March's missing hour is the changeover
+ * instant (01:00 UTC), as the engine reads it.
+ */
+function toInstant(date: string, secondOfDay: number, isEnd: boolean): number {
+  let day = dayNumber(date)
+  let second = secondOfDay
+  if (isEnd && second >= LAST_CLOCK_SECOND) {
+    day += 1
+    second = 0
+  }
+  const wall = day * SECONDS_PER_DAY + second
+  // Copenhagen is +1 h or +2 h from UTC: the candidates whose wall time reads back as typed.
+  const hits = [wall - 7200, wall - 3600].filter((utc) => copenhagenWallSeconds(utc) === wall)
+  if (hits.length === 0) return Math.floor(wall / 3600) * 3600 - 3600 // the missing hour
+  return isEnd ? hits[hits.length - 1] : hits[0]
+}
+
+/** One valid interval, as typed and as elapsed instants. */
+interface RestInterval {
+  date: string
+  startSecond: number
+  endSecond: number
+  start: number
+  end: number
+}
+
+/** The clock time of a whole-second value as typed: "HH:mm", or "HH:mm:ss" when seconds are present. */
+function clockText(second: number): string {
+  const hh = String(Math.floor(second / 3600)).padStart(2, '0')
+  const mm = String(Math.floor((second % 3600) / 60)).padStart(2, '0')
+  const ss = second % 60
+  return ss === 0 ? `${hh}:${mm}` : `${hh}:${mm}:${String(ss).padStart(2, '0')}`
+}
+
+/** The typed clock time in whole seconds since midnight, or null when invalid (as `parseClockTime`). */
+function parseClockSeconds(value: string): number | null {
+  const m = String(value).trim().match(/^(\d{1,2})[.:]?(\d{2})(?::(\d{2}))?$/)
+  if (!m) return null
+  const h = Number(m[1])
+  const mi = Number(m[2])
+  const s = m[3] ? Number(m[3]) : 0
+  if (h > 23 || mi > 59 || s > 59) return null
+  return h * 3600 + mi * 60 + s
+}
+
+/**
+ * Joins every day's VALID intervals (both ends parse, end after start) into stints, as the engine
  * does: an interval ending at 23:59 or later on day D and one starting at exactly 00:00 on D + 1
- * are one shift, and the join repeats, so a chain over several midnights is one shift. Nothing
+ * are one stint, and the join repeats, so a chain over several midnights is one stint. Nothing
  * else joins.
  */
-function joinShifts(byDate: ReadonlyMap<string, WorkTimeDay>): RestShift[] {
-  const intervals: Array<{ date: string; s: number; e: number }> = []
+function joinStints(byDate: ReadonlyMap<string, WorkTimeDay>): RestInterval[][] {
+  const intervals: RestInterval[] = []
   for (const [date, wt] of byDate) {
     for (const iv of wt.intervals ?? []) {
-      const s = parseClockTime(iv.start)
-      const e = parseClockTime(iv.end)
-      if (s !== null && e !== null && e > s) intervals.push({ date, s, e })
+      const startSecond = parseClockSeconds(iv.start)
+      const endSecond = parseClockSeconds(iv.end)
+      if (startSecond === null || endSecond === null || endSecond <= startSecond) continue
+      intervals.push({
+        date,
+        startSecond,
+        endSecond,
+        start: toInstant(date, startSecond, false),
+        end: toInstant(date, endSecond, true),
+      })
     }
   }
-  intervals.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.s - b.s || a.e - b.e))
+  intervals.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.startSecond - b.startSecond || a.endSecond - b.endSecond))
 
-  const shifts: RestShift[] = []
-  // date -> the shift whose latest interval ends on that date at 23:59 or later
-  const reachesMidnight = new Map<string, RestShift>()
-  for (const { date, s, e } of intervals) {
-    const base = dayNumber(date) * 1440
-    const joined = s === 0 ? reachesMidnight.get(addDays(date, -1)) : undefined
-    const shift: RestShift = joined ?? { startDate: date, startMin: base + s, endDate: date, endMin: base + e }
-    shift.endDate = date
-    shift.endMin = base + e
-    if (!joined) shifts.push(shift)
-    if (e >= LAST_CLOCK_MINUTE) reachesMidnight.set(date, shift)
+  const stints: RestInterval[][] = []
+  // date -> the stint whose latest interval ends on that date at 23:59 or later
+  const reachesMidnight = new Map<string, RestInterval[]>()
+  for (const iv of intervals) {
+    const joined = iv.startSecond === 0 ? reachesMidnight.get(addDays(iv.date, -1)) : undefined
+    const stint = joined ?? []
+    stint.push(iv)
+    if (!joined) stints.push(stint)
+    if (iv.endSecond >= LAST_CLOCK_SECOND) reachesMidnight.set(iv.date, stint)
   }
-  return shifts
+  return stints
+}
+
+/** The longest stretch of `[end - 24 h, end]` not covered by work (only the inside part of a rest counts). */
+function longestRestSeconds(work: ReadonlyArray<{ start: number; end: number }>, end: number): number {
+  const windowStart = end - SECONDS_PER_DAY
+  let cursor = windowStart
+  let best = 0
+  for (const block of work) {
+    if (block.end <= windowStart) continue
+    if (block.start >= end) break
+    best = Math.max(best, Math.max(block.start, windowStart) - cursor)
+    cursor = Math.max(cursor, Math.min(block.end, end))
+  }
+  return Math.max(best, end - cursor)
+}
+
+/** A judged work end: its day, how it was typed, and what was judged. */
+interface JudgedEnd {
+  date: string
+  endsAt: string
+  end: number
+  restSeconds: number
+  /** The dates of the stint's intervals that the judgement covers. */
+  stintDates: Set<string>
 }
 
 /**
- * R6 (trigger ii) — the SYSTEM_TARGET §J 11-hour rest analysis, client-side and WARNING-ONLY: it
- * gives the instant warning on unsaved edits while the rule engine stays the authority and runs the
- * same algorithm, which the shared scenario table (`rest-parity-scenarios.json`, `restParity.test.ts`
+ * R6 (trigger ii) — the 11-hour rest rule as the authority tests it, client-side and WARNING-ONLY:
+ * the instant warning on unsaved edits, while the rule engine stays the authority and runs the same
+ * algorithm, which the shared scenario table (`rest-parity-scenarios.json`, `restParity.test.ts`
  * and the engine's `RestParityTableTests`) keeps honest.
  *
- * Shifts are joined at midnight (Skema cannot type 24:00, so a night shift is 22:00–23:59 plus
- * 00:00–06:00), grouped by the day they START, and each group is compared with the next: the rest
- * runs from the earlier group's latest end to the later group's earliest start. `fromDate` is the
- * earlier group's day and `toDate` the later group's. At month edges the adjacent day resolves from
- * the served `boundaryWorkTime` (month entries win on duplicate dates). The minimum is the fixed
+ * At the end of each stint of work (intervals joined at midnight: Skema cannot type 24:00, so a
+ * night shift is 22:00-23:59 plus 00:00-06:00), look 24 ELAPSED hours back in Europe/Copenhagen
+ * (never the browser's zone): the longest unbroken rest in that window, in whole seconds, must be
+ * at least `REST_MINIMUM_HOURS`. Unregistered time is rest; overlapping work is one block; work
+ * typed inside March's missing hour has no length but its end is still judged. A finding is dated
+ * the day its work ends; a day with several failing ends gets the lowest value (the earliest end on
+ * a tie). A stint running past the open date's month is also judged as ending at 24:00 on the
+ * month's last day, as that month sees it, and in full. The minimum is the fixed
  * `REST_MINIMUM_HOURS`; the served one is a later task's. The screen does not apply the engine's
  * voluntary-unsocial-hours exemption or its derogation severity, and uses the fixed minimum; the
- * table proves the rest computation only. An overlap never shows a negative rest: the shown gap is
- * clamped at 0 while the comparison stays on the true value.
+ * table proves the rest computation only.
  *
- * For the open `date`, returns each too-short rest for which `date` is the later group's day, the
- * earlier group's day, or a day the earlier group's shift runs on past its start day (earlier rest
- * first), or null when there is none.
+ * For the open `date`, returns each finding dated `date`, whose judged stint has an interval on
+ * `date`, or whose 24-hour window holds work on `date` (ordered by date, then end), or null when
+ * there is none. Throws `RestZoneUnavailableError` when the runtime has no Europe/Copenhagen data.
  */
 export function analyzeRestPeriods(
   monthWorkTime: readonly WorkTimeDay[],
@@ -863,38 +985,69 @@ export function analyzeRestPeriods(
   for (const wt of boundaryWorkTime ?? []) byDate.set(wt.date, wt)
   for (const wt of monthWorkTime) byDate.set(wt.date, wt) // month entries win
 
-  const groups = new Map<string, { startMin: number; endMin: number; runsOn: Set<string> }>()
-  for (const shift of joinShifts(byDate)) {
-    let g = groups.get(shift.startDate)
-    if (!g) {
-      g = { startMin: shift.startMin, endMin: shift.endMin, runsOn: new Set() }
-      groups.set(shift.startDate, g)
-    }
-    g.startMin = Math.min(g.startMin, shift.startMin)
-    g.endMin = Math.max(g.endMin, shift.endMin)
-    for (let d = addDays(shift.startDate, 1); d <= shift.endDate; d = addDays(d, 1)) g.runsOn.add(d)
+  const stints = joinStints(byDate)
+  const allIntervals = stints.flat()
+  // Work as elapsed time: intervals with a length, merged into blocks.
+  const work: Array<{ start: number; end: number }> = []
+  for (const iv of [...allIntervals].filter((x) => x.end > x.start).sort((a, b) => a.start - b.start)) {
+    const last = work[work.length - 1]
+    if (last && iv.start <= last.end) last.end = Math.max(last.end, iv.end)
+    else work.push({ start: iv.start, end: iv.end })
   }
-  const ordered = [...groups.entries()].sort((a, b) => a[1].startMin - b[1].startMin)
 
-  const warnings: RestPeriodWarning[] = []
-  for (let i = 0; i + 1 < ordered.length; i++) {
-    const [fromDate, earlier] = ordered[i]
-    const [toDate, later] = ordered[i + 1]
-    const gapMin = later.startMin - earlier.endMin
-    if (gapMin >= REST_MINIMUM_HOURS * 60) continue
-    if (date === toDate || date === fromDate || earlier.runsOn.has(date)) {
-      warnings.push({ gapHours: round2(Math.max(0, gapMin) / 60), fromDate, toDate })
+  const monthEnd = lastDayOfMonth(date)
+  const judged: JudgedEnd[] = []
+  for (const stint of stints) {
+    // The stint's latest end (the first of equal ones), dated by the interval that carries it.
+    const carrier = stint.reduce((a, b) => (b.end > a.end ? b : a))
+    judged.push({
+      date: carrier.date,
+      endsAt: clockText(carrier.endSecond),
+      end: carrier.end,
+      restSeconds: longestRestSeconds(work, carrier.end),
+      stintDates: new Set(stint.map((iv) => iv.date)),
+    })
+    if (carrier.date > monthEnd && stint[0].date <= monthEnd) {
+      const cutCarrier = stint.filter((iv) => iv.date === monthEnd).reduce((a, b) => (b.endSecond > a.endSecond ? b : a))
+      const cutEnd = toInstant(monthEnd, LAST_CLOCK_SECOND, true)
+      judged.push({
+        date: monthEnd,
+        endsAt: clockText(cutCarrier.endSecond),
+        end: cutEnd,
+        restSeconds: longestRestSeconds(work, cutEnd),
+        stintDates: new Set(stint.filter((iv) => iv.date <= monthEnd).map((iv) => iv.date)),
+      })
     }
   }
-  return warnings.length > 0 ? warnings : null
+
+  // One finding per day: the lowest value, the earliest end on a tie.
+  const perDay = new Map<string, JudgedEnd>()
+  for (const j of judged) {
+    if (j.restSeconds >= REST_MINIMUM_HOURS * 3600) continue
+    const kept = perDay.get(j.date)
+    if (!kept || j.restSeconds < kept.restSeconds || (j.restSeconds === kept.restSeconds && j.end < kept.end)) {
+      perDay.set(j.date, j)
+    }
+  }
+
+  const shown = [...perDay.values()]
+    .filter(
+      (j) =>
+        j.date === date ||
+        j.stintDates.has(date) ||
+        allIntervals.some((iv) => iv.date === date && iv.start < j.end && iv.end > j.end - SECONDS_PER_DAY && iv.end > iv.start),
+    )
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.end - b.end))
+  return shown.length > 0 ? shown.map((j) => ({ date: j.date, endsAt: j.endsAt, restSeconds: j.restSeconds })) : null
 }
 
 /**
- * A rest as shown: one decimal, halves rounded up, as the server's value and message round it.
- * (`toFixed` works on the binary value and shows 8,45 as 8,4.) Works on the 2-decimal `gapHours`.
+ * A rest as shown: hours to one decimal, ROUNDED DOWN once from the unrounded seconds (tenths of an
+ * hour are 360 s), as the server shows it, so a breach never shows the minimum itself (10 h 59 min
+ * is 10,9). The verdict itself is decided on the unrounded `restSeconds`.
  */
-export function restGapDisplayHours(gapHours: number): number {
-  return Math.round(Math.round(gapHours * 100) / 10) / 10
+export function restDisplayHours(restSeconds: number): number {
+  return Math.floor(restSeconds / 360) / 10
 }
 
 // ════════════════════════════════════════════════════════════════════════════

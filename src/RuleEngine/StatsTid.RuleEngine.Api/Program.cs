@@ -1,7 +1,14 @@
 using StatsTid.Auth;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
+
+// The Copenhagen time-zone startup gate, first, as in the Backend (owner ruling OQ-11): a host
+// that cannot resolve Europe/Copenhagen refuses to boot instead of failing a compliance call. The
+// daily rest check measures elapsed hours in that zone, which this host passes to the rule; the
+// rule never looks it up itself (ADR-002).
+CopenhagenBusinessDate.EnsureHostZoneResolves();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -135,7 +142,7 @@ app.MapPost("/api/rules/check-compliance", (CheckComplianceRequest request) =>
         request.Profile.AgreementCode, request.Profile.OkVersion, request.Profile.Position);
     var result = RestPeriodRule.Evaluate(
         request.Profile, request.Entries, request.PeriodStart, request.PeriodEnd, config,
-        request.WorkIntervals);
+        request.WorkIntervals, CopenhagenBusinessDate.Zone);
     return Results.Ok(result);
 }).RequireAuthorization("Authenticated");
 

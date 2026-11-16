@@ -552,14 +552,17 @@ public static class SkemaEndpoints
             }
 
             // ── S72 / TASK-7201 — boundary-day workTime (SPRINT-72 R6 input) ──
-            // EXACTLY two extra days — the last day of the previous month and the first day
+            // EXACTLY three extra days — the last two days of the previous month and the first day
             // of the next month — so the client-side §J 11-hour rest analysis has the
-            // adjacent registrations at month edges. Same row shape as `workTime`; days
-            // without a registration serve no row (consistent with the month array).
+            // adjacent registrations at month edges: a work end on the 1st is judged on the 24
+            // hours before it, and the day before the 1st can be 23 hours long (QUAL-253). Same row
+            // shape as `workTime`, in ascending date order; days without a registration serve no
+            // row (consistent with the month array).
             // Each boundary day belongs to its own month, and a manager sees nothing of a month
-            // the employee has not submitted (RES-002): for a leader-tier read a boundary row is
-            // served only when its month is submitted, by the month gate's own predicate
-            // (ApprovalVisibility.IsSubmittedToManager, above). The employee and HR-or-above get both.
+            // the employee has not submitted (RES-002): for a leader-tier read boundary rows are
+            // served only when their month is submitted, by the month gate's own predicate
+            // (ApprovalVisibility.IsSubmittedToManager, above); one previous-month status decides
+            // both previous days. The employee and HR-or-above get all three.
             // Read after the month gate above, so a leader refused there costs none of these reads.
             var prevBoundaryDay = monthStart.AddDays(-1);
             var nextBoundaryDay = monthEnd.AddDays(1);
@@ -571,7 +574,7 @@ public static class SkemaEndpoints
                     employeeId, nextBoundaryDay, nextBoundaryDay.AddMonths(1).AddDays(-1), ct))?.Status);
             var prevBoundaryRows = servePrevBoundary
                 ? await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                    employeeId, prevBoundaryDay, prevBoundaryDay, ct)
+                    employeeId, monthStart.AddDays(-2), prevBoundaryDay, ct)
                 : Array.Empty<WorkTimeProjectionRow>();
             var nextBoundaryRows = serveNextBoundary
                 ? await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(

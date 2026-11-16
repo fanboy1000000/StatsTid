@@ -314,17 +314,22 @@ public sealed class SkemaRowPreferencesMonthGetTests : IAsyncLifetime
     // ───────────────────── boundaryWorkTime ─────────────────────
 
     /// <summary>
-    /// EXACTLY two extra days are served — the previous month's LAST day and the next
-    /// month's FIRST day. Registrations one day further out (noise) must NOT leak in, and
-    /// the in-month <c>workTime</c> array must not absorb the boundary rows.
+    /// S148 3b (RR-7): EXACTLY three extra days are served — the previous month's last TWO days and the
+    /// next month's FIRST day (the rest check reads two days before the month). Registrations one day
+    /// further out (noise: 28 April, 2 June) must NOT leak in, and the in-month <c>workTime</c> array
+    /// must not absorb the boundary rows.
+    /// Kind <b>F (CI)</b> (re-pinned at 3b: was <c>BoundaryWorkTime_ExactlyTwoDays_NoiseExcluded</c>, two
+    /// rows). Red conditions (the wave-3 engine): the previous side serves only 30 April, so the count
+    /// is 2 and the date list lacks 2025-04-29.
     /// </summary>
     [Fact]
-    public async Task BoundaryWorkTime_ExactlyTwoDays_NoiseExcluded()
+    public async Task BoundaryWorkTime_ExactlyThreeDays_NoiseExcluded()
     {
         var orgId = NewOrgId();
         var emp = await SeedEmployeeAsync(orgId);
-        // Viewing 2025-05: boundaries are 2025-04-30 and 2025-06-01.
-        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 29), "08:00", "16:00", outboxId: 1); // noise
+        // Viewing 2025-05: boundaries are 2025-04-29, 2025-04-30 and 2025-06-01.
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 28), "08:00", "16:00", outboxId: 1); // noise (S148 3b: was 29 April)
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 29), "07:00", "15:00", outboxId: 5); // S148 3b: now served
         await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 30), "09:00", "17:00", outboxId: 2);
         await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 6, 1), "10:00", "18:00", outboxId: 3);
         await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 6, 2), "08:00", "12:00", outboxId: 4); // noise
@@ -332,17 +337,19 @@ public sealed class SkemaRowPreferencesMonthGetTests : IAsyncLifetime
         var body = await GetMonthAsync(emp, orgId, 2025, 5);
 
         var boundary = body.GetProperty("boundaryWorkTime").EnumerateArray().ToList();
-        Assert.Equal(2, boundary.Count);
-        Assert.Equal("2025-04-30", boundary[0].GetProperty("date").GetString());
+        Assert.Equal(3, boundary.Count); // S148 3b (RR-7): 2 -> 3
+        Assert.Equal(new[] { "2025-04-29", "2025-04-30", "2025-06-01" },
+            boundary.Select(b => b.GetProperty("date").GetString()).ToArray());
+        Assert.Equal("2025-04-30", boundary[1].GetProperty("date").GetString());
         // S148 S0-5 (kind F, CI): the boundary row is exactly {date, intervals}; manualHours is retired.
         // Red condition: the served row still carries a third member, manualHours, until
         // SkemaWorkTimeDayRow drops it.
         Assert.Equal(new[] { "date", "intervals" },
-            boundary[0].EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
-        var interval = boundary[0].GetProperty("intervals").EnumerateArray().Single();
+            boundary[1].EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        var interval = boundary[1].GetProperty("intervals").EnumerateArray().Single();
         Assert.Equal("09:00", interval.GetProperty("start").GetString());
         Assert.Equal("17:00", interval.GetProperty("end").GetString());
-        Assert.Equal("2025-06-01", boundary[1].GetProperty("date").GetString());
+        Assert.Equal("2025-06-01", boundary[2].GetProperty("date").GetString());
 
         // The month array stays month-scoped (no boundary rows absorbed).
         Assert.Empty(body.GetProperty("workTime").EnumerateArray());

@@ -14,7 +14,7 @@ public sealed class ComplianceCheckResult
     ///
     /// <para>
     /// <b>Why.</b> The 11-hour daily rest check (and the weekly rest-day check beside it) measures
-    /// gaps between the clock intervals the employee types in Skema (ADR-043 D10). A day whose
+    /// rest between the clock intervals the employee types in Skema (ADR-043 D10). A day whose
     /// project hours are not all covered by intervals may hide work the checks cannot place, so the
     /// result would look compliant for it. This list names those days instead; the screens turn it
     /// into one month-level notice ("Hviletid ikke kontrolleret for N dage").
@@ -32,9 +32,10 @@ public sealed class ComplianceCheckResult
     /// <para>
     /// <b>A manager's read can also list the month's first day</b> (<c>ComplianceEndpoints</c>).
     /// A manager sees nothing of a month the employee has not submitted (RES-002), so when the
-    /// previous month is not submitted the manager's check does not read the day before the
-    /// month, and a rest ending on the 1st is not measured for them. The 1st is then listed when
-    /// the day before was an employed day and the 1st has a clock interval.
+    /// previous month is not submitted the manager's check does not read the two days before the
+    /// month. A work end on the 1st is then judged from the submitted month alone, so its rest can
+    /// read longer than it was. The 1st is listed when the day before was an employed day and the
+    /// 1st has a clock interval.
     /// </para>
     ///
     /// <para>

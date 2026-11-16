@@ -74,15 +74,17 @@ public class RestPeriodRuleMidnightRestTests
     //    NOT a one-minute midnight gap.
     // ---------------------------------------------------------------
     /// <summary>
-    /// Kind <b>R</b> (the 5 h arithmetic kept). S148 S0-3 (P-12): the old fact fed ONE raw row whose end
-    /// was before its start. Intervals cannot express that (Skema keeps only end-after-start, and the
-    /// engine ignores any other; the parity row <c>reversed-interval-ignored</c> pins that), so the
+    /// Kind <b>R</b> (re-pinned at 3b: no 29 h and no midnight 0.0, the value is now the longest rest in
+    /// the 24 hours before the morning shift's end). S148 S0-3 (P-12): the old fact fed ONE raw row whose
+    /// end was before its start. Intervals cannot express that (Skema keeps only end-after-start, and
+    /// the engine ignores any other; the parity row <c>reversed-interval-ignored</c> pins that), so the
     /// crossing is now Skema's two halves, 23:00–23:59 on D and 00:00–02:00 on D+1; the next
-    /// morning's shift is an interval; the expected values are unchanged. Red conditions: a rule that
-    /// keeps the halves apart finds a 0.0 h rest at midnight, so <c>ActualValue == 5.0m</c> fails.
+    /// morning's shift is an interval. S148 3b (RR-1): the finding is 8.0 dated D+1 (it was 5.0 dated
+    /// D: the gap to the next morning). R: pins the value and the date; the join is proved by
+    /// <c>MidnightHalves_FormOneStint_NoOneMinuteRest</c> arm (iii) and the parity-table rows.
     /// </summary>
     [Fact]
-    public void DailyRest_RawMidnightCrossing_ThenMorningShift_IsFiveHourViolation_Not29h()
+    public void DailyRest_RawMidnightCrossing_ThenMorningShift_IsEightHourViolation_Not29h()
     {
         var d = new DateOnly(2026, 3, 16);
         var entries = new List<TimeEntry>
@@ -98,12 +100,15 @@ public class RestPeriodRuleMidnightRestTests
             Iv(d.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)), // next morning
         };
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, d, d.AddDays(6), Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, d, d.AddDays(6), Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
-        // The stint ends d+1 02:00; next stint starts d+1 07:00 → 5h rest < 11h → VIOLATION.
+        // S148 3b (RR-1): 5.0 -> 8.0, dated Tue 17 March, the day the work ends. The morning shift ends
+        // Tue 15:00; its window [Mon 15:00, Tue 15:00] holds the rests Mon 15:00-23:00 (8 h) and Tue
+        // 02:00-07:00 (5 h); the longest unbroken rest is 8 h < 11 h -> VIOLATION.
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST &&
-            v.ActualValue == 5.0m);
+            v.Date == d.AddDays(1) &&
+            v.ActualValue == 8.0m);
         // And explicitly NOT the pre-fix ~29h (which read no violation at all).
         Assert.DoesNotContain(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST && v.ActualValue > 24m);
@@ -114,11 +119,11 @@ public class RestPeriodRuleMidnightRestTests
     //    true 5h; and each normalized half carries its own OK-version.
     // ---------------------------------------------------------------
     /// <summary>
-    /// Kind <b>R</b>. S148 S0-3 (P-12): the two halves and the morning shift are intervals now; the
-    /// two OK-version assertions on the normalizer stay as they were (they test the normalizer, not
-    /// the rule); expected values unchanged. Red conditions: a rule that keeps the halves apart finds
-    /// a 0.0 h rest at midnight, so the 5.0 h <c>Assert.Contains</c> fails and the 0 h
-    /// <c>Assert.DoesNotContain</c> fails.
+    /// Kind <b>R</b> (re-pinned at 3b). S148 S0-3 (P-12): the two halves and the morning shift are
+    /// intervals now; the two OK-version assertions on the normalizer stay as they were (they test the
+    /// normalizer, not the rule). S148 3b (RR-1): the finding is 8.0 dated 1 April (it was 5.0 dated 31
+    /// March). R: pins the value and the date; the join is proved by
+    /// <c>MidnightHalves_FormOneStint_NoOneMinuteRest</c> arm (iii) and the parity-table rows.
     /// </summary>
     [Fact]
     public void DailyRest_NormalizedBoundaryCrossing_NoFalseMidnightGap_AndPerHalfOkVersion()
@@ -142,13 +147,15 @@ public class RestPeriodRuleMidnightRestTests
             Iv(apr01, new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, mar31, mar31.AddDays(6), Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, mar31, mar31.AddDays(6), Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
-        // True rest between the crossing stint's end (01-Apr 02:00) and the morning start
-        // (01-Apr 07:00) = 5h → VIOLATION. NOT a false 0-hour (midnight) or 24h gap.
+        // S148 3b (RR-1): 5.0 -> 8.0, dated Wed 1 April (was dated 31 March). The morning shift ends
+        // 01-Apr 15:00; window [31 Mar 15:00, 1 Apr 15:00]: rests 15:00-23:00 (8 h) and 02:00-07:00
+        // (5 h), the longest 8 h -> VIOLATION. NOT a false 0-hour (midnight) or 24h gap.
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST &&
-            v.ActualValue == 5.0m);
+            v.Date == apr01 &&
+            v.ActualValue == 8.0m);
         Assert.DoesNotContain(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST &&
             (v.ActualValue == 0m || v.ActualValue >= 24m));
@@ -190,7 +197,7 @@ public class RestPeriodRuleMidnightRestTests
         // Sanity: a Sunday-dated row DOES exist (the post-half) — a naive date count would hit 7.
         Assert.Contains(intervals, i => i.Date == sunday);
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, monday, sunday, Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, monday, sunday, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         // 6 worked days (Mon–Sat) → a weekly rest day exists on Sunday → NO violation.
         Assert.DoesNotContain(result.Violations, v =>
@@ -258,7 +265,7 @@ public class RestPeriodRuleMidnightRestTests
         // A periodStart-dated interval DOES exist (the post-half) — a naive date count would hit 7.
         Assert.Contains(intervals, i => i.Date == periodStart);
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, periodStart, periodEnd, Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, periodStart, periodEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         // 6 worked days (periodStart+1..+6); periodStart is the rest day → NO weekly-rest violation.
         Assert.DoesNotContain(result.Violations, v =>

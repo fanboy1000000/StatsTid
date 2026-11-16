@@ -5,7 +5,7 @@
 //
 //   buildWorkTimePayload emits each day as exactly { date, intervals } — clock
 //        time only (manual hours are retired, ADR-043 D10).
-//   R6 — analyzeRestPeriods: the §J adjacent-day 11-hour analysis, incl. the
+//   R6 — analyzeRestPeriods: the 24-hour look-back 11-hour analysis, incl. the
 //        served boundary days at month edges and the January year-boundary;
 //        plus the 9t intra-day trigger threshold.
 //   R5 — periodHours/periodsTotalHours keep EXACT 2-decimal arithmetic; the
@@ -20,6 +20,7 @@ import {
   overlappingPeriodIndices,
   periodHours,
   periodsTotalHours,
+  restDisplayHours,
   LONG_DAY_WARNING_HOURS,
 } from '../useSkema'
 import type { WorkTimeDay } from '../../types'
@@ -133,18 +134,24 @@ describe('overlappingPeriodIndices — the S58 overlap mirror', () => {
   })
 })
 
-describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', () => {
-  it('R6: warns on a month-interior gap below 11h between the previous day\'s last end and this day\'s first start', () => {
+// S148 3b (RR-1) — the look-back rule: every work end is judged on the 24 elapsed hours before it
+// (Europe/Copenhagen), one finding per day at the lowest value, dated the day the work ends. A
+// finding is `{ date, endsAt, restSeconds }`, the rest unrounded. Kind F for every case whose
+// value or shape moved (the pair rule returned `{ gapHours, fromDate, toDate }`); the null cases
+// are R pins.
+describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)', () => {
+  it('R6: warns when the longest rest in the 24 hours before a work end is below 11h (dated the day the work ends)', () => {
     const month = [
       wt('2026-03-08', [{ start: '12:00', end: '23:00' }]),
       wt('2026-03-09', [{ start: '07:00', end: '15:00' }]),
     ]
+    // S148 3b (RR-1): { gapHours: 8, fromDate: '2026-03-08', toDate: '2026-03-09' } → { date, endsAt, restSeconds }
     expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { gapHours: 8, fromDate: '2026-03-08', toDate: '2026-03-09' },
+      { date: '2026-03-09', endsAt: '15:00', restSeconds: 28800 },
     ])
   })
 
-  it('R6: a gap of exactly 11 hours does NOT warn (the minimum is met)', () => {
+  it('R6: a rest of exactly 11 hours does NOT warn (the minimum is met)', () => {
     const month = [
       wt('2026-03-08', [{ start: '12:00', end: '20:00' }]),
       wt('2026-03-09', [{ start: '07:00', end: '15:00' }]),
@@ -152,25 +159,27 @@ describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', (
     expect(analyzeRestPeriods(month, [], '2026-03-09')).toBeNull()
   })
 
-  it('R6: the symmetric NEXT-day trigger warns (this day ends late, the next starts early)', () => {
+  it('R6: the earlier day also warns (its work lies inside the judged window), dated the later day', () => {
     const month = [
       wt('2026-03-09', [{ start: '14:00', end: '23:00' }]),
       wt('2026-03-10', [{ start: '08:00', end: '16:00' }]),
     ]
+    // S148 3b (RR-1): { gapHours: 9, fromDate: '2026-03-09', toDate: '2026-03-10' } → { date, endsAt, restSeconds }
     expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { gapHours: 9, fromDate: '2026-03-09', toDate: '2026-03-10' },
+      { date: '2026-03-10', endsAt: '16:00', restSeconds: 32400 },
     ])
   })
 
-  it('R6: both sides can warn at once (previous-gap first)', () => {
+  it('R6: two findings on one open day, ordered by the day the work ends', () => {
     const month = [
       wt('2026-03-08', [{ start: '12:00', end: '23:30' }]),
       wt('2026-03-09', [{ start: '06:00', end: '23:00' }]),
       wt('2026-03-10', [{ start: '05:00', end: '13:00' }]),
     ]
+    // S148 3b (RR-1): two pairs (6,5 and 6) → two findings, the 9th's 23:00 end and the 10th's 13:00 end
     expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { gapHours: 6.5, fromDate: '2026-03-08', toDate: '2026-03-09' },
-      { gapHours: 6, fromDate: '2026-03-09', toDate: '2026-03-10' },
+      { date: '2026-03-09', endsAt: '23:00', restSeconds: 23400 },
+      { date: '2026-03-10', endsAt: '13:00', restSeconds: 21600 },
     ])
   })
 
@@ -178,7 +187,7 @@ describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', (
     const boundary = [wt('2026-02-28', [{ start: '14:00', end: '22:00' }])]
     const month = [wt('2026-03-01', [{ start: '06:00', end: '14:00' }])]
     expect(analyzeRestPeriods(month, boundary, '2026-03-01')).toEqual([
-      { gapHours: 8, fromDate: '2026-02-28', toDate: '2026-03-01' },
+      { date: '2026-03-01', endsAt: '14:00', restSeconds: 28800 },
     ])
   })
 
@@ -186,7 +195,7 @@ describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', (
     const boundary = [wt('2026-04-01', [{ start: '06:00', end: '14:00' }])]
     const month = [wt('2026-03-31', [{ start: '14:00', end: '22:00' }])]
     expect(analyzeRestPeriods(month, boundary, '2026-03-31')).toEqual([
-      { gapHours: 8, fromDate: '2026-03-31', toDate: '2026-04-01' },
+      { date: '2026-04-01', endsAt: '14:00', restSeconds: 28800 },
     ])
   })
 
@@ -194,7 +203,7 @@ describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', (
     const boundary = [wt('2025-12-31', [{ start: '15:00', end: '23:00' }])]
     const month = [wt('2026-01-01', [{ start: '08:00', end: '16:00' }])]
     expect(analyzeRestPeriods(month, boundary, '2026-01-01')).toEqual([
-      { gapHours: 9, fromDate: '2025-12-31', toDate: '2026-01-01' },
+      { date: '2026-01-01', endsAt: '16:00', restSeconds: 32400 },
     ])
   })
 
@@ -207,24 +216,30 @@ describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', (
     expect(analyzeRestPeriods(month, [], '2026-03-10')).toBeNull() // entirely unserved day
   })
 
-  it('R6 no-data days: an adjacent day without interval data imposes no constraint', () => {
+  // S148 3b (RR-1): was "an adjacent day without interval data imposes no constraint" (null). The free
+  // adjacent days are still rest, but 00:30-23:30 is a 23-hour day: the only rest in the 24 hours
+  // before 23:30 is 23:30-00:30, one hour, a breach on its own.
+  it('a free adjacent day is rest, but a 23-hour day is a breach on its own (1 hour of rest before 23:30)', () => {
     const month = [wt('2026-03-09', [{ start: '00:30', end: '23:30' }])]
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toBeNull()
+    expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
+      { date: '2026-03-09', endsAt: '23:30', restSeconds: 3600 },
+    ])
   })
 
-  it('uses the FIRST start / LAST end across multiple (unordered) intervals and parses the served "HH:mm:ss" format', () => {
+  it('judges every interval of a day and parses the served "HH:mm:ss" format; equal lowest values keep the earliest end', () => {
     const month = [
       wt('2026-03-08', [
         { start: '08:00:00', end: '12:00:00' },
-        { start: '13:00:00', end: '22:30:00' }, // last end 22:30
+        { start: '13:00:00', end: '22:30:00' },
       ]),
       wt('2026-03-09', [
         { start: '12:00', end: '16:00' },
-        { start: '07:00', end: '11:00' }, // first start 07:00 (unordered input)
+        { start: '07:00', end: '11:00' }, // unordered input
       ]),
     ]
+    // The 11:00 and 16:00 ends both see 8,5 h (22:30-07:00); the day's one finding is the earlier end.
     expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { gapHours: 8.5, fromDate: '2026-03-08', toDate: '2026-03-09' },
+      { date: '2026-03-09', endsAt: '11:00', restSeconds: 30600 },
     ])
   })
 
@@ -236,6 +251,20 @@ describe('analyzeRestPeriods — R6 §J adjacent-day 11-hour analysis (pure)', (
       wt('2026-03-09', [{ start: '07:00', end: '15:00' }]),
     ]
     expect(analyzeRestPeriods(month, boundary, '2026-03-09')).toBeNull()
+  })
+})
+
+describe('restDisplayHours — the shown rest, rounded down once from the unrounded seconds', () => {
+  // Kind N (a function this task creates). Red condition: the old half-up helper, or a two-step
+  // rounding, shows 8,5 for 30 590 s and 11 for 39 540 s.
+  it.each([
+    [30420, 8.4], // 8 h 27 min
+    [30590, 8.4], // 8 h 29 min 50 s: two decimals first would give 8,5
+    [39540, 10.9], // 10 h 59 min: a breach never shows the minimum itself
+    [3600, 1],
+    [0, 0],
+  ])('%i s shows %f', (seconds, shown) => {
+    expect(restDisplayHours(seconds)).toBe(shown)
   })
 })
 

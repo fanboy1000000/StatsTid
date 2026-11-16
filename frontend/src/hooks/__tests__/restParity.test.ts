@@ -1,24 +1,31 @@
 /// <reference types="vite/client" />
-// S148 / TASK-14814 — AC-S0-4a (the screen's half): one shared table of rest scenarios,
-// `tests/StatsTid.Tests.Unit/TestData/rest-parity-scenarios.json`, is judged by the engine in a C#
-// fact (`RestParityTableTests`) and by Skema's instant warning here. Every row must get the same
-// verdict on both sides, so a change to one side and not the other turns a test red.
+// S148 / TASK-14814, TASK-14844 — AC-S0-4a, AC-S0-4d, AC-S0-4e: one shared table of rest scenarios,
+// `tests/StatsTid.Tests.Unit/TestData/rest-parity-scenarios.json` (schema 2), is judged by the
+// engine in a C# fact (`RestParityTableTests`) and by Skema's instant warning here. Every row must
+// get the same verdict on both sides, so a change to one side and not the other turns a test red.
 //
-// A rest belongs to the period in which it ends (as on the server): the pairs kept are those whose
-// later day is inside the period, and every pair dropped must end on the day after the period.
-// `derogationAllowed`, `projectHours` and `expectedEngineRestNotCheckedDays` are engine-only.
+// Every work end is judged on the 24 elapsed hours before it (Europe/Copenhagen); a finding is
+// dated the day its work ends, one per day at the lowest value. The findings kept are those dated
+// inside the period; the ones dated after it (a night shift over the month's last midnight, a rest
+// ending on the 1st) are the ones named in `EXPECTED_DROPPED`, so the filter cannot hide a
+// disagreement. The shown rest is `restDisplayHours` (rounded down once from the unrounded
+// seconds); the expected side is keyed straight from the table's `restHours`, never through the
+// helper. `derogationAllowed`, `projectHours`, `expectedEngineWarningDates` and
+// `expectedEngineRestNotCheckedDays` are engine-only.
 //
-// Kinds per row. F (fail on the code before the midnight join): `midnight-halves-alone`,
-// `midnight-halves-then-same-day-work`, `midnight-halves-across-month-edge`,
-// `continuation-day-without-other-work`, `chain-over-two-midnights`; and, before fix-up 1,
-// `midpoint-rest-rounds-half-up` (shown 8,4 where the server says 8.5) and
-// `overlapping-intervals-show-zero` (-1.0 where 0.0). R (regression pins, green before and after):
-// `interior-short-rest`, `interior-short-rest-derogation`, `exactly-eleven-hours`,
-// `partly-clocked-day`, `lower-month-edge-short-rest`, `upper-month-edge-belongs-to-next-month`,
-// `reversed-interval-ignored`, and the two midnight-boundary rows `end-2358-does-not-join` and
-// `start-0001-does-not-join` (each goes red if the join condition is loosened).
+// Every finding the screen returns is accounted for: well formed (a date, an end time, whole
+// non-negative seconds), then exactly one of kept (dated inside the period), dated after it
+// (`EXPECTED_DROPPED`) or dated before it (`EXPECTED_BEFORE`); the three sizes sum to the total, so
+// a finding with no date or an early one cannot fall between the buckets.
+//
+// Kinds per row. F (fail on the screen's earlier pair rule, which compared the gap between two
+// days): the rows whose verdict moved under the look-back rule (split-day, long-shift,
+// daylight-saving, seconds, rounding, month-cut and missing-hour rows, and the older rows that now
+// date on the day the work ends), including `fall-back-night-is-an-hour-longer`, whose wrong
+// warning on the old screen carried no date. R (regression pins, green before and after): the rows
+// with no finding on either side.
 import { describe, it, expect } from 'vitest'
-import { analyzeRestPeriods, restGapDisplayHours, type RestPeriodWarning } from '../useSkema'
+import { analyzeRestPeriods, restDisplayHours, type RestPeriodWarning } from '../useSkema'
 import type { WorkTimeDay } from '../../types'
 
 interface Scenario {
@@ -26,7 +33,7 @@ interface Scenario {
   periodStart: string
   periodEnd: string
   intervals: { date: string; start: string; end: string }[]
-  expectedDailyRest: { from: string; to: string; gapHours: number }[]
+  expectedDailyRest: { date: string; restHours: number }[]
 }
 interface Table {
   schemaVersion: number
@@ -48,15 +55,36 @@ const REQUIRED_IDS = [
   'chain-over-two-midnights',
   'end-2358-does-not-join',
   'start-0001-does-not-join',
-  'midpoint-rest-rounds-half-up',
-  'overlapping-intervals-show-zero',
+  'rest-shown-is-rounded-down',
+  'overlapping-intervals-are-one-work-block',
+  'split-day-alone',
+  'split-day-then-night-shift',
+  'twenty-four-hour-shift',
+  'exactly-thirteen-hours',
+  'thirteen-hours-one-minute',
+  'spring-forward-night-is-an-hour-shorter',
+  'fall-back-night-is-an-hour-longer',
+  'two-days-back-across-a-23-hour-day',
+  'derogation-floor-eight-hours-is-a-warning',
+  'derogation-below-floor-is-a-violation',
+  'end-2359-is-the-end-of-the-day',
+  'seconds-rest-rounds-once',
+  'spring-forward-typed-0230-is-the-changeover',
+  'fall-back-typed-0230-end-is-the-later-instant',
+  'fall-back-typed-0230-start-is-the-earlier-instant',
+  'night-shift-over-the-upper-month-edge',
+  'spring-forward-work-inside-the-missing-hour-is-still-judged',
 ]
 
-// The pairs the screen computes but the period filter drops (a rest belongs to the month it ends
-// in), named per row so the filter cannot hide a disagreement. Every other row drops nothing.
+// The findings the screen computes but the period filter drops (dated after the period), named per
+// row so the filter cannot hide a disagreement. Every other row drops nothing.
 const EXPECTED_DROPPED: Record<string, string[]> = {
-  'upper-month-edge-belongs-to-next-month': ['2026-03-31>2026-04-01@9.0'],
+  'upper-month-edge-belongs-to-next-month': ['2026-04-01@9.0'],
+  'night-shift-over-the-upper-month-edge': ['2026-04-01@6.0'],
 }
+
+// The findings the screen returns dated before the period; no row has one.
+const EXPECTED_BEFORE: Record<string, string[]> = {}
 
 // The house rule is `import.meta.glob`, never `node:fs` (`clockGuard.test.ts`); the table lives
 // outside `frontend/`, so the glob is tried first and the non-vacuity test below catches a miss.
@@ -90,49 +118,58 @@ function workDays(intervals: Scenario['intervals'], keep: (date: string) => bool
 }
 
 describe('rest parity table — the screen judges every row as the engine does', () => {
-  it('the table was read: schemaVersion 1 and its ids are exactly the sixteen listed here', () => {
+  it('the table was read: schemaVersion 2 and its ids are exactly the thirty-three listed here', () => {
     expect(table, 'rest-parity-scenarios.json was not found by import.meta.glob').toBeDefined()
-    expect(table!.schemaVersion).toBe(1)
+    expect(table!.schemaVersion).toBe(2)
     const ids = table!.scenarios.map((s) => s.id)
     expect([...ids].sort()).toEqual([...REQUIRED_IDS].sort())
   })
 
   for (const id of REQUIRED_IDS) {
-    it(`${id}: the screen's rests equal expectedDailyRest`, () => {
+    it(`${id}: the screen's findings equal expectedDailyRest`, () => {
       const s = table?.scenarios.find((x) => x.id === id)
       expect(s, `row ${id} missing`).toBeDefined()
       const sc = s!
       const inPeriod = (d: string) => d >= sc.periodStart && d <= sc.periodEnd
-      // Every interval lies in the window the screen is fed (the period and its two boundary days).
+      // Every interval lies in the window the screen is fed: the two days before the period, the
+      // period, and the day after it (the server's boundary days).
       for (const iv of sc.intervals) {
-        expect(iv.date >= addDay(sc.periodStart, -1) && iv.date <= addDay(sc.periodEnd, 1), `${id}: ${iv.date} outside the fed window`).toBe(true)
+        expect(iv.date >= addDay(sc.periodStart, -2) && iv.date <= addDay(sc.periodEnd, 1), `${id}: ${iv.date} outside the fed window`).toBe(true)
       }
       const month = workDays(sc.intervals, inPeriod)
       const boundary = workDays(
         sc.intervals,
-        (d) => d === addDay(sc.periodStart, -1) || d === addDay(sc.periodEnd, 1),
+        (d) => d === addDay(sc.periodStart, -2) || d === addDay(sc.periodStart, -1) || d === addDay(sc.periodEnd, 1),
       )
 
-      const pairs = new Map<string, RestPeriodWarning>()
+      const byDate = new Map<string, RestPeriodWarning>()
       for (const date of datesOf(sc.periodStart, sc.periodEnd)) {
         for (const w of analyzeRestPeriods(month, boundary, date) ?? []) {
-          pairs.set(`${w.fromDate}>${w.toDate}`, w)
+          // Shape first, before any filter can drop a malformed finding.
+          const wellFormed =
+            typeof w.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(w.date) &&
+            typeof w.endsAt === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(w.endsAt) &&
+            Number.isInteger(w.restSeconds) && w.restSeconds >= 0
+          expect(wellFormed, `${id}: malformed finding ${JSON.stringify(w)}`).toBe(true)
+          const seen = byDate.get(w.date)
+          if (seen) expect(w, `${id}: two open dates disagree on ${w.date}`).toEqual(seen)
+          byDate.set(w.date, w)
         }
       }
-      const all = [...pairs.values()]
-      const kept = all.filter((w) => inPeriod(w.toDate))
-      const dropped = all.filter((w) => !inPeriod(w.toDate))
+      const all = [...byDate.values()]
+      const kept = all.filter((w) => inPeriod(w.date))
+      const dropped = all.filter((w) => w.date > sc.periodEnd)
+      const before = all.filter((w) => w.date < sc.periodStart)
+      expect(kept.length + dropped.length + before.length, `${id}: every finding is kept, after or before`).toBe(all.length)
 
-      // The screen's figure is the shown one (one decimal, halves up), as the server's value is.
-      const toKey = (from: string, to: string, gap: number) => `${from}>${to}@${restGapDisplayHours(gap).toFixed(1)}`
-      expect(kept.map((w) => toKey(w.fromDate, w.toDate, w.gapHours)).sort()).toEqual(
-        sc.expectedDailyRest.map((r) => toKey(r.from, r.to, r.gapHours)).sort(),
+      // Actual side through the helper under test; expected side straight from the table's value.
+      const shown = (w: RestPeriodWarning) => `${w.date}@${restDisplayHours(w.restSeconds).toFixed(1)}`
+      expect(kept.map(shown).sort()).toEqual(
+        sc.expectedDailyRest.map((r) => `${r.date}@${r.restHours.toFixed(1)}`).sort(),
       )
-      // The filter must not hide a disagreement: the dropped pairs are exactly the ones named.
-      expect(dropped.map((w) => toKey(w.fromDate, w.toDate, w.gapHours)).sort()).toEqual(
-        EXPECTED_DROPPED[id] ?? [],
-      )
-      for (const w of dropped) expect(w.toDate).toBe(addDay(sc.periodEnd, 1))
+      // The filter must not hide a disagreement: the dropped findings are exactly the ones named.
+      expect(dropped.map(shown).sort()).toEqual(EXPECTED_DROPPED[id] ?? [])
+      expect(before.map(shown).sort()).toEqual(EXPECTED_BEFORE[id] ?? [])
     })
   }
 })
