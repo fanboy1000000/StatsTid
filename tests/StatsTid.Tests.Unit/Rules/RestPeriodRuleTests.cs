@@ -108,7 +108,7 @@ public class RestPeriodRuleTests
             CreateInterval(Monday.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.False(result.Success);
         Assert.Equal(RestPeriodRule.RuleId, result.RuleId);
@@ -143,7 +143,7 @@ public class RestPeriodRuleTests
             CreateInterval(Monday.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.DoesNotContain(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST);
@@ -187,7 +187,7 @@ public class RestPeriodRuleTests
             CreateInterval(Monday.AddDays(1), new TimeOnly(5, 0), new TimeOnly(9, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.DoesNotContain(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST);
@@ -246,7 +246,7 @@ public class RestPeriodRuleTests
             intervals.Add(CreateInterval(Monday.AddDays(i), new TimeOnly(8, 0), new TimeOnly(15, 24)));
         }
 
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.WEEKLY_REST);
@@ -462,7 +462,7 @@ public class RestPeriodRuleTests
         };
 
         var config = CreateConfig(derogation: true);
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config, intervals);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config, intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         // Should be a WARNING, not a VIOLATION
         Assert.Contains(result.Warnings, v =>
@@ -499,7 +499,7 @@ public class RestPeriodRuleTests
         };
 
         var config = CreateConfig(derogation: false);
-        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config, intervals);
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, config, intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.DAILY_REST &&

@@ -123,7 +123,7 @@ public class RestParityTableTests
             .ToList();
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, periodStart, periodEnd, Config(derogation), intervals);
+            Profile(), entries, periodStart, periodEnd, Config(derogation), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         var findings = result.Violations.Concat(result.Warnings)
             .Where(f => f.ViolationType == ComplianceViolationType.DAILY_REST)

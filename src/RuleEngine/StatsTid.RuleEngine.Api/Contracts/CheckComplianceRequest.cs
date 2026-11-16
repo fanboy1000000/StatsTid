@@ -11,7 +11,9 @@ public sealed class CheckComplianceRequest
 
     /// <summary>
     /// The clock intervals the employee typed in Skema, over the same dates as
-    /// <see cref="Entries"/> (from the day before <see cref="PeriodStart"/>, ADR-039 D5b). The rest
+    /// <see cref="Entries"/> (from two days before <see cref="PeriodStart"/>: a work end on the first
+    /// day is judged on the 24 hours before it, and the day before can be 23 hours long; ADR-039
+    /// D5b, QUAL-253). The rest
     /// checks build their work periods from these alone; the hours checks read
     /// <see cref="Entries"/> (ADR-043 D10). Required, so a caller that omits it is refused (400)
     /// rather than read as "no clock times".

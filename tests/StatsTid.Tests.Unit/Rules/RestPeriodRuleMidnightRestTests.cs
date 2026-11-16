@@ -98,7 +98,7 @@ public class RestPeriodRuleMidnightRestTests
             Iv(d.AddDays(1), new TimeOnly(7, 0), new TimeOnly(15, 0)), // next morning
         };
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, d, d.AddDays(6), Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, d, d.AddDays(6), Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         // The stint ends d+1 02:00; next stint starts d+1 07:00 → 5h rest < 11h → VIOLATION.
         Assert.Contains(result.Violations, v =>
@@ -142,7 +142,7 @@ public class RestPeriodRuleMidnightRestTests
             Iv(apr01, new TimeOnly(7, 0), new TimeOnly(15, 0)),
         };
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, mar31, mar31.AddDays(6), Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, mar31, mar31.AddDays(6), Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         // True rest between the crossing stint's end (01-Apr 02:00) and the morning start
         // (01-Apr 07:00) = 5h → VIOLATION. NOT a false 0-hour (midnight) or 24h gap.
@@ -190,7 +190,7 @@ public class RestPeriodRuleMidnightRestTests
         // Sanity: a Sunday-dated row DOES exist (the post-half) — a naive date count would hit 7.
         Assert.Contains(intervals, i => i.Date == sunday);
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, monday, sunday, Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, monday, sunday, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         // 6 worked days (Mon–Sat) → a weekly rest day exists on Sunday → NO violation.
         Assert.DoesNotContain(result.Violations, v =>
@@ -258,7 +258,7 @@ public class RestPeriodRuleMidnightRestTests
         // A periodStart-dated interval DOES exist (the post-half) — a naive date count would hit 7.
         Assert.Contains(intervals, i => i.Date == periodStart);
 
-        var result = RestPeriodRule.Evaluate(Profile(), entries, periodStart, periodEnd, Config(), intervals);
+        var result = RestPeriodRule.Evaluate(Profile(), entries, periodStart, periodEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         // 6 worked days (periodStart+1..+6); periodStart is the rest day → NO weekly-rest violation.
         Assert.DoesNotContain(result.Violations, v =>

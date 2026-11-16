@@ -113,7 +113,7 @@ public class RestPeriodNotCheckedTests
     {
         var (entries, intervals) = TwoHoursOnlyTwoClockedEightHourGap();
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals);
+            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Equal(new[] { Mon2, Tue3 }, result.RestNotCheckedDays);
 
@@ -141,11 +141,11 @@ public class RestPeriodNotCheckedTests
             Interval(Thu5, new TimeOnly(8, 0), new TimeOnly(16, 0)),
         };
         Assert.Empty(RestPeriodRule.Evaluate(
-            Profile(), clocked, PeriodStart, PeriodEnd, Config(), intervals).RestNotCheckedDays);
+            Profile(), clocked, PeriodStart, PeriodEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone).RestNotCheckedDays);
 
         var withOneUnclocked = new List<TimeEntry>(clocked) { HoursOnly(Tue3) };
         var result = RestPeriodRule.Evaluate(
-            Profile(), withOneUnclocked, PeriodStart, PeriodEnd, Config(), intervals);
+            Profile(), withOneUnclocked, PeriodStart, PeriodEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Equal(new[] { Tue3 }, result.RestNotCheckedDays);
     }
@@ -212,7 +212,7 @@ public class RestPeriodNotCheckedTests
         };
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals);
+            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Equal(new[] { Mon2, Tue3 }, result.RestNotCheckedDays);
     }
@@ -280,7 +280,7 @@ public class RestPeriodNotCheckedTests
         };
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals);
+            Profile(), entries, PeriodStart, PeriodEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Equal(new[] { Wed4 }, result.RestNotCheckedDays);
     }

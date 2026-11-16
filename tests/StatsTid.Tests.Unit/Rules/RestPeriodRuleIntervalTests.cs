@@ -86,13 +86,13 @@ public class RestPeriodRuleIntervalTests
 
         // (i) the halves alone
         var alone = RestPeriodRule.Evaluate(
-            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), halves);
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), halves, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
         Assert.Empty(DailyRest(alone));
 
         // (ii) the halves plus the same Thursday's afternoon work
         var withAfternoon = RestPeriodRule.Evaluate(
             Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(),
-            halves.Append(Iv(thu, 16, 0, 20, 0)).ToList());
+            halves.Append(Iv(thu, 16, 0, 20, 0)).ToList(), StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         var rest = Assert.Single(DailyRest(withAfternoon));
         Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
@@ -126,7 +126,7 @@ public class RestPeriodRuleIntervalTests
         var intervals = new[] { Iv(mon, 15, 0, 23, 0), Iv(tue, 5, 0, 9, 0) };
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, mon, mon.AddDays(6), Config(), intervals);
+            Profile(), entries, mon, mon.AddDays(6), Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         var rest = Assert.Single(DailyRest(result));
         Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
@@ -152,11 +152,11 @@ public class RestPeriodRuleIntervalTests
         var intervals = new[] { Iv(mar31, 14, 0, 22, 0), Iv(AprilStart, 7, 0, 15, 0) };
 
         var march = RestPeriodRule.Evaluate(
-            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals);
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
         Assert.Empty(DailyRest(march));
 
         var april = RestPeriodRule.Evaluate(
-            Profile(), new List<TimeEntry>(), AprilStart, AprilEnd, Config(), intervals);
+            Profile(), new List<TimeEntry>(), AprilStart, AprilEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
         var rest = Assert.Single(DailyRest(april));
         Assert.Equal(mar31, rest.Date);
         Assert.Equal(9.0m, rest.ActualValue);
@@ -178,7 +178,7 @@ public class RestPeriodRuleIntervalTests
         };
 
         var april = RestPeriodRule.Evaluate(
-            Profile(), new List<TimeEntry>(), AprilStart, AprilEnd, Config(), intervals);
+            Profile(), new List<TimeEntry>(), AprilStart, AprilEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Empty(DailyRest(april));
     }
@@ -201,7 +201,7 @@ public class RestPeriodRuleIntervalTests
         var intervals = new[] { Iv(mar31, 0, 0, 20, 0), Iv(AprilStart, 5, 0, 13, 0) };
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, AprilStart, AprilEnd, Config(), intervals);
+            Profile(), entries, AprilStart, AprilEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         var rest = Assert.Single(DailyRest(result));
         Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
@@ -223,7 +223,7 @@ public class RestPeriodRuleIntervalTests
         var intervals = new[] { Iv(mar31, 0, 1, 20, 0), Iv(AprilStart, 5, 0, 13, 0) };
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, AprilStart, AprilEnd, Config(), intervals);
+            Profile(), entries, AprilStart, AprilEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Empty(DailyRest(result));
     }
@@ -242,7 +242,7 @@ public class RestPeriodRuleIntervalTests
         var intervals = new[] { Iv(AprilStart, 0, 0, 20, 0), Iv(apr2, 5, 0, 13, 0) };
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), entries, AprilStart, AprilEnd, Config(), intervals);
+            Profile(), entries, AprilStart, AprilEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         Assert.Empty(DailyRest(result));
     }
@@ -263,7 +263,7 @@ public class RestPeriodRuleIntervalTests
         var intervals = new[] { Iv(mon, 14, 0, 22, 0), Iv(tue, 6, 27, 14, 0) };
 
         var result = RestPeriodRule.Evaluate(
-            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals);
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         var rest = Assert.Single(DailyRest(result));
         Assert.Equal(8.5m, rest.ActualValue);
