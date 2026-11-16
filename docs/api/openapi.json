@@ -5507,6 +5507,7 @@
         "required": [
           "agreementCode",
           "annualNormHours",
+          "appliesFrom",
           "archivedAt",
           "callInMinimumHours",
           "callInRate",
@@ -5725,6 +5726,11 @@
           "publishedAt": {
             "type": "string",
             "format": "date-time",
+            "nullable": true
+          },
+          "appliesFrom": {
+            "type": "string",
+            "format": "date",
             "nullable": true
           },
           "archivedAt": {
