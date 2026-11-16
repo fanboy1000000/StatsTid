@@ -2258,7 +2258,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigPublishRequest"];
+                };
+            };
             responses: {
                 /** @description OK */
                 200: {
@@ -2490,7 +2494,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.PositionOverrideTransitionRequest"];
+                };
+            };
             responses: {
                 /** @description OK */
                 200: {
@@ -2527,7 +2535,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.PositionOverrideTransitionRequest"];
+                };
+            };
             responses: {
                 /** @description OK */
                 200: {
@@ -5197,6 +5209,8 @@ export interface components {
             archivedConfigId: string | null;
             /** Format: date-time */
             publishedAt: string | null;
+            /** Format: date */
+            appliesFrom: string;
         };
         "StatsTid.Backend.Api.Contracts.AgreementConfigResponse": {
             /** Format: uuid */
@@ -5273,6 +5287,8 @@ export interface components {
             updatedAt: string;
             /** Format: date-time */
             publishedAt: string | null;
+            /** Format: date */
+            appliesFrom: string | null;
             /** Format: date-time */
             archivedAt: string | null;
             /** Format: uuid */
@@ -5354,6 +5370,8 @@ export interface components {
             updatedAt: string;
             /** Format: date-time */
             publishedAt: string | null;
+            /** Format: date */
+            appliesFrom: string | null;
             /** Format: date-time */
             archivedAt: string | null;
             /** Format: uuid */
@@ -6284,6 +6302,8 @@ export interface components {
             normPeriodWeeks: number | null;
             /** Format: double */
             weeklyNormHours: number | null;
+            /** Format: date */
+            appliesFrom: string;
             createdBy: string;
             /** Format: date-time */
             createdAt: string;
@@ -7024,6 +7044,10 @@ export interface components {
             /** Format: uuid */
             unitId?: string | null;
         };
+        "StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigPublishRequest": {
+            /** Format: date */
+            appliesFrom?: string | null;
+        };
         "StatsTid.Backend.Api.Endpoints.AgreementConfigEndpoints.AgreementConfigRequest": {
             agreementCode: string;
             okVersion: string;
@@ -7262,6 +7286,12 @@ export interface components {
             /** Format: double */
             weeklyNormHours?: number | null;
             description?: string | null;
+            /** Format: date */
+            appliesFrom?: string | null;
+        };
+        "StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.PositionOverrideTransitionRequest": {
+            /** Format: date */
+            appliesFrom?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.PositionOverrideEndpoints.UpdatePositionOverrideRequest": {
             agreementCode: string;
@@ -7274,6 +7304,8 @@ export interface components {
             /** Format: double */
             weeklyNormHours?: number | null;
             description?: string | null;
+            /** Format: date */
+            appliesFrom?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.ProjectEndpoints.CreateProjectRequest": {
             projectCode: string;

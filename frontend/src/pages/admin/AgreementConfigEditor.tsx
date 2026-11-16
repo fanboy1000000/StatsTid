@@ -21,7 +21,7 @@ import styles from './AgreementConfigEditor.module.css'
 type ConfigForm = Omit<
   AgreementConfig,
   | 'configId' | 'version' | 'createdBy' | 'createdAt' | 'updatedAt'
-  | 'publishedAt' | 'archivedAt' | 'clonedFromId'
+  | 'publishedAt' | 'archivedAt' | 'clonedFromId' | 'appliesFrom'
   | 'maxDailyHours' | 'minimumRestHours' | 'restPeriodDerogationAllowed'
   | 'weeklyMaxHoursReferencePeriod' | 'voluntaryUnsocialHoursAllowed'
 >

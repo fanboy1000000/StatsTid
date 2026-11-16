@@ -36,6 +36,7 @@ const mockOverrides: PositionOverrideConfig[] = [
     createdBy: 'SYSTEM_SEED',
     createdAt: '2026-03-08T00:00:00Z',
     updatedAt: '2026-03-08T00:00:00Z',
+    appliesFrom: '0001-01-01',
     description: 'Department head override',
   },
   {
@@ -51,6 +52,7 @@ const mockOverrides: PositionOverrideConfig[] = [
     createdBy: 'SYSTEM_SEED',
     createdAt: '2026-03-08T00:00:00Z',
     updatedAt: '2026-03-08T00:00:00Z',
+    appliesFrom: '0001-01-01',
     description: null,
   },
 ]
