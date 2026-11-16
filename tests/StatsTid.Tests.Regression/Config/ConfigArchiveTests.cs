@@ -46,6 +46,15 @@ public sealed class ConfigArchiveTests : DatedConfigDockerFixture
             $"archiving an ACTIVE config must answer 409, got {(int)response.StatusCode}: {text}");
         Assert.Equal(RefusalText, JsonDocument.Parse(text).RootElement.GetProperty("error").GetString());
 
+        // S148 5a c1 (Fable note, B7): the refusal holds whatever the If-Match. The draft's version is stale
+        // now (publish moved it); the answer is still 409 "publish a successor", never 412.
+        Assert.NotEqual(draftVersion, activeVersion);
+        using var stale = await ArchiveAsync(client, id, draftVersion);
+        var staleText = await stale.Content.ReadAsStringAsync();
+        Assert.True(stale.StatusCode == HttpStatusCode.Conflict,
+            $"archiving an ACTIVE config with a stale If-Match must answer 409, got {(int)stale.StatusCode}: {staleText}");
+        Assert.Equal(RefusalText, JsonDocument.Parse(staleText).RootElement.GetProperty("error").GetString());
+
         Assert.Equal("ACTIVE", await StatusOfConfigAsync(id));
         Assert.Equal(activeVersion, await ScalarAsync<long>("SELECT version FROM agreement_configs WHERE config_id = @id", ("id", id)));
         Assert.Equal(0L, await CountAsync(

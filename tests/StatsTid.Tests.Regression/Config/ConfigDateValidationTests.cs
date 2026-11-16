@@ -448,6 +448,37 @@ public sealed class ConfigDateValidationTests : DatedConfigDockerFixture
             admin, overrideId, v1, OverrideBody(code, Ok26, position, 150m, 37m, "2026-11-11"));
         Assert.True(flexOnly.StatusCode == HttpStatusCode.OK,
             $"a MaxFlexBalance-only edit mid-week must be accepted, got {(int)flexOnly.StatusCode}: {await flexOnly.Content.ReadAsStringAsync()}");
+
+        // S148 5a c1 ruling 1.4 (Fable W1), arm 5: a CREATE that sets a weekly norm, dated mid-week, is refused
+        // (a create changes the in-force norm: no value, then 37). Nothing is created.
+        var createPosition = await SeedPositionAsync();
+        using (var refusedCreate = await admin.PostAsJsonAsync(
+                   "/api/admin/position-overrides",
+                   OverrideBody(code, Ok26, createPosition, 100m, 37m, "2026-11-11")))
+            await AssertRefusalAsync(refusedCreate, "WeeklyNormHours", "NOT_MONDAY_ALIGNED", nearestMondays);
+        Assert.Equal(0L, await CountAsync(
+            "SELECT COUNT(*) FROM position_override_configs WHERE position_code = @p", ("p", createPosition)));
+
+        // Arm 6: an ACTIVATE of a norm-setting override, dated mid-week, is refused. Created 37 h Monday 2
+        // November, switched off Monday 9 November (a Monday, so accepted), switched on Wednesday 11 November.
+        var activatePosition = await SeedPositionAsync();
+        var (toActivate, activateV1) = await CreateOverrideAsync(
+            admin, OverrideBody(code, Ok26, activatePosition, 100m, 37m, "2026-11-02"));
+        long switchedOffVersion;
+        using (var switchedOff = await TransitionOverrideAsync(admin, toActivate, activateV1, "deactivate", "2026-11-09"))
+        {
+            Assert.Equal(HttpStatusCode.OK, switchedOff.StatusCode);
+            switchedOffVersion = EtagOf(switchedOff);
+        }
+        using (var refusedOn = await TransitionOverrideAsync(admin, toActivate, switchedOffVersion, "activate", "2026-11-11"))
+            await AssertRefusalAsync(refusedOn, "WeeklyNormHours", "NOT_MONDAY_ALIGNED", nearestMondays);
+
+        // Arm 7 (B3 exemption): a config's FIRST version with a weekly norm, dated a Wednesday, is accepted:
+        // no earlier version means no change of an in-force value.
+        var firstCode = UniqueCode("K_FIRST_");
+        var (first, firstVersion) = await CreateDraftAsync(admin, ConfigBody(firstCode));
+        await PublishOkAsync(admin, first, firstVersion, "2026-11-11");
+        Assert.Equal("ACTIVE", await StatusOfConfigAsync(first));
     }
 
     /// <summary>
@@ -525,6 +556,20 @@ public sealed class ConfigDateValidationTests : DatedConfigDockerFixture
             admin, overrideId, v1, OverrideBody(code, Ok26, position, 110m, null, "2026-11-09"));
         Assert.True(accepted.StatusCode == HttpStatusCode.OK,
             $"an edit dated the predecessor's own day must be accepted, got {(int)accepted.StatusCode}");
+
+        // S148 5a c1 ruling 1.4 (Fable W1): the predecessor rule holds ACROSS override ids of one key. A is
+        // created dated 2 November and switched off dated 9 November; a new override B (a new id) created for
+        // the same key dated 2 November is refused against A's newest version.
+        var crossPosition = await SeedPositionAsync();
+        var (a, aV1) = await CreateOverrideAsync(
+            admin, OverrideBody(code, Ok26, crossPosition, 100m, null, "2026-11-02"));
+        using (var off = await TransitionOverrideAsync(admin, a, aV1, "deactivate", "2026-11-09"))
+            Assert.Equal(HttpStatusCode.OK, off.StatusCode);
+        using (var refusedB = await admin.PostAsJsonAsync(
+                   "/api/admin/position-overrides", OverrideBody(code, Ok26, crossPosition, 100m, null, "2026-11-02")))
+            await AssertRefusalAsync(refusedB, "AppliesFrom", "BEFORE_PREDECESSOR", "2026-11-09");
+        Assert.Equal(1L, await CountAsync(
+            "SELECT COUNT(*) FROM position_override_configs WHERE position_code = @p", ("p", crossPosition)));
     }
 
     /// <summary>

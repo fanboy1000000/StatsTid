@@ -83,7 +83,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
         "maxDailyHours", "minimumRestHours", "restPeriodDerogationAllowed",
         "weeklyMaxHoursReferencePeriod", "voluntaryUnsocialHoursAllowed",
         "createdBy", "createdAt", "updatedAt", "publishedAt", "archivedAt", "clonedFromId", "description",
-        "appliesFrom", // S148 C-2 (TASK-14818): on the create/clone/PUT record, NOT on the by-id GET
+        "appliesFrom", // S148 5a c1 ruling 1.2: on every config response shape, the by-id GET included (null until published)
     };
 
     /// <summary>The ruling #2 anchor: the 16-member shared <c>EntitlementConfigResponse</c>
@@ -273,7 +273,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     /// 16-member shared child shape incl. <c>fullDayOnly</c> (the member the drifted inline
     /// mapper omitted at this — the third — former mapper site). The child is a CARE_DAY row
     /// created through the REAL child POST, whose <c>fullDayOnly: true</c> is guard-forced, so
-    /// the pin is non-vacuous. Root = the 47 by-id members + <c>entitlements</c> +
+    /// the pin is non-vacuous. Root = the full row (<c>FullEntityKeys</c>) + <c>entitlements</c> +
     /// <c>entitlementsReadOnly</c>.</summary>
     [Fact]
     public async Task ById_Get200_RulingTwoPin_EmbeddedEntitlementRowsCarryFullDayOnly()
@@ -289,8 +289,8 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
 
         var root = JsonDocument.Parse(body).RootElement;
         S118ContractAssert.AssertExactKeySet(
-            root, FullEntityKeys.Where(k => k != "appliesFrom") // S148: the by-id response carries no appliesFrom (TASK-14818 "Not built"; review question)
-                .Concat(new[] { "entitlements", "entitlementsReadOnly" }).ToArray(), "by-id 200");
+            // S148 5a c1 ruling 1.2: the by-id key set is the full row plus the two entitlement members.
+            root, FullEntityKeys.Concat(new[] { "entitlements", "entitlementsReadOnly" }).ToArray(), "by-id 200");
         Assert.False(root.GetProperty("entitlementsReadOnly").GetBoolean()); // single config for the key
 
         var rows = root.GetProperty("entitlements");

@@ -240,6 +240,120 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
         Assert.Equal(300m, afterUpdate.MaxFlexBalance);
     }
 
+    // ─── AC-C2r: the empty key, three writers (S148 5a c1 ruling 1.1) ──────────
+
+    /// <summary>
+    /// A key with no head has no row to lock, so the key's advisory lock is what serialises its
+    /// writers. A creates and deactivates in one open transaction (dated 12 and 19 January 2026,
+    /// both Mondays); B's create dated 5 January must wait for A, then see A's committed versions
+    /// and be refused as before the predecessor (19 January). The poll waits until B holds ANY
+    /// ungranted lock, so the wait is the same in both worlds and the verdict lands at the outcome.
+    ///
+    /// <para>Red conditions (M-43, delete the advisory statement in
+    /// <c>PositionOverrideRepository.LockKeyAsync</c>): B passes the date rules on the empty key,
+    /// its INSERT waits on A's uncommitted ACTIVE index entry (a <c>transactionid</c> wait, still
+    /// ungranted, so the poll returns), A commits, B's INSERT then proceeds and commits a version
+    /// dated 5 January. B does not throw, so <c>ThrowsAsync</c> fails; and the key would hold three
+    /// version rows with an ACTIVE head. The only way this fact can time out is a mis-wired test.</para>
+    /// </summary>
+    [Fact]
+    public async Task EmptyKey_ThreeWriters_LateCreateRefusedBeforePredecessor()
+    {
+        var position = "POS_" + Guid.NewGuid().ToString("N").Substring(0, 6);
+        await SeedPositionAsync(position);
+
+        var monday12 = new DateOnly(2026, 1, 12);
+        var monday19 = new DateOnly(2026, 1, 19);
+        var monday5 = new DateOnly(2026, 1, 5);
+
+        await using var connA = _harness.Factory.Create();
+        await connA.OpenAsync();
+        await using var txA = await connA.BeginTransactionAsync();
+        var aEntity = new PositionOverrideConfigEntity
+        {
+            OverrideId = Guid.Empty, AgreementCode = AgreementCode, OkVersion = OkVersion,
+            PositionCode = position, Status = "ACTIVE", MaxFlexBalance = 200m, NormPeriodWeeks = 4,
+            WeeklyNormHours = 37m, CreatedBy = "tester", CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow, Description = "C2R_A",
+        };
+        var aId = await _repo.CreateAsync(connA, txA, aEntity, monday12);
+        await _repo.DeactivateAsync(connA, txA, aId, 1, monday19, PositionOverrideTestWriter.Actor);
+        // A is NOT committed: B must queue behind it.
+
+        await using var connB = _harness.Factory.Create();
+        await connB.OpenAsync();
+        var pidB = connB.ProcessID;
+        var bTask = Task.Run(async () =>
+        {
+            await using var txB = await connB.BeginTransactionAsync();
+            var bEntity = new PositionOverrideConfigEntity
+            {
+                OverrideId = Guid.Empty, AgreementCode = AgreementCode, OkVersion = OkVersion,
+                PositionCode = position, Status = "ACTIVE", MaxFlexBalance = 100m, NormPeriodWeeks = 4,
+                WeeklyNormHours = null, CreatedBy = "tester", CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow, Description = "C2R_B",
+            };
+            await _repo.CreateAsync(connB, txB, bEntity, monday5);
+            await txB.CommitAsync();
+        });
+
+        // Bounded wait (no fixed sleep): until B holds any ungranted lock. Precedent for the
+        // pg_locks wait: SendConcurrencyTestBase.WaitForWaitersAsync (Approval/SendConcurrencyTests.cs:249).
+        string? waitedOn = null;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (waitedOn is null)
+        {
+            if (bTask.IsCompleted)
+                throw new Xunit.Sdk.XunitException(
+                    "B finished before A committed: B never blocked, the test setup is wrong.");
+            await using var probe = new NpgsqlConnection(_harness.ConnectionString);
+            await probe.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "SELECT locktype FROM pg_locks WHERE pid = @pid AND NOT granted LIMIT 1", probe);
+            cmd.Parameters.AddWithValue("pid", pidB);
+            waitedOn = (string?)await cmd.ExecuteScalarAsync();
+            if (waitedOn is null)
+            {
+                if (sw.Elapsed > TimeSpan.FromSeconds(30))
+                {
+                    await txA.RollbackAsync(); // release B so nothing is left hanging
+                    throw new TimeoutException("B never blocked: the test setup is wrong.");
+                }
+                await Task.Delay(20);
+            }
+        }
+        Console.WriteLine($"AC-C2r: B waited on an ungranted '{waitedOn}' lock."); // informational, not asserted
+
+        await txA.CommitAsync();
+
+        var ex = await Assert.ThrowsAsync<AppliesFromRefusedException>(() => bTask);
+        var err = Assert.Single(ex.Errors);
+        Assert.Equal("AppliesFrom", err.Field);
+        Assert.Equal("BEFORE_PREDECESSOR", err.Code);
+        Assert.Equal(new[] { monday19 }, err.NearestValid);
+
+        await using var check = new NpgsqlConnection(_harness.ConnectionString);
+        await check.OpenAsync();
+        await using var versions = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM position_override_config_versions v
+            JOIN position_override_configs c ON c.override_id = v.override_id
+            WHERE c.agreement_code = @ac AND c.ok_version = @ok AND c.position_code = @pos
+            """, check);
+        versions.Parameters.AddWithValue("ac", AgreementCode);
+        versions.Parameters.AddWithValue("ok", OkVersion);
+        versions.Parameters.AddWithValue("pos", position);
+        Assert.Equal(2L, (long)(await versions.ExecuteScalarAsync())!);
+
+        await using var heads = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM position_override_configs WHERE agreement_code=@ac AND ok_version=@ok AND position_code=@pos AND status='ACTIVE'",
+            check);
+        heads.Parameters.AddWithValue("ac", AgreementCode);
+        heads.Parameters.AddWithValue("ok", OkVersion);
+        heads.Parameters.AddWithValue("pos", position);
+        Assert.Equal(0L, (long)(await heads.ExecuteScalarAsync())!);
+    }
+
     // ── Test data builders ────────────────────────────────────────────────────
 
     private static PositionOverrideConfigEntity NewOverride(

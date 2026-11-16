@@ -161,6 +161,8 @@ public sealed class SEC032PositionOverrideAuthorizationTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, update.StatusCode); // 200
         var v2 = S118ContractAssert.EtagVersion(update);
         Assert.Equal(2L, v2);
+        // S148 5a c1 ruling 1.5 (Fable W2): each audit row records the date the write was sent with.
+        Assert.Equal("2026-01-12", await AuditAppliesFromAsync(overrideId, "UPDATED"));
 
         // Write #3 — deactivate (If-Match 2 ⇒ v3, INACTIVE).
         using var deactivate = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
@@ -171,6 +173,7 @@ public sealed class SEC032PositionOverrideAuthorizationTests : IAsyncLifetime
         Assert.Equal("INACTIVE", JsonDocument.Parse(deactivateBody).RootElement.GetProperty("status").GetString());
         var v3 = S118ContractAssert.EtagVersion(deactivate);
         Assert.Equal(3L, v3);
+        Assert.Equal("2026-01-19", await AuditAppliesFromAsync(overrideId, "DEACTIVATED"));
 
         // Write #4 — activate (If-Match 3 ⇒ v4, back to ACTIVE).
         using var activate = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
@@ -180,6 +183,19 @@ public sealed class SEC032PositionOverrideAuthorizationTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, activate.StatusCode); // 200
         Assert.Equal("ACTIVE", JsonDocument.Parse(activateBody).RootElement.GetProperty("status").GetString());
         Assert.Equal(4L, S118ContractAssert.EtagVersion(activate));
+        Assert.Equal("2026-01-26", await AuditAppliesFromAsync(overrideId, "ACTIVATED"));
+    }
+
+    private async Task<string?> AuditAppliesFromAsync(Guid overrideId, string action)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT new_data ->> 'AppliesFrom' FROM position_override_config_audit WHERE override_id = @id AND action = @action",
+            conn);
+        cmd.Parameters.AddWithValue("id", overrideId);
+        cmd.Parameters.AddWithValue("action", action);
+        return (string?)await cmd.ExecuteScalarAsync();
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
