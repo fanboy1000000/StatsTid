@@ -173,6 +173,7 @@ public class S148ConfigStageEventRoundTripTests
             EventId = EventId, OccurredAt = Occurred, ActorId = "LA001", ActorRole = "LocalAdmin",
             CustomId = custom2, OrgId = "STY02", Action = "WITHDRAWN", AgreementCode = null,
             RecurringMonth = null, RecurringDay = null, SingleDate = new DateOnly(2026, 5, 15),
+            // WHOLE_DAY with PartHours is refused by `customary_days_part_hours_check`; filled here only to pin every details key. Not an example row.
             Kind = "CLOSURE_DAY", Part = "WHOLE_DAY", PartFromTime = null, PartHours = 7.4m,
             PaidMode = null, ValidFrom = new DateOnly(2026, 1, 5), ValidTo = new DateOnly(2026, 6, 1),
             PrecedingCustomId = custom1, VersionBefore = 1, VersionAfter = 2,

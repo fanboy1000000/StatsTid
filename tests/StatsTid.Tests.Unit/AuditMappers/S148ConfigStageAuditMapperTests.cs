@@ -9,13 +9,15 @@ namespace StatsTid.Tests.Unit.AuditMappers;
 /// S148 / TASK-14815-T (ruling A6) — the five audit mappers of the config-stage events. In plain terms: each new
 /// event becomes one audit-screen row, and the row names the organisation whose administrators may see it; a wrong
 /// organisation would show the row to the wrong institution. One fact per mapper asserts scope, target organisation,
-/// resource id and the details keys (ADR-026 D2). The customary-day fact sets the context's organisation (STY02) and
-/// the payload's (STY03) differently and expects the payload's: a customary day is keyed by organisation, not by the
-/// acting user.
+/// resource id and the details keys (ADR-026 D2). The context's organisation is STY09, one no payload member and no
+/// actor carries; the customary-day fact sets the payload's (STY03) differently and expects the payload's: a customary
+/// day is keyed by organisation, not by the acting user.
 ///
-/// <para><b>Kind N</b> for every fact (the mappers are new in S148). Red evidence is the mutation M-38, not a revert:
-/// every new mapper returns a null target organisation; each fact's target-organisation assertion then fails.
-/// Red conditions: the target organisation is not the context's resolved one (the payload's for customary days).</para>
+/// <para><b>Kind N</b> for every fact (the mappers are new in S148). Red evidence is the mutations M-38 and M-38b, not
+/// a revert: every new mapper returns a null target organisation (M-38), or reads it from the wrong place (M-38b); each
+/// fact's target-organisation assertion then fails.
+/// Red conditions: the target organisation is not the context's resolved one (the payload's for customary days); the
+/// target organisation is read from the payload or from the actor's organisation instead of the context (M-38b).</para>
 /// </summary>
 public class S148ConfigStageAuditMapperTests
 {
@@ -24,7 +26,7 @@ public class S148ConfigStageAuditMapperTests
         ActorPrimaryOrgId: "ORG_HR",
         CorrelationId: Guid.Empty,
         OccurredAt: DateTimeOffset.UnixEpoch,
-        ResolvedTargetOrgId: "STY02");
+        ResolvedTargetOrgId: "STY09");
 
     private static readonly Guid A1 = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid A2 = Guid.Parse("22222222-2222-2222-2222-222222222222");
@@ -46,7 +48,7 @@ public class S148ConfigStageAuditMapperTests
 
         Assert.Multiple(
             () => Assert.Equal(AuditVisibilityScope.TenantTargeted, row.VisibilityScope),
-            () => Assert.Equal("STY02", row.TargetOrgId),
+            () => Assert.Equal("STY09", row.TargetOrgId),
             () => Assert.Equal("EMP001", row.TargetResourceId),
             () => Assert.Equal(new[] { "userId", "assignmentId", "orgId", "effectiveFrom", "rowVersion" }, Keys(row.DetailsJson)));
     }
@@ -63,7 +65,7 @@ public class S148ConfigStageAuditMapperTests
 
         Assert.Multiple(
             () => Assert.Equal(AuditVisibilityScope.TenantTargeted, row.VisibilityScope),
-            () => Assert.Equal("STY02", row.TargetOrgId),
+            () => Assert.Equal("STY09", row.TargetOrgId),
             () => Assert.Equal("EMP001", row.TargetResourceId),
             () => Assert.Equal(new[]
                 { "userId", "assignmentId", "predecessorAssignmentId", "oldOrgId", "newOrgId", "effectiveFrom", "inPlace", "versionBefore", "versionAfter" },
@@ -81,7 +83,7 @@ public class S148ConfigStageAuditMapperTests
 
         Assert.Multiple(
             () => Assert.Equal(AuditVisibilityScope.TenantTargeted, row.VisibilityScope),
-            () => Assert.Equal("STY02", row.TargetOrgId),
+            () => Assert.Equal("STY09", row.TargetOrgId),
             () => Assert.Equal("EMP001", row.TargetResourceId),
             () => Assert.Equal(new[] { "employeeId", "oldStartDate", "newStartDate", "versionBefore", "versionAfter" }, Keys(row.DetailsJson)));
     }
@@ -93,10 +95,11 @@ public class S148ConfigStageAuditMapperTests
         {
             CustomId = Guid.Parse("c0c0c0c0-0000-0000-0000-000000000001"), OrgId = "STY03", Action = "CREATED",
             AgreementCode = "AC", RecurringMonth = 6, RecurringDay = 5,
+            // FROM_TIME with PartHours is refused by `customary_days_part_hours_check`; filled here only to pin every details key. Not an example row.
             Kind = "PAID_DAY_OFF", Part = "FROM_TIME", PartFromTime = new TimeOnly(12, 0), PartHours = 3.5m,
             PaidMode = "GIVEN_TO_ALL", ValidFrom = new DateOnly(2026, 1, 5),
             VersionBefore = 1, VersionAfter = 2,
-        }, Ctx); // the context says STY02; the payload says STY03 and must win
+        }, Ctx); // the context says STY09; the payload says STY03 and must win
 
         Assert.Multiple(
             () => Assert.Equal(AuditVisibilityScope.TenantTargeted, row.VisibilityScope),
@@ -121,7 +124,7 @@ public class S148ConfigStageAuditMapperTests
 
         Assert.Multiple(
             () => Assert.Equal(AuditVisibilityScope.TenantTargeted, row.VisibilityScope),
-            () => Assert.Equal("STY02", row.TargetOrgId),
+            () => Assert.Equal("STY09", row.TargetOrgId),
             () => Assert.Equal("EMP001", row.TargetResourceId),
             () => Assert.Equal(new[]
                 { "employeeId", "factsId", "action", "overtimeRegime", "onFlexScheme", "effectiveFrom", "effectiveTo",
