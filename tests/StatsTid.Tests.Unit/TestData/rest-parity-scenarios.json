@@ -1,257 +1,946 @@
 {
-  "schemaVersion": 1,
-  "about": "Rest scenarios the engine (RestParityTableTests) and the Skema screen (restParity.test.ts) must judge identically. A rest belongs to the period in which it ends; `from` is the day the earlier shift started. S148 S0-4.",
+  "schemaVersion": 2,
+  "about": "Rest scenarios the engine (RestParityTableTests) and the Skema screen (restParity.test.ts) must judge identically. Every work end is judged on the 24 elapsed hours (Europe/Copenhagen) before it; a finding is dated the day its work ends, one per day at the day's lowest value; restHours is the longest unbroken rest in that window, one decimal, rounded down. S148 wave 3b (research adjudication RR-1).",
   "scenarios": [
     {
       "id": "interior-short-rest",
-      "source": "AC-S0-3a (REF:309)",
+      "source": "AC-S0-3a; RR-1's own example (6.0 before, 8.0 now): window [Tue 14:00, Wed 14:00], rests 14:00-22:00 (8 h) and 24:00-06:00 (6 h)",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-10", "start": "22:00", "end": "23:59" },
-        { "date": "2026-03-11", "start": "06:00", "end": "14:00" }
+        {
+          "date": "2026-03-10",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-11",
+          "start": "06:00",
+          "end": "14:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-10", "to": "2026-03-11", "gapHours": 6.0 }
+        {
+          "date": "2026-03-11",
+          "restHours": 8
+        }
       ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "interior-short-rest-derogation",
-      "source": "derogation (REF:323; AgreementRuleConfig.RestPeriodDerogationAllowed)",
+      "source": "RR-2: 8.0 is on the floor, so a WARNING with the derogation",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": true,
       "intervals": [
-        { "date": "2026-03-10", "start": "22:00", "end": "23:59" },
-        { "date": "2026-03-11", "start": "06:00", "end": "14:00" }
+        {
+          "date": "2026-03-10",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-11",
+          "start": "06:00",
+          "end": "14:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-10", "to": "2026-03-11", "gapHours": 6.0 }
+        {
+          "date": "2026-03-11",
+          "restHours": 8
+        }
+      ],
+      "expectedEngineWarningDates": [
+        "2026-03-11"
       ],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "midnight-halves-alone",
-      "source": "AC-S0-3b, AC-S0-4b (REF:310)",
+      "source": "AC-S0-3b, AC-S0-4b: 22:00-06:00 across midnight is one stretch of work; the window before 06:00 holds a 16 h rest",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-11", "start": "22:00", "end": "23:59" },
-        { "date": "2026-03-12", "start": "00:00", "end": "06:00" }
+        {
+          "date": "2026-03-11",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-12",
+          "start": "00:00",
+          "end": "06:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "midnight-halves-then-same-day-work",
-      "source": "AC-S0-3b: the rest is measured after 06:00 (REF:310)",
+      "source": "AC-S0-3b: the work end 20:00 on the 12th, window from 20:00 on the 11th: rest 20:00-22:00 (2 h) and 06:00-16:00 (10 h)",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-11", "start": "22:00", "end": "23:59" },
-        { "date": "2026-03-12", "start": "00:00", "end": "06:00" },
-        { "date": "2026-03-12", "start": "16:00", "end": "20:00" }
+        {
+          "date": "2026-03-11",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-12",
+          "start": "00:00",
+          "end": "06:00"
+        },
+        {
+          "date": "2026-03-12",
+          "start": "16:00",
+          "end": "20:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-11", "to": "2026-03-12", "gapHours": 10.0 }
+        {
+          "date": "2026-03-12",
+          "restHours": 10
+        }
       ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "exactly-eleven-hours",
-      "source": "the boundary: 11 hours is not below 11 hours",
+      "source": "the boundary: 11 hours is not below 11 hours (RR-1 \"mindst 11\")",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-09", "start": "08:00", "end": "20:00" },
-        { "date": "2026-03-10", "start": "07:00", "end": "15:00" }
+        {
+          "date": "2026-03-09",
+          "start": "08:00",
+          "end": "20:00"
+        },
+        {
+          "date": "2026-03-10",
+          "start": "07:00",
+          "end": "15:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "partly-clocked-day",
-      "source": "AC-S0-3c (REF:311)",
+      "source": "AC-S0-3c: any kept interval makes a day analysed; the day with project hours above its interval hours is listed",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-16", "start": "08:00", "end": "12:00" },
-        { "date": "2026-03-17", "start": "08:00", "end": "15:24" }
+        {
+          "date": "2026-03-16",
+          "start": "08:00",
+          "end": "12:00"
+        },
+        {
+          "date": "2026-03-17",
+          "start": "08:00",
+          "end": "15:24"
+        }
       ],
       "projectHours": [
-        { "date": "2026-03-16", "hours": 7.4 },
-        { "date": "2026-03-17", "hours": 7.4 }
+        {
+          "date": "2026-03-16",
+          "hours": 7.4
+        },
+        {
+          "date": "2026-03-17",
+          "hours": 7.4
+        }
       ],
       "expectedDailyRest": [],
-      "expectedEngineRestNotCheckedDays": ["2026-03-16"]
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": [
+        "2026-03-16"
+      ]
     },
     {
       "id": "lower-month-edge-short-rest",
-      "source": "month edges: a rest is judged in the period in which it ends (14813 BC-4)",
+      "source": "RR-1 dating: the work end is on 1 April, so the finding belongs to April; the read starts two days before the month",
       "periodStart": "2026-04-01",
       "periodEnd": "2026-04-30",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-31", "start": "14:00", "end": "22:00" },
-        { "date": "2026-04-01", "start": "07:00", "end": "15:00" }
+        {
+          "date": "2026-03-31",
+          "start": "14:00",
+          "end": "22:00"
+        },
+        {
+          "date": "2026-04-01",
+          "start": "07:00",
+          "end": "15:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-31", "to": "2026-04-01", "gapHours": 9.0 }
+        {
+          "date": "2026-04-01",
+          "restHours": 9
+        }
       ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "upper-month-edge-belongs-to-next-month",
-      "source": "month edges: the rest ends in April, so March does not report it (14813 BC-4)",
+      "source": "RR-1 dating: the work end is on 1 April, so March does not judge it",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-31", "start": "14:00", "end": "22:00" },
-        { "date": "2026-04-01", "start": "07:00", "end": "15:00" }
+        {
+          "date": "2026-03-31",
+          "start": "14:00",
+          "end": "22:00"
+        },
+        {
+          "date": "2026-04-01",
+          "start": "07:00",
+          "end": "15:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "midnight-halves-across-month-edge",
-      "source": "month edges: a night shift over the edge is one shift",
+      "source": "month edges: one stretch of work over the month edge; the window before 1 Apr 06:00 holds a 16 h rest",
       "periodStart": "2026-04-01",
       "periodEnd": "2026-04-30",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-31", "start": "22:00", "end": "23:59" },
-        { "date": "2026-04-01", "start": "00:00", "end": "06:00" }
+        {
+          "date": "2026-03-31",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-04-01",
+          "start": "00:00",
+          "end": "06:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "reversed-interval-ignored",
-      "source": "Skema's positive-duration rule (14813 BC-8)",
+      "source": "Skema's positive-duration rule: an interval whose end is before its start is not work",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-16", "start": "23:00", "end": "22:00" },
-        { "date": "2026-03-17", "start": "05:00", "end": "13:00" }
+        {
+          "date": "2026-03-16",
+          "start": "23:00",
+          "end": "22:00"
+        },
+        {
+          "date": "2026-03-17",
+          "start": "05:00",
+          "end": "13:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "continuation-day-without-other-work",
-      "source": "the engine's attribution: a shift belongs to the day it started (wave-3 brief adjudication, item 5)",
+      "source": "RR-1: Tue 20:00 to Wed 20:00 is one 24 h stint; its end window holds no rest (0.0, dated Wed 11). Thu 13:00 end: rest 20:00-05:00 is 9.0",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-10", "start": "20:00", "end": "23:59" },
-        { "date": "2026-03-11", "start": "00:00", "end": "20:00" },
-        { "date": "2026-03-12", "start": "05:00", "end": "13:00" }
+        {
+          "date": "2026-03-10",
+          "start": "20:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-11",
+          "start": "00:00",
+          "end": "20:00"
+        },
+        {
+          "date": "2026-03-12",
+          "start": "05:00",
+          "end": "13:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-10", "to": "2026-03-12", "gapHours": 9.0 }
+        {
+          "date": "2026-03-11",
+          "restHours": 0
+        },
+        {
+          "date": "2026-03-12",
+          "restHours": 9
+        }
       ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "chain-over-two-midnights",
-      "source": "the engine's attribution: a chain over two midnights is one shift (wave-3 brief adjudication, item 5)",
+      "source": "RR-1 (one finding per day, the lowest): one stint Mon 22:00 to Wed 02:00, window all work: 0.0 on Wed 11; Wed 14:00 end: rest 02:00-10:00 is 8.0",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-09", "start": "22:00", "end": "23:59" },
-        { "date": "2026-03-10", "start": "00:00", "end": "23:59" },
-        { "date": "2026-03-11", "start": "00:00", "end": "02:00" },
-        { "date": "2026-03-11", "start": "10:00", "end": "14:00" }
+        {
+          "date": "2026-03-09",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-10",
+          "start": "00:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-11",
+          "start": "00:00",
+          "end": "02:00"
+        },
+        {
+          "date": "2026-03-11",
+          "start": "10:00",
+          "end": "14:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-09", "to": "2026-03-11", "gapHours": 8.0 }
+        {
+          "date": "2026-03-11",
+          "restHours": 0
+        }
       ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "end-2358-does-not-join",
-      "source": "the midnight join needs an end at 23:59 or later: 23:58 does not join (Step 5a adjudication, TASK-14814 ruling 2)",
+      "source": "the join's end side: 23:58 is not joined to 00:00, so it is a work end of its own on the 18th: window rests 23:58-08:00 (8 h 2 min) and 16:00-22:00 (6 h): 8.0; the 19th 06:00 end: 6.0",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-18", "start": "22:00", "end": "23:58" },
-        { "date": "2026-03-19", "start": "00:00", "end": "06:00" }
+        {
+          "date": "2026-03-18",
+          "start": "08:00",
+          "end": "16:00"
+        },
+        {
+          "date": "2026-03-18",
+          "start": "22:00",
+          "end": "23:58"
+        },
+        {
+          "date": "2026-03-19",
+          "start": "00:00",
+          "end": "06:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-18", "to": "2026-03-19", "gapHours": 0.0 }
+        {
+          "date": "2026-03-18",
+          "restHours": 8
+        },
+        {
+          "date": "2026-03-19",
+          "restHours": 6
+        }
       ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
       "id": "start-0001-does-not-join",
-      "source": "the midnight join needs a start at exactly 00:00: 00:01 does not join (Step 5a adjudication, TASK-14814 ruling 2)",
+      "source": "the join's start side: a 00:01 start is not joined to a 23:59 end; the 23rd is judged on its own: 8.0; the 24th 06:00 end: 6.0",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-23", "start": "22:00", "end": "23:59" },
-        { "date": "2026-03-24", "start": "00:01", "end": "06:00" }
+        {
+          "date": "2026-03-23",
+          "start": "08:00",
+          "end": "16:00"
+        },
+        {
+          "date": "2026-03-23",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-24",
+          "start": "00:01",
+          "end": "06:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-23", "to": "2026-03-24", "gapHours": 0.0 }
+        {
+          "date": "2026-03-23",
+          "restHours": 8
+        },
+        {
+          "date": "2026-03-24",
+          "restHours": 6
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "rest-shown-is-rounded-down",
+      "source": "wave-3b adjudication item 9: 22:00 to 06:27 is 8 h 27 min = 8.45 h, shown 8.4 (rounded down), the verdict on the true value",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-16",
+          "start": "14:00",
+          "end": "22:00"
+        },
+        {
+          "date": "2026-03-17",
+          "start": "06:27",
+          "end": "14:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-17",
+          "restHours": 8.4
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "overlapping-intervals-are-one-work-block",
+      "source": "14814 5a ruling 4 (never negative): overlapping intervals are one block of work, there is no negative rest to clamp",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-25",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-26",
+          "start": "00:00",
+          "end": "06:00"
+        },
+        {
+          "date": "2026-03-26",
+          "start": "05:00",
+          "end": "09:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "split-day-alone",
+      "source": "RR-7; verification Corr. 9: end 22:00, window from 22:00 the day before: rests 12:00-17:00 (5 h) and 22:00-08:00 (10 h): 10.0",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-02",
+          "start": "08:00",
+          "end": "12:00"
+        },
+        {
+          "date": "2026-03-02",
+          "start": "17:00",
+          "end": "22:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-02",
+          "restHours": 10
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "split-day-then-night-shift",
+      "source": "RR-7; verification case (i): the stint ends Wed 06:00; its window from Tue 06:00 holds rests 06:00-08:00 and 16:00-22:00 (6 h): 6.0; Thursday 16:00 end is fine",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-03",
+          "start": "08:00",
+          "end": "16:00"
+        },
+        {
+          "date": "2026-03-03",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-04",
+          "start": "00:00",
+          "end": "06:00"
+        },
+        {
+          "date": "2026-03-05",
+          "start": "08:00",
+          "end": "16:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-04",
+          "restHours": 6
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "twenty-four-hour-shift",
+      "source": "RR-7 case (ii): a 24 h shift has no rest in the window: 0.0, dated the day it ends",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-06",
+          "start": "12:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-07",
+          "start": "00:00",
+          "end": "12:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-07",
+          "restHours": 0
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "exactly-thirteen-hours",
+      "source": "RR-7 case (iii): 07:00-20:00, rest 20:00-07:00 is exactly 11 h: no finding",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-20",
+          "start": "07:00",
+          "end": "20:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "thirteen-hours-one-minute",
+      "source": "RR-7: 07:00-20:01 leaves 10 h 59 min (10.98 h), shown 10.9 rounded down, so a breach never shows the minimum itself (BC-5)",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-20",
+          "start": "07:00",
+          "end": "20:01"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-20",
+          "restHours": 10.9
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "spring-forward-night-is-an-hour-shorter",
+      "source": "RR-7; RR-1 elapsed time: Sat 20:00 CET to Sun 07:30 CEST is 10.5 elapsed hours (11.5 on the wall clock)",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-28",
+          "start": "12:00",
+          "end": "20:00"
+        },
+        {
+          "date": "2026-03-29",
+          "start": "07:30",
+          "end": "15:30"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-29",
+          "restHours": 10.5
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "fall-back-night-is-an-hour-longer",
+      "source": "RR-7; RR-1 elapsed time: Sat 20:00 CEST to Sun 06:30 CET is 11.5 elapsed hours (10.5 on the wall clock): no finding",
+      "periodStart": "2026-10-01",
+      "periodEnd": "2026-10-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-10-24",
+          "start": "12:00",
+          "end": "20:00"
+        },
+        {
+          "date": "2026-10-25",
+          "start": "06:30",
+          "end": "14:30"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "two-days-back-across-a-23-hour-day",
+      "source": "RR-7; RR-1 data edge: 31 March 2030 has 23 hours; the end Mon 00:30 looks back to Sat 23:30, work 23:30-24:00 is inside, so the rest 00:00 CET to 11:30 CEST is 10.5; without the 30 March read it would be 11.0",
+      "periodStart": "2030-04-01",
+      "periodEnd": "2030-04-30",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2030-03-30",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2030-03-31",
+          "start": "11:30",
+          "end": "20:00"
+        },
+        {
+          "date": "2030-04-01",
+          "start": "00:00",
+          "end": "00:30"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2030-04-01",
+          "restHours": 10.5
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "derogation-floor-eight-hours-is-a-warning",
+      "source": "RR-2: 8.0 is on the floor, a WARNING with the derogation",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": true,
+      "intervals": [
+        {
+          "date": "2026-03-02",
+          "start": "06:00",
+          "end": "22:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-02",
+          "restHours": 8
+        }
+      ],
+      "expectedEngineWarningDates": [
+        "2026-03-02"
       ],
       "expectedEngineRestNotCheckedDays": []
     },
     {
-      "id": "midpoint-rest-rounds-half-up",
-      "source": "a rest is shown to one decimal with halves rounded up: 8 h 27 min is 8.5 (Step 5a adjudication, TASK-14814 ruling 1)",
+      "id": "derogation-below-floor-is-a-violation",
+      "source": "RR-2: 7.5 is below the 8 h floor, a VIOLATION even with the derogation",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
-      "derogationAllowed": false,
+      "derogationAllowed": true,
       "intervals": [
-        { "date": "2026-03-16", "start": "14:00", "end": "22:00" },
-        { "date": "2026-03-17", "start": "06:27", "end": "14:00" }
+        {
+          "date": "2026-03-02",
+          "start": "06:00",
+          "end": "22:30"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-16", "to": "2026-03-17", "gapHours": 8.5 }
+        {
+          "date": "2026-03-02",
+          "restHours": 7.5
+        }
       ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     },
     {
-      "id": "overlapping-intervals-show-zero",
-      "source": "overlapping intervals give a negative rest, shown as 0.0 (Step 5a adjudication, TASK-14814 ruling 4)",
+      "id": "end-2359-is-the-end-of-the-day",
+      "source": "RR-1: a typed 23:59 end is the end of its day (24:00), so the rest to 08:29 is 8 h 29 min = 8.48 h, shown 8.4 (read as 23:59 it would show 8.5)",
       "periodStart": "2026-03-01",
       "periodEnd": "2026-03-31",
       "derogationAllowed": false,
       "intervals": [
-        { "date": "2026-03-25", "start": "22:00", "end": "23:59" },
-        { "date": "2026-03-26", "start": "00:00", "end": "06:00" },
-        { "date": "2026-03-26", "start": "05:00", "end": "09:00" }
+        {
+          "date": "2026-03-16",
+          "start": "14:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-03-17",
+          "start": "08:29",
+          "end": "14:00"
+        }
       ],
       "projectHours": [],
       "expectedDailyRest": [
-        { "from": "2026-03-25", "to": "2026-03-26", "gapHours": 0.0 }
+        {
+          "date": "2026-03-17",
+          "restHours": 8.4
+        }
       ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "seconds-rest-rounds-once",
+      "source": "the Orchestrator (wave-3 5a cycle 2): 8 h 29 min 50 s = 8.497 h, rounded down once: 8.4 (two decimals first would show 8.5)",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-16",
+          "start": "14:00",
+          "end": "22:00"
+        },
+        {
+          "date": "2026-03-17",
+          "start": "06:29:50",
+          "end": "14:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-17",
+          "restHours": 8.4
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "spring-forward-typed-0230-is-the-changeover",
+      "source": "RR-1: a typed 02:30 on 29 March does not exist; it is the changeover instant (01:00 UTC). Sat 16:00 CET to there is 10.0",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-28",
+          "start": "08:00",
+          "end": "16:00"
+        },
+        {
+          "date": "2026-03-29",
+          "start": "02:30",
+          "end": "10:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-29",
+          "restHours": 10
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "fall-back-typed-0230-end-is-the-later-instant",
+      "source": "RR-1: a typed end 02:30 on 25 October is the later instant (CET); the window holds 01:30-11:30 UTC of rest: 10.0 (as the earlier instant it would be 11.0)",
+      "periodStart": "2026-10-01",
+      "periodEnd": "2026-10-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-10-24",
+          "start": "13:30",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-10-25",
+          "start": "00:00",
+          "end": "02:30"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-10-25",
+          "restHours": 10
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "fall-back-typed-0230-start-is-the-earlier-instant",
+      "source": "RR-1: a typed start 02:30 on 25 October is the earlier instant (CEST); from Sat 16:00 CEST that is 10.5 (as the later instant it would be 11.5)",
+      "periodStart": "2026-10-01",
+      "periodEnd": "2026-10-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-10-24",
+          "start": "08:00",
+          "end": "16:00"
+        },
+        {
+          "date": "2026-10-25",
+          "start": "02:30",
+          "end": "06:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-10-25",
+          "restHours": 10.5
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "night-shift-over-the-upper-month-edge",
+      "source": "RR-1 \"judged as the month sees it\": March reads only to 31 March, the shift ends there at 24:00: rests 00:00-08:00 and 16:00-22:00: 31 Mar 8.0 (April judges the whole shift)",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-31",
+          "start": "08:00",
+          "end": "16:00"
+        },
+        {
+          "date": "2026-03-31",
+          "start": "22:00",
+          "end": "23:59"
+        },
+        {
+          "date": "2026-04-01",
+          "start": "00:00",
+          "end": "06:00"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-31",
+          "restHours": 8
+        }
+      ],
+      "expectedEngineWarningDates": [],
+      "expectedEngineRestNotCheckedDays": []
+    },
+    {
+      "id": "spring-forward-work-inside-the-missing-hour-is-still-judged",
+      "source": "wave-3b adjudication item 6: an interval whose two ends are both in the missing hour has no elapsed length; its end is still judged and it breaks no rest: rests Sat 02:00-08:00 and Sat 16:00 to the changeover: 10.0",
+      "periodStart": "2026-03-01",
+      "periodEnd": "2026-03-31",
+      "derogationAllowed": false,
+      "intervals": [
+        {
+          "date": "2026-03-28",
+          "start": "08:00",
+          "end": "16:00"
+        },
+        {
+          "date": "2026-03-29",
+          "start": "02:10",
+          "end": "02:50"
+        }
+      ],
+      "projectHours": [],
+      "expectedDailyRest": [
+        {
+          "date": "2026-03-29",
+          "restHours": 10
+        }
+      ],
+      "expectedEngineWarningDates": [],
       "expectedEngineRestNotCheckedDays": []
     }
   ]

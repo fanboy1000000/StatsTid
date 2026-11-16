@@ -27,7 +27,7 @@ public class RestPeriodRuleIntervalTests
         EmploymentCategory = "STANDARD",
     };
 
-    private static AgreementRuleConfig Config() => new()
+    private static AgreementRuleConfig Config(bool derogation = false) => new()
     {
         AgreementCode = "AC",
         OkVersion = "OK24",
@@ -42,7 +42,7 @@ public class RestPeriodRuleIntervalTests
         HolidaySupplementEnabled = false,
         MaxDailyHours = 13.0m,
         MinimumRestHours = 11.0m,
-        RestPeriodDerogationAllowed = false,
+        RestPeriodDerogationAllowed = derogation,
         VoluntaryUnsocialHoursAllowed = true,
     };
 
@@ -68,14 +68,18 @@ public class RestPeriodRuleIntervalTests
     /// Kind <b>N</b> (AC-S0-3b; names the interval input this sprint creates), proved red by
     /// mutation <b>M-24</b> (midnight continuity dropped: an interval ending at 23:59 or later and
     /// one starting at 00:00 the next day stay two stints), run at the wave gate in a detached
-    /// worktree. Red conditions: under M-24 (i) finds one DAILY_REST finding with ActualValue 0.0
-    /// (the one-minute midnight "rest"), failing "no DAILY_REST finding"; (ii) finds the 0.0 finding
-    /// instead of the 10.0 one, failing "exactly one, 10.0".
+    /// worktree. Under the look-back rule (RR-1) arms (i) and (ii) give the same verdict with or without
+    /// the join, so the join is proved by arm (iii), added at 3b: red conditions: under M-24 the
+    /// unjoined 23:59 end is a work end of its own on 11 March (window rests 06:00-08:00 and 16:00-22:00,
+    /// 8.0), so (iii) finds two findings and "exactly one" fails (actual also 11 March 8.0).
     ///
-    /// Expected values from the refinement (REF:310): 22:00-23:59 plus 00:00-06:00 is one stint; the
-    /// rest is measured before 22:00 and after 06:00, never as a one-minute gap. (i) alone: no
-    /// finding. (ii) with Thu 12 March 16:00-20:00: 06:00 to 16:00 = 10.0 hours, one VIOLATION dated
-    /// the day the night shift started, 11 March.
+    /// Expected values from the refinement (REF:310) and RR-1: 22:00-23:59 plus 00:00-06:00 is one
+    /// stint; the rest is measured before 22:00 and after 06:00, never as a one-minute gap. (i) alone:
+    /// no finding. (ii) with Thu 12 March 16:00-20:00: the work end Thu 20:00, window from Wed 20:00,
+    /// rests Wed 20:00-22:00 (2 h) and Thu 06:00-16:00 (10 h): 10.0, one VIOLATION dated the day the
+    /// work ends, 12 March. (iii) Wed 11 March 08:00-16:00 plus the halves: the stint ends Thu 06:00,
+    /// window from Wed 06:00 holds rests 06:00-08:00 and 16:00-22:00: 6.0, dated 12 March, and no
+    /// finding dated 11 March.
     /// </summary>
     [Fact]
     public void MidnightHalves_FormOneStint_NoOneMinuteRest()
@@ -96,10 +100,21 @@ public class RestPeriodRuleIntervalTests
 
         var rest = Assert.Single(DailyRest(withAfternoon));
         Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
-        Assert.Equal(wed, rest.Date);
+        // S148 3b (RR-1): dated the day the work ends, Thu 12 March (was Wed 11 March).
+        Assert.Equal(thu, rest.Date);
         Assert.Equal(10.0m, rest.ActualValue);
         Assert.Contains("2026-03-12", rest.Message);
         Assert.DoesNotContain(DailyRest(withAfternoon), f => f.ActualValue == 0.0m);
+
+        // (iii) a day shift the same Wednesday: the join decides which ends are judged (N, M-24).
+        var withDayShift = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(),
+            halves.Append(Iv(wed, 8, 0, 16, 0)).ToList(), StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
+
+        var joined = Assert.Single(DailyRest(withDayShift));
+        Assert.Equal(thu, joined.Date);
+        Assert.Equal(6.0m, joined.ActualValue);
+        Assert.DoesNotContain(DailyRest(withDayShift), f => f.Date == wed);
     }
 
     /// <summary>
@@ -109,7 +124,7 @@ public class RestPeriodRuleIntervalTests
     /// with its 8 h entry, Tue 9 April 2024 05:00-09:00 with a voluntary 4 h entry, the rest 6 h. Tue 9
     /// also carries one NON-voluntary 1 h entry, so the day is not wholly voluntary and is not exempt.
     ///
-    /// Discriminating assertion: the 6.0 DAILY_REST VIOLATION dated 8 April is present. It fails if the
+    /// Discriminating assertion: the 6.0 DAILY_REST VIOLATION dated 9 April (the day the work ends) is present. It fails if the
     /// exemption is read as "any entry of the day is voluntary" (the finding disappears).
     /// </summary>
     [Fact]
@@ -130,7 +145,9 @@ public class RestPeriodRuleIntervalTests
 
         var rest = Assert.Single(DailyRest(result));
         Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
-        Assert.Equal(mon, rest.Date);
+        // S148 3b (RR-1): dated the day the work ends (Tue 9 April): end 09:00, window [Mon 09:00, Tue 09:00],
+        // rests Mon 09:00-15:00 (6 h) and 23:00-05:00 (6 h); the longest is 6.0 (was dated Mon 8 April).
+        Assert.Equal(tue, rest.Date);
         Assert.Equal(6.0m, rest.ActualValue);
     }
 
@@ -142,8 +159,9 @@ public class RestPeriodRuleIntervalTests
     /// <b>M-27</b> (the daily check's upper period guard deleted: <c>|| next.Date &gt; periodEnd</c>),
     /// run at the S148 wave-3 fix-up gate. A rest is judged in the period in which it ENDS (14813 BC-4):
     /// 31 March 14:00-22:00 to 1 April 07:00-15:00 is April's rest (9.0 h), so March, given both days,
-    /// does not judge it. Red conditions: under M-27 March reports the 9.0 h finding and
-    /// <c>Assert.Empty</c> fails. Contrast arm: April reports exactly that finding, dated 31 March.
+    /// does not judge it. Red conditions: under M-27 (work ends dated after <c>periodEnd</c> are judged too)
+    /// March reports the 9.0 h finding dated 1 April and <c>Assert.Empty</c> fails. Contrast arm: April
+    /// reports exactly that finding, dated 1 April (the day the work ends).
     /// </summary>
     [Fact]
     public void RestEndingAfterThePeriod_IsNotJudged()
@@ -158,13 +176,15 @@ public class RestPeriodRuleIntervalTests
         var april = RestPeriodRule.Evaluate(
             Profile(), new List<TimeEntry>(), AprilStart, AprilEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
         var rest = Assert.Single(DailyRest(april));
-        Assert.Equal(mar31, rest.Date);
+        // S148 3b (RR-1): dated the day the work ends: end Wed 1 Apr 15:00, window from Tue 31 Mar 15:00,
+        // rest 22:00-07:00 is 9.0 (was dated 31 March).
+        Assert.Equal(AprilStart, rest.Date);
         Assert.Equal(9.0m, rest.ActualValue);
     }
 
     /// <summary>
-    /// Kind <b>N</b>, proved red by mutation <b>M-28</b> (the lower period guard deleted:
-    /// <c>next.Date &lt; periodStart ||</c>). April, given 30 March 14:00-22:00 and 31 March
+    /// Kind <b>N</b>, proved red by mutation <b>M-28</b> (work ends dated before <c>periodStart</c> are
+    /// judged too). April, given 30 March 14:00-22:00 and 31 March
     /// 07:00-15:00, does not judge that 9.0 h rest: it ended in March, which owns it. Red conditions:
     /// under M-28 April reports the finding and <c>Assert.Empty</c> fails.
     /// </summary>
@@ -189,9 +209,10 @@ public class RestPeriodRuleIntervalTests
     /// work from a day the read never saw, and its voluntary status cannot be judged. April's view:
     /// 31 March 00:00-20:00 on a day whose only entry is voluntary, 1 April 05:00-13:00 with a
     /// non-voluntary entry, exemption allowed, derogation off. Expect exactly one VIOLATION, 9.0 h,
-    /// dated 31 March. Red conditions: with fix-up 1's engine change reverted (<c>cutAtReadEdge</c>
-    /// removed) the stint counts as wholly voluntary, the pair is skipped and there is no finding, so
-    /// <c>Assert.Single</c> fails.
+    /// dated 1 April (the day the work ends; end 13:00, window from 31 March 13:00, rest 20:00-05:00).
+    /// Red conditions: with fix-up 1's engine change reverted (<c>cutAtReadEdge</c> removed) the stint
+    /// counts as wholly voluntary, it is not judged and there is no finding, so <c>Assert.Single</c>
+    /// fails.
     /// </summary>
     [Fact]
     public void ChainCutAtTheReadEdge_IsNotExempt()
@@ -205,7 +226,8 @@ public class RestPeriodRuleIntervalTests
 
         var rest = Assert.Single(DailyRest(result));
         Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
-        Assert.Equal(mar31, rest.Date);
+        // S148 3b (RR-1): dated 1 April, the day the work ends (was 31 March).
+        Assert.Equal(AprilStart, rest.Date);
         Assert.Equal(9.0m, rest.ActualValue);
     }
 
@@ -248,12 +270,13 @@ public class RestPeriodRuleIntervalTests
     }
 
     /// <summary>
-    /// Kind <b>F</b> (Unit; fix-up 2, adjudication ruling 1). A rest is shown to one decimal with halves
-    /// rounded up, and the finding's message says the same figure. Mon 16 March 14:00-22:00 and Tue 17
-    /// March 06:27-14:00 leave 8 h 27 min = 8.45 h: <c>ActualValue</c> 8.5. The expected message is built
-    /// in the test from the value (this machine's culture prints a decimal comma, so no literal).
-    /// Red conditions: with fix-up 2 reverted the value is rounded to even, 8.4, so
-    /// <c>Assert.Equal(8.5m, ...)</c> fails (the message still says 8.5).
+    /// Kind <b>F</b> (Unit; wave-3b brief adjudication item 9). A rest is shown to one decimal rounded
+    /// DOWN, and the finding's message says the same figure, so a breach never shows the minimum itself.
+    /// Mon 16 March 14:00-22:00 and Tue 17 March 06:27-14:00: the work end Tue 14:00 looks back to Mon
+    /// 14:00, the rest 22:00-06:27 is 8 h 27 min = 8.45 h, shown <c>ActualValue</c> 8.4. The expected
+    /// message is built in the test from the value (this machine's culture prints a decimal comma, so no
+    /// literal). Red conditions: on the wave-3 engine (half up) the value is 8.5 dated 16 March, so
+    /// <c>Assert.Equal(8.4m, ...)</c> fails.
     /// </summary>
     [Fact]
     public void MidpointRest_ValueAndMessageAgree()
@@ -266,7 +289,162 @@ public class RestPeriodRuleIntervalTests
             Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
 
         var rest = Assert.Single(DailyRest(result));
-        Assert.Equal(8.5m, rest.ActualValue);
+        // S148 3b (RR-1, item 9): 8.5 -> 8.4 (rounded down), dated the day the work ends.
+        Assert.Equal(tue, rest.Date);
+        Assert.Equal(8.4m, rest.ActualValue);
         Assert.Contains($"er {rest.ActualValue:F1}t", rest.Message);
+    }
+
+    /// <summary>
+    /// Kind <b>F</b> (Unit; AC-S0-3h, RR-1 "one finding per day, the lowest value" and item 10's tie).
+    /// March 2026, no derogation. <b>(a)</b> Tue 10 Mar 14:00-22:00; Wed 11 Mar 06:00-10:00 and
+    /// 13:00-23:30. Wed's 10:00 end: window from Tue 10:00, rests 10:00-14:00 and 22:00-06:00: 8.0
+    /// (fails); Wed's 23:30 end: window from Tue 23:30, rests 23:30-06:00 (6.5) and 10:00-13:00 (3):
+    /// 6.5 (fails, lower, later). Exactly one finding: 11 March, 6.5, VIOLATION; its message names
+    /// "2026-03-11" and "23:30", not "10:00". <b>(b) the tie:</b> Sun 8 Mar 08:00-12:00 and
+    /// 13:00-22:30; Mon 9 Mar 07:00-11:00 and 12:00-16:00. Both 9 March ends give 8.5 (rest 22:30-07:00
+    /// in each window); the 9 March finding is 8.5 and its message contains "11:00", not "16:00" (equal
+    /// lowest values name the earliest end). Red conditions: the wave-3 engine reports (a) one finding
+    /// dated 10 March, 8.0, and (b) one finding dated 8 March, 8.5, so the date and value assertions fail.
+    /// </summary>
+    [Fact]
+    public void OneFindingPerDay_AtTheLowestValue_MessageNamesTheJudgedEnd()
+    {
+        var tue = new DateOnly(2026, 3, 10);
+        var wed = new DateOnly(2026, 3, 11);
+        var intervals = new[] { Iv(tue, 14, 0, 22, 0), Iv(wed, 6, 0, 10, 0), Iv(wed, 13, 0, 23, 30) };
+
+        var result = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
+
+        var rest = Assert.Single(DailyRest(result));
+        Assert.Equal(wed, rest.Date);
+        Assert.Equal(6.5m, rest.ActualValue);
+        Assert.Equal(ComplianceSeverity.VIOLATION, rest.Severity);
+        Assert.Contains("2026-03-11", rest.Message);
+        Assert.Contains("23:30", rest.Message);
+        Assert.DoesNotContain("10:00", rest.Message);
+
+        // (b) the tie: equal lowest values name the earliest end
+        var sun = new DateOnly(2026, 3, 8);
+        var mon = new DateOnly(2026, 3, 9);
+        var tie = new[] { Iv(sun, 8, 0, 12, 0), Iv(sun, 13, 0, 22, 30), Iv(mon, 7, 0, 11, 0), Iv(mon, 12, 0, 16, 0) };
+
+        var tieResult = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), tie, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
+
+        var monday = Assert.Single(DailyRest(tieResult), f => f.Date == mon);
+        Assert.Equal(8.5m, monday.ActualValue);
+        Assert.Contains("11:00", monday.Message);
+        Assert.DoesNotContain("16:00", monday.Message);
+    }
+
+    /// <summary>
+    /// Kind <b>F</b> (Unit; AC-S0-3i, RR-2 and item 9). With the derogation allowed, a rest of 8.0 or more
+    /// is a WARNING and a lower one a VIOLATION, on the true value; the shown value is rounded down.
+    /// Mon 2 March 2026, one shift from 06:00, the window from Sun 1 Mar at the end time: <b>(a)</b> to
+    /// 22:00: rest 22:00-06:00 = 8.0, one WARNING; <b>(b)</b> to 22:30: 7.5, one VIOLATION; <b>(c)</b> to
+    /// 22:03: 7 h 57 min, shown 7.9 (not 8.0), one VIOLATION. Red conditions: the wave-3 engine reports
+    /// no finding for a single shift, so each <c>Assert.Single</c> fails. M-31 (floor compared strictly)
+    /// turns (a) into a VIOLATION.
+    /// </summary>
+    [Fact]
+    public void DerogationFloor_EightHoursWarns_BelowIsAViolation()
+    {
+        var mon = new DateOnly(2026, 3, 2);
+
+        var a = Assert.Single(DailyRest(Derogating(Iv(mon, 6, 0, 22, 0))));
+        Assert.Equal(mon, a.Date);
+        Assert.Equal(8.0m, a.ActualValue);
+        Assert.Equal(ComplianceSeverity.WARNING, a.Severity);
+
+        var b = Assert.Single(DailyRest(Derogating(Iv(mon, 6, 0, 22, 30))));
+        Assert.Equal(7.5m, b.ActualValue);
+        Assert.Equal(ComplianceSeverity.VIOLATION, b.Severity);
+
+        var c = Assert.Single(DailyRest(Derogating(Iv(mon, 6, 0, 22, 3))));
+        Assert.Equal(7.9m, c.ActualValue);
+        Assert.Equal(ComplianceSeverity.VIOLATION, c.Severity);
+    }
+
+    private static ComplianceCheckResult Derogating(ComplianceWorkInterval interval) =>
+        RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(derogation: true), new[] { interval },
+            StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
+
+    /// <summary>
+    /// Kind <b>F</b> (Unit; AC-S0-3i, item 17). A WARNING under the derogation says what StatsTid does
+    /// not check: its message contains, word for word, the sentence below (built here from the ruling's
+    /// text, not from the engine's constant); a VIOLATION's message does not. Arm (a) Mon 2 March
+    /// 06:00-22:00 (8.0, WARNING); arm (b) 06:00-22:30 (7.5, VIOLATION). Red conditions: the wave-3
+    /// engine reports no finding for a single shift, so <c>Assert.Single</c> fails.
+    /// </summary>
+    [Fact]
+    public void DerogationWarning_SaysWhatIsNotChecked()
+    {
+        const string notChecked =
+            "Hvilen kan undtagelsesvis nedsættes til 8 timer, højst 1 gang pr. 7 døgn (2 gange efter lokal aftale) "
+            + "og kun med tilsvarende kompenserende hvile umiddelbart efter. StatsTid kontrollerer ingen af delene.";
+        var mon = new DateOnly(2026, 3, 2);
+
+        var warning = Assert.Single(DailyRest(Derogating(Iv(mon, 6, 0, 22, 0))));
+        Assert.Equal(ComplianceSeverity.WARNING, warning.Severity);
+        Assert.Contains(notChecked, warning.Message);
+
+        var violation = Assert.Single(DailyRest(Derogating(Iv(mon, 6, 0, 22, 30))));
+        Assert.Equal(ComplianceSeverity.VIOLATION, violation.Severity);
+        Assert.DoesNotContain("Hvilen kan", violation.Message);
+        Assert.DoesNotContain("StatsTid kontrollerer", violation.Message);
+    }
+
+    /// <summary>
+    /// Kind <b>R</b> (Unit; AC-S0-3j; M-32). A wholly voluntary stint is neither judged nor work in
+    /// another work end's window. Sat 7 March 06:00-22:00 with one voluntary 16 h entry (the config
+    /// allows it); Sun 8 March 06:00-14:00 with a non-voluntary 8 h entry. No DAILY_REST finding:
+    /// Saturday is not judged (its own window would give 8.0), and it is rest in Sunday's window (rest
+    /// from Sat 14:00 to Sun 06:00, 16 h). Discriminating: under M-32 (voluntary stints count as work)
+    /// Sunday gets 8.0 (8 March); under "voluntary stints judged" Saturday gets 8.0. Green on the
+    /// wave-3 engine (the pair is skipped), so R.
+    /// </summary>
+    [Fact]
+    public void VoluntaryStint_IsNeitherJudgedNorWorkInAnotherWindow()
+    {
+        var sat = new DateOnly(2026, 3, 7);
+        var sun = new DateOnly(2026, 3, 8);
+        var entries = new List<TimeEntry> { Entry(sat, 16m, voluntary: true), Entry(sun, 8m) };
+        var intervals = new[] { Iv(sat, 6, 0, 22, 0), Iv(sun, 6, 0, 14, 0) };
+
+        var result = RestPeriodRule.Evaluate(
+            Profile(), entries, MarchStart, MarchEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
+
+        Assert.Empty(DailyRest(result));
+    }
+
+    /// <summary>
+    /// Kind <b>N</b> (Unit; AC-S0-3o, item 5; M-33). The elapsed time comes from the zone the host
+    /// passes in, not from a lookup inside the rule. Sat 28 March 2026 12:00-20:00 and Sun 29 March
+    /// 07:30-15:30 (clocks forward that night): <b>(a)</b> with the Copenhagen zone the night is 10.5
+    /// elapsed hours, one finding dated 29 March; <b>(b)</b> with a fixed +01:00 zone (no daylight
+    /// saving) it is 11.5 hours and there is no finding. Red conditions: under M-33 (the helper reads
+    /// <c>CopenhagenBusinessDate.Zone</c> instead of the zone passed in) arm (b) finds 29 March 10.5, so
+    /// <c>Assert.Empty</c> fails.
+    /// </summary>
+    [Fact]
+    public void ElapsedTime_ComesFromTheZonePassedIn()
+    {
+        var sat = new DateOnly(2026, 3, 28);
+        var sun = new DateOnly(2026, 3, 29);
+        var intervals = new[] { Iv(sat, 12, 0, 20, 0), Iv(sun, 7, 30, 15, 30) };
+
+        var copenhagen = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals, StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Zone);
+        var rest = Assert.Single(DailyRest(copenhagen));
+        Assert.Equal(sun, rest.Date);
+        Assert.Equal(10.5m, rest.ActualValue);
+
+        var fixedZone = TimeZoneInfo.CreateCustomTimeZone("Fixed+01", TimeSpan.FromHours(1), "Fixed+01", "Fixed+01");
+        var fixedResult = RestPeriodRule.Evaluate(
+            Profile(), new List<TimeEntry>(), MarchStart, MarchEnd, Config(), intervals, fixedZone);
+        Assert.Empty(DailyRest(fixedResult));
     }
 }

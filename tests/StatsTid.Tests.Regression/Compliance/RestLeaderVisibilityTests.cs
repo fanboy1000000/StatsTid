@@ -137,11 +137,11 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
     /// <summary>
     /// Kind <b>F (CI)</b>, adjudication ruling 1 (consult item 1) and marker case "previous month sent".
     /// October sent, September unsent. The leader's October read has no DAILY_REST finding and lists
-    /// <c>2025-10-01</c> as not checked; the employee's own read shows the 9.0 finding dated 2025-09-30
+    /// <c>2025-10-01</c> as not checked; the employee's own read shows the 9.0 finding dated 2025-10-01
     /// and no listing, throughout; once September is sent the same leader read gives the one finding and
     /// no listing (nothing is stored, so nothing needs correcting).
     /// Red conditions: with the production change reverted the leader's first read returns the
-    /// finding dated 2025-09-30 (<c>Assert.Empty</c> fails) and no listing.
+    /// finding dated 2025-10-01 (<c>Assert.Empty</c> fails) and no listing.
     /// </summary>
     [Fact]
     public async Task LeaderRead_PreviousMonthUnsent_WithholdsTheBoundaryRest()
@@ -154,16 +154,16 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
         Assert.Equal(new[] { "2025-10-01" }, NotChecked(withheld));
 
         var own = await ReadAsync(await Compliance(_h.Client(emp), emp, 2025, 10));
-        AssertOneFinding(own, "2025-09-30", 9.0m);
+        AssertOneFinding(own, "2025-10-01", 9.0m); // S148 3b (RR-1): "2025-09-30" -> "2025-10-01", the day the work ends
         Assert.Empty(NotChecked(own));
 
         await _h.InsertPeriodAsync(emp, "SUBMITTED", 2025, 9);
 
         var released = await ReadAsync(await Compliance(Leader(), emp, 2025, 10));
-        AssertOneFinding(released, "2025-09-30", 9.0m);
+        AssertOneFinding(released, "2025-10-01", 9.0m); // S148 3b (RR-1)
         Assert.Empty(NotChecked(released));
         var ownAfter = await ReadAsync(await Compliance(_h.Client(emp), emp, 2025, 10));
-        AssertOneFinding(ownAfter, "2025-09-30", 9.0m);
+        AssertOneFinding(ownAfter, "2025-10-01", 9.0m); // S148 3b (RR-1)
     }
 
     /// <summary>
@@ -193,7 +193,7 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
     /// Kind <b>F (CI)</b>, consult item 5 (compliance, the year edge). January 2026: the previous month is
     /// December 2025 (<c>monthStart.AddMonths(-1)</c> across the year). January sent, December unsent: the
     /// leader's read withholds the 31 December rest and lists <c>2026-01-01</c>; once December is sent it
-    /// reports the 9.0 finding dated 2025-12-31. Red conditions: an arithmetic that looks up the wrong
+    /// reports the 9.0 finding dated 2026-01-01. Red conditions: an arithmetic that looks up the wrong
     /// month (for example the same year's December) reads no row and withholds forever, so the released
     /// read fails; with the production change reverted the first read returns the finding.
     /// </summary>
@@ -210,13 +210,13 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
         await _h.InsertPeriodAsync(emp, "SUBMITTED", 2025, 12);
 
         var released = await ReadAsync(await Compliance(Leader(), emp, 2026, 1));
-        AssertOneFinding(released, "2025-12-31", 9.0m);
+        AssertOneFinding(released, "2026-01-01", 9.0m); // S148 3b (RR-1): 2025-12-31 -> 2026-01-01
         Assert.Empty(NotChecked(released));
     }
 
     /// <summary>
     /// Kind <b>F (CI)</b>, consult item 7. HR is the corrective tier and is not withheld: with no approval
-    /// row at all for either month, HR's October read has the 9.0 finding dated 2025-09-30 and lists
+    /// row at all for either month, HR's October read has the 9.0 finding dated 2025-10-01 and lists
     /// nothing. Red conditions: a guard that withholds from every non-self actor (not only the leader
     /// tier) drops the finding and lists 2025-10-01.
     /// </summary>
@@ -227,7 +227,7 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
 
         var body = await ReadAsync(await Compliance(Hr(), emp, 2025, 10));
 
-        AssertOneFinding(body, "2025-09-30", 9.0m);
+        AssertOneFinding(body, "2025-10-01", 9.0m); // S148 3b (RR-1)
         Assert.Empty(NotChecked(body));
     }
 
@@ -244,7 +244,7 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
     {
         var covered = await SeedEdgeEmployeeAsync(2025, 10);
         var hrBody = await ReadAsync(await Compliance(LeaderAlsoHr(hrCoversEmployee: true), covered, 2025, 10));
-        AssertOneFinding(hrBody, "2025-09-30", 9.0m);
+        AssertOneFinding(hrBody, "2025-10-01", 9.0m); // S148 3b (RR-1)
         Assert.Empty(NotChecked(hrBody));
 
         var other = await SeedEdgeEmployeeAsync(2025, 10);
@@ -414,6 +414,90 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
         await _h.InsertPeriodAsync(emp, "SUBMITTED", 2025, 10);
         Assert.Empty(BoundaryDates(await ReadAsync(
             await SkemaMonth(LeaderAlsoHr(hrCoversEmployee: false), emp, 2025, 10))));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    //  The two days before the month (S148 3b, RR-1 / RR-7)
+    // ════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A fresh HK / OK24 employee with the 2024 two-days-back fixture (31 March 2024 was a 23-hour day,
+    /// so only 2024 can reach <c>monthStart - 2</c>; by SQL, no save-path date gate): Sat 30 March
+    /// 22:00-23:59, Sun 31 March 11:30-20:00, Mon 1 April 00:00-00:30, with project hours 1.98, 8.5 and 0.5.
+    /// April's 1 April end is judged on the window from 30 March 23:30: the rest 00:00 CET to 11:30 CEST
+    /// is 10.5 elapsed hours.
+    /// </summary>
+    private async Task<string> SeedTwoDaysBackEmployeeAsync()
+    {
+        var employeeId = await _h.SeedEmployeeAsync();
+        await _h.InsertWorkTimeAsync(employeeId, new DateOnly(2024, 3, 30), ("22:00", "23:59"));
+        await _h.InsertWorkTimeAsync(employeeId, new DateOnly(2024, 3, 31), ("11:30", "20:00"));
+        await _h.InsertWorkTimeAsync(employeeId, new DateOnly(2024, 4, 1), ("00:00", "00:30"));
+        await _h.InsertEntryAsync(employeeId, new DateOnly(2024, 3, 30), 1.98m);
+        await _h.InsertEntryAsync(employeeId, new DateOnly(2024, 3, 31), 8.5m);
+        await _h.InsertEntryAsync(employeeId, new DateOnly(2024, 4, 1), 0.5m);
+        return employeeId;
+    }
+
+    /// <summary>
+    /// Kind <b>F (CI)</b>, AC-S0-3l (the security consult's negative over the two-day window). The
+    /// two-days-back fixture; April 2024 SUBMITTED, March 2024 with no period row. The <b>leader's</b>
+    /// GET of April: 200, no DAILY_REST finding, <c>restNotCheckedDays</c> equals <c>["2024-04-01"]</c>
+    /// (neither previous day reaches a leader while March is unsent). The <b>employee's</b> GET: the one
+    /// 10.5 finding dated 2024-04-01. Then March 2024 SUBMITTED: the leader's GET gives the one 10.5
+    /// finding dated 2024-04-01 and lists nothing.
+    ///
+    /// Red conditions (the wave-3 engine): after March is sent the leader's read starts on 31 March and
+    /// reports one finding dated 2024-03-31, 4.0, so the final <c>AssertOneFinding</c> fails (the
+    /// employee's read fails the same way).
+    /// </summary>
+    [Fact]
+    public async Task LeaderRead_PreviousMonthUnsent_WithholdsBothDaysBefore()
+    {
+        var emp = await SeedTwoDaysBackEmployeeAsync();
+        await _h.InsertPeriodAsync(emp, "SUBMITTED", 2024, 4);
+
+        var withheld = await ReadAsync(await Compliance(Leader(), emp, 2024, 4));
+        Assert.Empty(DailyRest(withheld));
+        Assert.Equal(new[] { "2024-04-01" }, NotChecked(withheld));
+
+        var own = await ReadAsync(await Compliance(_h.Client(emp), emp, 2024, 4));
+        AssertOneFinding(own, "2024-04-01", 10.5m);
+
+        await _h.InsertPeriodAsync(emp, "SUBMITTED", 2024, 3);
+
+        var released = await ReadAsync(await Compliance(Leader(), emp, 2024, 4));
+        AssertOneFinding(released, "2024-04-01", 10.5m);
+        Assert.Empty(NotChecked(released));
+    }
+
+    /// <summary>
+    /// Kind <b>F (CI)</b>, AC-S0-3m. Work rows by SQL on 30 and 31 March 2024, 1 April 2024 and 1 May
+    /// 2024; April 2024 SUBMITTED; March and May with no period row. The <b>employee's</b> month view of
+    /// April 2024 serves <c>boundaryWorkTime</c> dates exactly <c>["2024-03-30", "2024-03-31",
+    /// "2024-05-01"]</c> (the two days before the month and the day after). <b>HR's</b> read: the same.
+    /// The <b>leader's</b>: empty. Then March SUBMITTED: the leader's read serves
+    /// <c>["2024-03-30", "2024-03-31"]</c> (May stays withheld).
+    ///
+    /// Red conditions (the wave-3 engine): the employee's read serves only <c>["2024-03-31",
+    /// "2024-05-01"]</c>, so the first date assertion fails.
+    /// </summary>
+    [Fact]
+    public async Task Skema_TwoPreviousBoundaryDays_ServedToTheEmployee_ToALeaderOnlyWhenSent()
+    {
+        var emp = await SeedTwoDaysBackEmployeeAsync();
+        await _h.InsertWorkTimeAsync(emp, new DateOnly(2024, 5, 1), ("08:00", "12:00"));
+        await _h.InsertPeriodAsync(emp, "SUBMITTED", 2024, 4);
+
+        var expectedAll = new[] { "2024-03-30", "2024-03-31", "2024-05-01" };
+        Assert.Equal(expectedAll, BoundaryDates(await ReadAsync(await SkemaMonth(_h.Client(emp), emp, 2024, 4))));
+        Assert.Equal(expectedAll, BoundaryDates(await ReadAsync(await SkemaMonth(Hr(), emp, 2024, 4))));
+        Assert.Empty(BoundaryDates(await ReadAsync(await SkemaMonth(Leader(), emp, 2024, 4))));
+
+        await _h.InsertPeriodAsync(emp, "SUBMITTED", 2024, 3);
+
+        Assert.Equal(new[] { "2024-03-30", "2024-03-31" },
+            BoundaryDates(await ReadAsync(await SkemaMonth(Leader(), emp, 2024, 4))));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════════════
