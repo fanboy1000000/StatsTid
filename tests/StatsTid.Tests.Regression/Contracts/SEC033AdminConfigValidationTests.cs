@@ -171,7 +171,10 @@ public sealed class SEC033AdminConfigValidationTests : IAsyncLifetime
         using var admin = Admin();
         using var response = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Post, "/api/admin/position-overrides",
-            PositionOverrideJson(maxFlexBalance: "200.0", normPeriodWeeks: "4", weeklyNormHours: "37.0")));
+            // S148 C-5 (NR-P14): a weekly norm written from no value is a change; the Monday rule needs a Monday,
+            // so the date is explicit (a past Monday) and the fact does not depend on the real clock's weekday.
+            PositionOverrideJson(maxFlexBalance: "200.0", normPeriodWeeks: "4", weeklyNormHours: "37.0",
+                appliesFrom: "2026-01-05")));
         var body = await response.Content.ReadAsStringAsync();
         Assert.True((int)response.StatusCode == 201, $"expected 201, got {(int)response.StatusCode}: {body}");
     }
@@ -245,11 +248,12 @@ public sealed class SEC033AdminConfigValidationTests : IAsyncLifetime
     /// (don't-override) and literals both go on the wire verbatim.</summary>
     private static string PositionOverrideJson(
         string maxFlexBalance = "120.5",
-        string normPeriodWeeks = "4", string weeklyNormHours = "37.0")
+        string normPeriodWeeks = "4", string weeklyNormHours = "37.0", string? appliesFrom = null)
         => $$"""
            { "agreementCode": "SEC033P", "okVersion": "{{OkVersion}}", "positionCode": "{{PositionCode}}",
              "maxFlexBalance": {{maxFlexBalance}},
              "normPeriodWeeks": {{normPeriodWeeks}}, "weeklyNormHours": {{weeklyNormHours}},
+             "appliesFrom": {{(appliesFrom is null ? "null" : "\"" + appliesFrom + "\"")}},
              "description": "SEC-033 validation" }
            """;
 }

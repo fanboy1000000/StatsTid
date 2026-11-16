@@ -2,6 +2,7 @@ using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Outbox;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Concurrency;
 
@@ -61,13 +62,13 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
         // Seed an ACTIVE position override; bump it once via v3 to take version 1 → 2;
         // attempt a SECOND v3 update with the STALE expectedVersion=1.
         var initial = NewOverride(maxFlex: 200m);
-        var overrideId = await _repo.CreateAsync(initial);
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(_repo, _harness.Factory, initial);
 
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            var result = await _repo.UpdateAsync(
+            var result = await PositionOverrideTestWriter.UpdateAsync(_repo, 
                 conn, tx, overrideId, expectedVersion: 1, NewOverride(maxFlex: 250m));
             await tx.CommitAsync();
             Assert.Equal(2L, result.Version);
@@ -78,7 +79,7 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            await _repo.UpdateAsync(
+            await PositionOverrideTestWriter.UpdateAsync(_repo, 
                 conn, tx, overrideId, expectedVersion: 1, NewOverride(maxFlex: 300m));
             await tx.CommitAsync();
         });
@@ -92,13 +93,13 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
         // Seed ACTIVE; bump version to 2 via update; attempt deactivate with STALE
         // expectedVersion=1.
         var seed = NewOverride();
-        var overrideId = await _repo.CreateAsync(seed);
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(_repo, _harness.Factory, seed);
 
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            await _repo.UpdateAsync(conn, tx, overrideId, expectedVersion: 1, NewOverride(maxFlex: 250m));
+            await PositionOverrideTestWriter.UpdateAsync(_repo, conn, tx, overrideId, expectedVersion: 1, NewOverride(maxFlex: 250m));
             await tx.CommitAsync();
         }
 
@@ -107,7 +108,7 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            await _repo.DeactivateAsync(conn, tx, overrideId, expectedVersion: 1);
+            await PositionOverrideTestWriter.DeactivateAsync(_repo, conn, tx, overrideId, expectedVersion: 1);
             await tx.CommitAsync();
         });
         Assert.Equal(1L, ex.ExpectedVersion);
@@ -134,7 +135,7 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
 
         // First override — created ACTIVE.
         var first = NewOverride(positionCode: sharedPosition);
-        await _repo.CreateAsync(first);
+        await PositionOverrideTestWriter.CreateAsync(_repo, _harness.Factory, first);
 
         // Second override on the same triple — deactivate immediately (CreateAsync writes
         // ACTIVE so we'd hit 23505 on the create itself; deactivate it via the self-managed
@@ -169,6 +170,20 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
             insertCmd.Parameters.AddWithValue("mfb", 100m);
             insertCmd.Parameters.AddWithValue("desc", "second-inactive-override");
             await insertCmd.ExecuteNonQueryAsync();
+
+            // S148 NR-P8: every override head has its matching version row (state INACTIVE, the
+            // helper's date, the same values), as the repository's writers leave it.
+            await using var versionCmd = new NpgsqlCommand(
+                """
+                INSERT INTO position_override_config_versions (
+                    override_id, applies_from, state, max_flex_balance, norm_period_weeks,
+                    weekly_norm_hours, recorded_by
+                ) VALUES (@id, @from, 'INACTIVE', @mfb, NULL, NULL, 'tester')
+                """, conn);
+            versionCmd.Parameters.AddWithValue("id", secondId);
+            versionCmd.Parameters.AddWithValue("from", PositionOverrideTestWriter.Anchor);
+            versionCmd.Parameters.AddWithValue("mfb", 100m);
+            await versionCmd.ExecuteNonQueryAsync();
         }
 
         // Read the second row's version (should be 1 from DB DEFAULT).
@@ -185,7 +200,7 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            await _repo.ActivateAsync(conn, tx, secondId, expectedVersion: 1);
+            await PositionOverrideTestWriter.ActivateAsync(_repo, conn, tx, secondId, expectedVersion: 1);
             await tx.CommitAsync();
         });
         Assert.Equal("23505", ex.SqlState);
@@ -200,7 +215,7 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
         // (version=2) → GET (version=2). This is the contract the frontend banner-with-retry
         // hook depends on.
         var initial = NewOverride(maxFlex: 200m);
-        var overrideId = await _repo.CreateAsync(initial);
+        var overrideId = await PositionOverrideTestWriter.CreateAsync(_repo, _harness.Factory, initial);
 
         var afterCreate = await _repo.GetByIdAsync(overrideId);
         Assert.NotNull(afterCreate);
@@ -211,7 +226,7 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            updateResult = await _repo.UpdateAsync(
+            updateResult = await PositionOverrideTestWriter.UpdateAsync(_repo, 
                 conn, tx, overrideId, expectedVersion: 1, NewOverride(maxFlex: 300m));
             await tx.CommitAsync();
         }

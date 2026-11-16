@@ -108,12 +108,15 @@ public sealed class SEC034PositionOverrideIdentityImmutableTests : IAsyncLifetim
     [Fact]
     public async Task Put_ValueOnly_Returns200_AuditCarriesCorrectIdentity()
     {
+        // S148 C-5 (NR-P14): the PUT writes a weekly norm (null to 36.75) on the real clock, which the Monday
+        // rule refuses six weekdays of seven; the create (CreateAsync, 2026-01-05) and this PUT
+        // (2026-01-12) send explicit past Mondays, in order.
         using var admin = Admin();
         var (overrideId, v1) = await CreateAsync(admin);
 
         using var response = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Put, $"/api/admin/position-overrides/{overrideId}",
-            Body(AgreementCode, OkVersion, PositionCode, weeklyNormHours: "36.75"),
+            Body(AgreementCode, OkVersion, PositionCode, weeklyNormHours: "36.75", appliesFrom: "2026-01-12"),
             ifMatchVersion: v1));
         var body = await response.Content.ReadAsStringAsync();
 
@@ -149,7 +152,7 @@ public sealed class SEC034PositionOverrideIdentityImmutableTests : IAsyncLifetim
     {
         using var response = await client.SendAsync(SpecRuntimeTestSupport.JsonRequest(
             HttpMethod.Post, "/api/admin/position-overrides",
-            Body(AgreementCode, OkVersion, PositionCode, weeklyNormHours: "null")));
+            Body(AgreementCode, OkVersion, PositionCode, weeklyNormHours: "null", appliesFrom: "2026-01-05")));
         var body = await response.Content.ReadAsStringAsync();
         if ((int)response.StatusCode != 201)
             throw new XunitException($"Position-override create returned {(int)response.StatusCode}: {body}");
@@ -185,11 +188,13 @@ public sealed class SEC034PositionOverrideIdentityImmutableTests : IAsyncLifetim
 
     /// <summary>Create/update body — the same 8-member request shape serves both verbs.
     /// <paramref name="weeklyNormHours"/> is passed as raw JSON ("null" or a literal).</summary>
-    private static string Body(string agreementCode, string okVersion, string positionCode, string weeklyNormHours)
+    private static string Body(string agreementCode, string okVersion, string positionCode, string weeklyNormHours,
+        string? appliesFrom = null)
         => $$"""
            { "agreementCode": "{{agreementCode}}", "okVersion": "{{okVersion}}",
              "positionCode": "{{positionCode}}",
              "maxFlexBalance": 120.5, "normPeriodWeeks": 4,
+             "appliesFrom": {{(appliesFrom is null ? "null" : "\"" + appliesFrom + "\"")}},
              "weeklyNormHours": {{weeklyNormHours}}, "description": "SEC-034 positionsundtagelse" }
            """;
 }

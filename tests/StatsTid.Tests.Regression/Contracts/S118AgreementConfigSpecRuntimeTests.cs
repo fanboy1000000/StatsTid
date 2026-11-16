@@ -17,10 +17,10 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// envelopes) + the 4 child entitlement ops (list / POST 201 / PUT 200 / DELETE 204).
 ///
 /// <para><b>RULING #1 PIN (the program's first wire-change ruling, the dead-branch class):</b>
-/// the create AND clone 201s are ALWAYS the full 47-member <c>AgreementConfigResponse</c> —
+/// the create AND clone 201s are ALWAYS the full 48-member <c>AgreementConfigResponse</c> —
 /// the backend now INSERT…RETURNINGs inside the tx, so the legacy <c>{configId}</c>-only
 /// fallback branch is structurally dead. These tests are the CONTRACT pin: the 201 bodies are
-/// asserted against the EXACT 47-member key set (missing AND extra keys both named-fail), so a
+/// asserted against the EXACT 48-member key set (missing AND extra keys both named-fail), so a
 /// resurrected fallback fork is RED forever.</para>
 ///
 /// <para><b>RULING #2 PIN (the drift-repair class):</b> the by-id GET's embedded
@@ -65,7 +65,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     private const string JwtOrg = "S118CM"; // JWT claim only — config-family audit rows are GLOBAL (no org FK)
     private const string OkVersion = "OKS118";
 
-    /// <summary>The ruling #1 anchor: the EXACT 47 camelCase members of
+    /// <summary>The ruling #1 anchor: the EXACT 48 camelCase members of
     /// <c>AgreementConfigResponse</c> — the create/clone/PUT wire truth.</summary>
     // S148 C-7: kind F (CI, Docker; not run locally). The retired flex carryover key is no longer served; on the code before C-7 the response still serves it, so the exact-key-set assertion fails (the extra key is named).
     private static readonly string[] FullEntityKeys =
@@ -83,6 +83,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
         "maxDailyHours", "minimumRestHours", "restPeriodDerogationAllowed",
         "weeklyMaxHoursReferencePeriod", "voluntaryUnsocialHoursAllowed",
         "createdBy", "createdAt", "updatedAt", "publishedAt", "archivedAt", "clonedFromId", "description",
+        "appliesFrom", // S148 C-2 (TASK-14818): on the create/clone/PUT record, NOT on the by-id GET
     };
 
     /// <summary>The ruling #2 anchor: the 16-member shared <c>EntitlementConfigResponse</c>
@@ -148,8 +149,8 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     //  Op 4 — POST /api/agreement-configs (201) — RULING #1 PIN (create).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>RULING #1: the create 201 is ALWAYS the full 47-member entity — never the dead
-    /// <c>{configId}</c> fallback. Exact-201 status + matcher + the EXACT 47-member key set
+    /// <summary>RULING #1: the create 201 is ALWAYS the full 48-member entity — never the dead
+    /// <c>{configId}</c> fallback. Exact-201 status + matcher + the EXACT 48-member key set
     /// (both directions). ETag "1" = the RETURNING-hydrated first-create version.</summary>
     [Fact]
     public async Task Create_Post201Exact_RulingOnePin_AlwaysFullEntity()
@@ -183,7 +184,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     //  Op 5 — POST /api/agreement-configs/{configId}/clone (201) — RULING #1 PIN (clone).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>RULING #1 applied to the clone fork: same full-47-member pin, plus
+    /// <summary>RULING #1 applied to the clone fork: same full-48-member pin, plus
     /// <c>clonedFromId</c> = the source id (the lineage member the dead fallback could never
     /// carry) and the copied ANNUAL_ACTIVITY normModel exercising the second enum value.</summary>
     [Fact]
@@ -240,7 +241,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>If-Match composed AS THE FE DOES: the create 201's ETag is the version the PUT
-    /// sends. The 200 shares the same 47-member record (the sibling-record rule) — key-set
+    /// sends. The 200 shares the same 48-member record (the sibling-record rule) — key-set
     /// asserted here too; normModel flips to ANNUAL_ACTIVITY (the second enum value, live).</summary>
     [Fact]
     public async Task Update_Put200_IfMatchComposedFromTheCreateEtag()
@@ -272,7 +273,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     /// 16-member shared child shape incl. <c>fullDayOnly</c> (the member the drifted inline
     /// mapper omitted at this — the third — former mapper site). The child is a CARE_DAY row
     /// created through the REAL child POST, whose <c>fullDayOnly: true</c> is guard-forced, so
-    /// the pin is non-vacuous. Root = the 47 members + <c>entitlements</c> +
+    /// the pin is non-vacuous. Root = the 47 by-id members + <c>entitlements</c> +
     /// <c>entitlementsReadOnly</c>.</summary>
     [Fact]
     public async Task ById_Get200_RulingTwoPin_EmbeddedEntitlementRowsCarryFullDayOnly()
@@ -288,7 +289,8 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
 
         var root = JsonDocument.Parse(body).RootElement;
         S118ContractAssert.AssertExactKeySet(
-            root, FullEntityKeys.Concat(new[] { "entitlements", "entitlementsReadOnly" }).ToArray(), "by-id 200");
+            root, FullEntityKeys.Where(k => k != "appliesFrom") // S148: the by-id response carries no appliesFrom (TASK-14818 "Not built"; review question)
+                .Concat(new[] { "entitlements", "entitlementsReadOnly" }).ToArray(), "by-id 200");
         Assert.False(root.GetProperty("entitlementsReadOnly").GetBoolean()); // single config for the key
 
         var rows = root.GetProperty("entitlements");
@@ -317,7 +319,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     public async Task Publish_Post200_Envelope_NoPriorActiveBranch_ArchivedConfigIdServedNull()
     {
         using var admin = Admin();
-        string[] envelopeKeys = { "configId", "status", "archivedConfigId", "publishedAt" };
+        string[] envelopeKeys = { "configId", "status", "archivedConfigId", "publishedAt", "appliesFrom" }; // S148 C-2 (TASK-14818)
 
         // No prior ACTIVE for the key: archivedConfigId is SERVED null (key present).
         var (firstId, firstVersion, _) = await CreateConfigAsync(admin, "S118AGC_PUB");
@@ -368,7 +370,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
     {
         using var admin = Admin();
         string[] archiveEnvelopeKeys = { "configId", "status", "archivedAt" };
-        string[] publishEnvelopeKeys = { "configId", "status", "archivedConfigId", "publishedAt" };
+        string[] publishEnvelopeKeys = { "configId", "status", "archivedConfigId", "publishedAt", "appliesFrom" }; // S148 C-2 (TASK-14818)
 
         // ── Shape #1: direct archive of a DRAFT (previous_data = {"status":"DRAFT"}). ──
         var (draftArcId, draftArcVersion, _) = await CreateConfigAsync(admin, "S118AGC_ARC");
@@ -384,7 +386,7 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.String, draftArcRoot.GetProperty("archivedAt").ValueKind);
         Assert.Equal(1L, await CountArchivedAuditRowsAsync(draftArcId, previousStatus: "DRAFT"));
 
-        // ── Shape #2: direct archive of an ACTIVE (previous_data = {"status":"ACTIVE"}). ──
+        // ── Shape #2: direct archive of an ACTIVE is refused (S148 A-6). ──
         var (activeArcId, activeArcVersion, _) = await CreateConfigAsync(admin, "S118AGC_ARA");
         long publishedEtagVersion;
         using (var publish = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
@@ -394,15 +396,24 @@ public sealed class S118AgreementConfigSpecRuntimeTests : IAsyncLifetime
             Assert.Equal(200, (int)publish.StatusCode);
             publishedEtagVersion = S118ContractAssert.EtagVersion(publish); // If-Match source for the archive
         }
-        var activeArcBody = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-            _spec, admin,
-            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post,
-                $"/api/agreement-configs/{activeArcId}/archive", jsonBody: null, ifMatchVersion: publishedEtagVersion),
-            "/api/agreement-configs/{configId}/archive", "post");
-        var activeArcRoot = JsonDocument.Parse(activeArcBody).RootElement;
-        S118ContractAssert.AssertExactKeySet(activeArcRoot, archiveEnvelopeKeys, "archive 200 (ACTIVE shape)");
-        Assert.Equal("ARCHIVED", activeArcRoot.GetProperty("status").GetString());
-        Assert.Equal(1L, await CountArchivedAuditRowsAsync(activeArcId, previousStatus: "ACTIVE"));
+        // S148 A-6: an ACTIVE config is replaced, not archived (TASK-14818). The 409 is not a declared
+        // response of this operation (docs/api/openapi.json declares only 200), so this arm is a plain
+        // request, not the spec-runtime helper (BC-12).
+        using (var refused = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Post, $"/api/agreement-configs/{activeArcId}/archive",
+            jsonBody: null, ifMatchVersion: publishedEtagVersion)))
+        {
+            Assert.Equal(409, (int)refused.StatusCode);
+            var refusedBody = JsonDocument.Parse(await refused.Content.ReadAsStringAsync()).RootElement;
+            Assert.Equal(
+                "Only a draft can be archived. Publish a successor to replace the active configuration.",
+                refusedBody.GetProperty("error").GetString());
+        }
+        // Nothing written: still ACTIVE at the published version, no ARCHIVED audit row.
+        Assert.Equal(1L, await ScalarLongAsync(
+            "SELECT COUNT(*) FROM agreement_configs WHERE config_id = @id AND status = 'ACTIVE' AND version = @v",
+            ("id", activeArcId), ("v", publishedEtagVersion)));
+        Assert.Equal(0L, await CountArchivedAuditRowsAsync(activeArcId, previousStatus: "ACTIVE"));
 
         // ── The supersession re-publish: the formerly-unreachable archivedConfigId branch. ──
         var (activeId, activeVersion, _) = await CreateConfigAsync(admin, "S118AGC_SUP");
