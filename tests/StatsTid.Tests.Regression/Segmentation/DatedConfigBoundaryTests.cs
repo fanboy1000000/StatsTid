@@ -237,11 +237,16 @@ public sealed class DatedConfigBoundaryTests : IAsyncLifetime
 
     // ── Fixtures ──────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>A published (agreement, OK24) version dated <paramref name="appliesFrom"/>, written through the repository's dated publish.</summary>
+    /// <summary>
+    /// A published (agreement, OK24) version dated <paramref name="appliesFrom"/>, written through the repository's
+    /// dated publish, with the seeded row's values copied (so no week-read field changes). The seed is read by
+    /// status (<c>GetActiveAsync</c>), never through the in-force read, so M-10 (the seeds carry no
+    /// <c>published_at</c>) cannot redden a fact that only needs the seed's values (NR-P24's condition).
+    /// </summary>
     private async Task PublishVersionAsync(string agreementCode, DateOnly appliesFrom)
     {
-        var seed = await _configRepo.GetInForceAsync(agreementCode, Ok24, appliesFrom)
-            ?? throw new InvalidOperationException($"{agreementCode}/{Ok24} has no seeded published version to copy the weekly norm from");
+        var seed = await _configRepo.GetActiveAsync(agreementCode, Ok24)
+            ?? throw new InvalidOperationException($"{agreementCode}/{Ok24} has no seeded ACTIVE row to copy the values from");
         var draftId = await _configRepo.CreateAsync(new AgreementConfigEntity
         {
             ConfigId = Guid.Empty,
