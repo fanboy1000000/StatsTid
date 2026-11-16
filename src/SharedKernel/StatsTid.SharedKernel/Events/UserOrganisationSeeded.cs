@@ -4,7 +4,8 @@ namespace StatsTid.SharedKernel.Events;
 /// S148 C-13 (ADR-040 D4). A user's FIRST <c>user_organisations</c> row was written: the user
 /// create, or the startup backfill seeder for an existing user. Shape mirrors
 /// <see cref="UserAgreementCodeSeeded"/>. Emitted on the user's stream; rides ONE transaction with
-/// the row, its <c>user_organisations_audit</c> row and the outbox append (ADR-018 D3).
+/// the row, its <c>user_organisations_audit</c> row and the outbox append (ADR-018 D3). Nothing emits
+/// it yet; its emitter is TASK-14820, and the emission described is the intended one.
 /// </summary>
 public sealed class UserOrganisationSeeded : DomainEventBase
 {

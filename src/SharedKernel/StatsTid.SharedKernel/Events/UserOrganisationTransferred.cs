@@ -6,7 +6,8 @@ namespace StatsTid.SharedKernel.Events;
 /// row opened, <see cref="InPlace"/> false) and same-day replacement (a date equal to the live
 /// row's start: the row's organisation is replaced in place, <see cref="InPlace"/> true,
 /// <see cref="PredecessorAssignmentId"/> null). Emitted on the user's stream; rides ONE transaction
-/// with the row, its audit row and the outbox append (ADR-018 D3).
+/// with the row, its audit row and the outbox append (ADR-018 D3). Nothing emits it yet; its emitter
+/// is TASK-14820, and the emission described is the intended one.
 ///
 /// <para><b>Version meaning.</b> <see cref="VersionBefore"/> is the version of the row live before
 /// the write; <see cref="VersionAfter"/> is the version of the row live after it: predecessor + 1

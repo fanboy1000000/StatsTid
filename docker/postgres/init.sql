@@ -1059,6 +1059,7 @@ CREATE TABLE IF NOT EXISTS employee_hr_facts_audit (
     timestamp       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_employee_hr_facts_audit_facts ON employee_hr_facts_audit (facts_id);
+CREATE INDEX IF NOT EXISTS idx_employee_hr_facts_audit_employee ON employee_hr_facts_audit (employee_id);
 
 -- Period approval workflow
 CREATE TABLE IF NOT EXISTS approval_periods (

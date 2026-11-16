@@ -5,7 +5,8 @@ namespace StatsTid.SharedKernel.Events;
 /// withdraw, reinstate), carrying the row's state AFTER the write (the
 /// <see cref="LocalAgreementProfileChanged"/> precedent of one event per family). Emitted on the
 /// organisation's stream; rides ONE transaction with the <c>customary_days</c> row, its
-/// <c>customary_days_audit</c> row and the outbox append (ADR-018 D3).
+/// <c>customary_days_audit</c> row and the outbox append (ADR-018 D3). Nothing emits it yet; its
+/// emitter is TASK-14834, and the emission described is the intended one.
 ///
 /// The day is either recurring (<see cref="RecurringMonth"/> + <see cref="RecurringDay"/>) or a
 /// <see cref="SingleDate"/>. <see cref="ValidTo"/> is end-exclusive (ADR-018 D8). Every nullable

@@ -1,8 +1,9 @@
 namespace StatsTid.SharedKernel.Events;
 
 /// <summary>
-/// S148 P-28 / NR-18. Emitted from the admin employment-start-date set/clear endpoint whenever
-/// <c>users.employment_start_date</c> mutates. The end-date event's shape
+/// S148 P-28 / NR-18. The event of the admin employment-start-date set/clear endpoint: one per
+/// mutation of <c>users.employment_start_date</c>. Nothing emits it yet; its emitter is TASK-14821,
+/// and the stream and transaction below describe that intended emission. The end-date event's shape
 /// (<see cref="EmployeeEmploymentEndDateSet"/>) without the <c>is_active</c> pair, which the
 /// start-date route never changes. Set, clear and correction are this one event, told apart by the
 /// <see cref="OldStartDate"/> / <see cref="NewStartDate"/> pair.
