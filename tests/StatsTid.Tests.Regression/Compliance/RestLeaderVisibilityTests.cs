@@ -288,6 +288,29 @@ public sealed class RestLeaderVisibilityTests : IClassFixture<RestLeaderVisibili
     }
 
     /// <summary>
+    /// Kind <b>R (CI)</b>, the marker's employed-day check at its boundary. An employee hired on 30
+    /// September 2025 (so the day before the month was an employed day, the first one) with 07:00-15:00
+    /// and 8 h on 1 October, October sent and no September row: the manager's read lists
+    /// <c>2025-10-01</c> as not checked and holds no daily-rest finding. Red conditions: M-36, the
+    /// employed-day check pointed at <c>readStart</c> (29 September, before the hire) instead of
+    /// <c>previousMonthEnd</c> (<c>ComplianceEndpoints.cs:278</c>), lists nothing, so the exact list fails.
+    /// </summary>
+    [Fact]
+    public async Task Marker_HiredOnThePreviousMonthsLastDay_ListsTheFirst()
+    {
+        var firstDay = new DateOnly(2025, 10, 1);
+        var employeeId = await _h.SeedEmployeeAsync(firstDay.AddDays(-1));
+        await _h.InsertWorkTimeAsync(employeeId, firstDay, ("07:00", "15:00"));
+        await _h.InsertEntryAsync(employeeId, firstDay, 8m);
+        await _h.InsertPeriodAsync(employeeId, "SUBMITTED", 2025, 10);
+
+        var body = await ReadAsync(await Compliance(Leader(), employeeId, 2025, 10));
+
+        Assert.Equal(new[] { "2025-10-01" }, NotChecked(body));
+        Assert.Empty(DailyRest(body));
+    }
+
+    /// <summary>
     /// Kind <b>F (CI)</b>, consult item 10 (the no-leak proof). Two employees with identical October data
     /// and employment, one with a 30 September shift and one without, both with September unsent: the
     /// leader's two answers are identical (success, violations, warnings and the not-checked list), so

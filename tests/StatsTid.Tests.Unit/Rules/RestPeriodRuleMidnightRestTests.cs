@@ -80,9 +80,8 @@ public class RestPeriodRuleMidnightRestTests
     /// the engine ignores any other; the parity row <c>reversed-interval-ignored</c> pins that), so the
     /// crossing is now Skema's two halves, 23:00–23:59 on D and 00:00–02:00 on D+1; the next
     /// morning's shift is an interval. S148 3b (RR-1): the finding is 8.0 dated D+1 (it was 5.0 dated
-    /// D: the gap to the next morning). Red conditions: a rule that keeps the halves apart finds a 0.0 h
-    /// rest at midnight (and the rule's 24 h window then holds no 8 h rest), so <c>ActualValue == 8.0m</c>
-    /// fails.
+    /// D: the gap to the next morning). R: pins the value and the date; the join is proved by
+    /// <c>MidnightHalves_FormOneStint_NoOneMinuteRest</c> arm (iii) and the parity-table rows.
     /// </summary>
     [Fact]
     public void DailyRest_RawMidnightCrossing_ThenMorningShift_IsEightHourViolation_Not29h()
@@ -123,8 +122,8 @@ public class RestPeriodRuleMidnightRestTests
     /// Kind <b>R</b> (re-pinned at 3b). S148 S0-3 (P-12): the two halves and the morning shift are
     /// intervals now; the two OK-version assertions on the normalizer stay as they were (they test the
     /// normalizer, not the rule). S148 3b (RR-1): the finding is 8.0 dated 1 April (it was 5.0 dated 31
-    /// March). Red conditions: a rule that keeps the halves apart finds a 0.0 h rest at midnight, so the
-    /// 8.0 h <c>Assert.Contains</c> fails and the 0 h <c>Assert.DoesNotContain</c> fails.
+    /// March). R: pins the value and the date; the join is proved by
+    /// <c>MidnightHalves_FormOneStint_NoOneMinuteRest</c> arm (iii) and the parity-table rows.
     /// </summary>
     [Fact]
     public void DailyRest_NormalizedBoundaryCrossing_NoFalseMidnightGap_AndPerHalfOkVersion()

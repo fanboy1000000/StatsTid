@@ -35,7 +35,8 @@ namespace StatsTid.Tests.Unit.Rules;
 /// parameters, which this sprint creates). Proved red by named mutations, each run alone in a detached
 /// worktree at the 3b gate (the report names the rows each turns red): M-24 (midnight continuity
 /// dropped), M-25 (any kept interval makes a day analysed), M-26 (work before the period is left out of
-/// the windows), M-29 and M-30 (the join's end or start test loosened), M-31 (the 8-hour floor compared
+/// the windows), M-27 (work dated after the period is no longer trimmed from the daily check, so the
+/// upper-edge rows are judged as the next month sees them), M-29 and M-30 (the join's end or start test loosened), M-31 (the 8-hour floor compared
 /// strictly). A compile error is not RED.
 /// </para>
 ///
@@ -116,15 +117,19 @@ public class RestParityTableTests
         var periodEnd = Date(row, "periodEnd");
         var derogation = row.GetProperty("derogationAllowed").GetBoolean();
 
-        // Exactly as the Backend reads: intervals dated in [periodStart - 2, periodEnd] only.
+        // Every interval of the row goes to the engine untrimmed: the engine itself ignores work dated
+        // after the period in the daily check (M-27). The Backend reads [periodStart - 2, periodEnd + 1],
+        // which the range assertion below holds the rows to.
         var readStart = periodStart.AddDays(-2);
         var intervals = row.GetProperty("intervals").EnumerateArray()
             .Select(iv => new ComplianceWorkInterval(
                 Date(iv, "date"),
                 Time(iv, "start"),
                 Time(iv, "end")))
-            .Where(iv => iv.Date >= readStart && iv.Date <= periodEnd)
             .ToList();
+        Assert.All(intervals, iv => Assert.InRange(iv.Date, readStart, periodEnd.AddDays(1)));
+        if (id is "night-shift-over-the-upper-month-edge" or "upper-month-edge-belongs-to-next-month")
+            Assert.Contains(intervals, iv => iv.Date > periodEnd);
 
         var entries = row.GetProperty("projectHours").EnumerateArray()
             .Select(p => new TimeEntry

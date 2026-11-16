@@ -70,8 +70,8 @@ public class RestPeriodRuleIntervalTests
     /// one starting at 00:00 the next day stay two stints), run at the wave gate in a detached
     /// worktree. Under the look-back rule (RR-1) arms (i) and (ii) give the same verdict with or without
     /// the join, so the join is proved by arm (iii), added at 3b: red conditions: under M-24 the
-    /// unjoined 23:59 end is a work end of its own on 11 March (window rests 06:00-08:00 and 16:00-22:00,
-    /// 8.0), so (iii) finds two findings and "exactly one" fails (actual also 11 March 8.0).
+    /// unjoined 23:59 end is a work end of its own on 11 March (window rests 00:00-08:00, the 8.0, and
+    /// 16:00-22:00, 6 h), so (iii) finds two findings and "exactly one" fails (actual also 11 March 8.0).
     ///
     /// Expected values from the refinement (REF:310) and RR-1: 22:00-23:59 plus 00:00-06:00 is one
     /// stint; the rest is measured before 22:00 and after 06:00, never as a one-minute gap. (i) alone:
@@ -156,10 +156,10 @@ public class RestPeriodRuleIntervalTests
 
     /// <summary>
     /// Kind <b>N</b> (names the interval input this sprint creates), proved red by mutation
-    /// <b>M-27</b> (the daily check's upper period guard deleted: <c>|| next.Date &gt; periodEnd</c>),
-    /// run at the S148 wave-3 fix-up gate. A rest is judged in the period in which it ENDS (14813 BC-4):
+    /// <b>M-27</b> (the daily check's trim of work dated after <c>periodEnd</c> removed),
+    /// run at the S148 wave-3b fix-up gate. A work end dated after the period is the next period's (14813 BC-4):
     /// 31 March 14:00-22:00 to 1 April 07:00-15:00 is April's rest (9.0 h), so March, given both days,
-    /// does not judge it. Red conditions: under M-27 (work ends dated after <c>periodEnd</c> are judged too)
+    /// does not judge it. Red conditions: under M-27 (work dated after <c>periodEnd</c> is no longer trimmed)
     /// March reports the 9.0 h finding dated 1 April and <c>Assert.Empty</c> fails. Contrast arm: April
     /// reports exactly that finding, dated 1 April (the day the work ends).
     /// </summary>
