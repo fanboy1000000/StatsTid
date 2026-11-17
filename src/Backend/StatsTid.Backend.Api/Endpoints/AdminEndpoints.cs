@@ -1811,8 +1811,8 @@ public static class AdminEndpoints
             // `now` is bound as @now into `updated_at` on the users UPDATE and is used for NOTHING
             // else — it records when the row was actually written. It is NOT a business date and
             // nothing may derive one from it: this handler's business dates read `timeProvider`
-            // (the future-dating validator above, and the transfer fan-out's `today` below, which
-            // WAS `DateOnly.FromDateTime(now)` until TASK-14009 corrected it). PAT-028: instants
+            // through the one `today` above (among them the transfer's date and its future-date
+            // refusal below, and the transfer fan-out's `today`; TASK-14009). PAT-028: instants
             // stay real, dates move to the seam.
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
@@ -1855,9 +1855,10 @@ public static class AdminEndpoints
                 // This closes the S74-7403 stale-key residual from the TRANSFER side: an assign/remove in
                 // either tree now blocks against the move. We use request.PrimaryOrgId vs the pre-tx
                 // existingUser snapshot only to DECIDE whether to lock; the locked-row FOR UPDATE +
-                // If-Match check below remains the authoritative version gate, and the in-tree
-                // serialization holds regardless (a stale "no change" read just skips the lock for a
-                // no-op org write).
+                // If-Match check below remains the authoritative version gate. A stale snapshot (the
+                // locked row's organisation differs from it) means neither these locks nor the scope
+                // checks above cover the request; the organisation-drift guard after the If-Match
+                // check refuses that case with 409.
                 if (request.PrimaryOrgId is not null &&
                     !string.Equals(request.PrimaryOrgId, existingUser.PrimaryOrgId, StringComparison.Ordinal))
                 {
@@ -1911,6 +1912,24 @@ public static class AdminEndpoints
                         $"User '{userId}' version is {lockedVersion}, but If-Match: \"{expectedVersion}\"; refresh and retry.",
                         expectedVersion: expectedVersion,
                         actualVersion: lockedVersion);
+
+                // Organisation drift (S148 TASK-14820 Step 5a R1; consult SEC-R1, security register).
+                // The scope checks above and the transfer advisories were decided on the pre-transaction
+                // read, so a locked row in another organisation means neither covers this request: a
+                // transfer back, a rename or an agreement-code change of a person the actor was never
+                // checked for. Refused whatever the request carries. A concurrency precondition like the
+                // 412 above, so it comes before every refusal below, the self-transfer 403 included.
+                if (!string.Equals(lockedUser.PrimaryOrgId, existingUser.PrimaryOrgId, StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        "organisation-drift", actor.ActorId, actor.ActorRole, "PUT /api/admin/users/{userId}", actor.CorrelationId);
+                    return Results.Conflict(new
+                    {
+                        error = "The user's organisation changed while this request was being processed; refresh and retry.",
+                    });
+                }
 
                 // ═══ S104 / ADR-038 D8 — CROSS-ORGANISATION TRANSFER pre-checks (canonical, post-lock) ═══
                 // A transfer is a unit-change that crosses Organisations and, since S148 C-13, a dated
