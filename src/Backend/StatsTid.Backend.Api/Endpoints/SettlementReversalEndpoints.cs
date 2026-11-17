@@ -138,7 +138,10 @@ public static class SettlementReversalEndpoints
             // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — closes the active-target
             // mixed-role leak (HR@A + Leader@B can no longer reverse an ACTIVE B settlement via
             // the Leader scope). HROrAbove endpoint policy + LocalHR floor are now aligned.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised; the service compares
+            // it with the users row it locks (ExpectedSubjectOrgId below).
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -206,6 +209,7 @@ public static class SettlementReversalEndpoints
                 CorrectedEndDate = body.CorrectedEndDate,
                 ExpectedUserVersion = body.ExpectedUserVersion,
                 SupersedeGoLiveFloor = goLiveDate,
+                ExpectedSubjectOrgId = authorisedOrgId,
                 ActorId = actor.ActorId ?? "unknown",
                 ActorRole = actor.ActorRole ?? "unknown",
                 ActorOrgId = actor.OrgId,
@@ -292,7 +296,9 @@ public static class SettlementReversalEndpoints
             // CarryoverWritingRow (D-A), ReconciledRow (R4), AffectedSpanConflict (B2/R13 —
             // the reason NAMES every blocker), SupersedeNotEligible, SupersedeCarryoverConflict,
             // StrandedRegistrations (S136 — the narrowing-only D3 strand guard; the reason carries
-            // the stranded months + per-family counts).
+            // the stranded months + per-family counts), OrganisationDrift (SEC-062 — the employee's
+            // organisation changed after the scope check; the reason is the fixed refresh-and-retry
+            // sentence, with no organisation and no date).
             _ => Results.Json(new
             {
                 error = result.FailureReason,

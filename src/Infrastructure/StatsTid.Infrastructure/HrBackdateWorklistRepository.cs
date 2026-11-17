@@ -36,7 +36,10 @@ namespace StatsTid.Infrastructure;
 /// <param name="EventId">The causing event — the causal link back to what HR must look at: the
 /// correction event (e.g. <c>EmployeeProfileSuperseded</c>) for the three correction kinds, the
 /// <c>PeriodReopened</c> event for <see cref="WorklistTriggerKinds.PriorMonthReopened"/>, the
-/// <c>UserOrganisationTransferred</c> event for <see cref="WorklistTriggerKinds.OrganisationTransfer"/>.</param>
+/// <c>UserOrganisationTransferred</c> event for <see cref="WorklistTriggerKinds.OrganisationTransfer"/>,
+/// the <c>EmployeeEmploymentStartDateSet</c> or <c>EmployeeEmploymentEndDateSet</c> event for
+/// <see cref="WorklistTriggerKinds.EmploymentWindowChange"/>, and the <c>EmployeeProfileSoftDeleted</c>
+/// event for a profile close (kind <see cref="WorklistTriggerKinds.ProfileChange"/>).</param>
 /// <param name="EffectiveFrom">
 /// The EARLIEST DAY whose change can alter the flagged period — the date HR should start looking
 /// from. Its meaning is the same for every kind; only where the date comes from differs (S145,
@@ -57,6 +60,15 @@ namespace StatsTid.Infrastructure;
 ///   <item><b><see cref="WorklistTriggerKinds.OrganisationTransfer"/></b> (S148 C-13): the transfer's
 ///     date — the day the new organisation's rules start to apply, dated back when HR records a move
 ///     after the fact.</item>
+///   <item><b><see cref="WorklistTriggerKinds.EmploymentWindowChange"/></b> (S148 P-27): the first day
+///     of the changed interval — min(old, new) of the start date, or of the end date, which reaches
+///     one day further because it is also the settlement cutoff. For a start date set from none or
+///     cleared to none (open towards the past), the exported-month row carries the Monday of the
+///     employee's earliest exported month's opening week, and the settled-year row the earliest day
+///     any selected settlement's accrual window opens (1 January of its entitlement year when the
+///     window cannot be placed) — never <c>0001-01-01</c> (N-1, NR-P2, NR-P12, NR-P20).</item>
+///   <item><b>The profile close</b> (S148 B-4; kind <see cref="WorklistTriggerKinds.ProfileChange"/>):
+///     the close's own date, today.</item>
 /// </list>
 /// </param>
 /// <param name="ActorId">Who made the correction or the reopen (becomes <c>created_by</c> on a new row; recorded per trigger).</param>
@@ -65,7 +77,9 @@ public sealed record WorklistTrigger(string Kind, Guid EventId, DateOnly Effecti
 /// <summary>
 /// The kinds of change that can land a worklist row: the three corrections of dated history
 /// (refinement rev 4, TASK-13803), the reopen of the month before an exported month (S145,
-/// refinement A6, R5(c)), and a transfer to another organisation (S148 C-13, P-24).
+/// refinement A6, R5(c)), a transfer to another organisation (S148 C-13, P-24), and a change of an
+/// employment date (S148 P-27). A profile close lands its rows as a
+/// <see cref="ProfileChange"/> (S148 B-4).
 /// </summary>
 public static class WorklistTriggerKinds
 {
@@ -93,12 +107,24 @@ public static class WorklistTriggerKinds
     /// </summary>
     public const string OrganisationTransfer = "ORGANISATION_TRANSFER";
 
+    /// <summary>
+    /// S148 P-27 (B-3, NR-17, NR-19) — an employment start or end date moved, and the days whose
+    /// pay that moves reach an exported month or a settled holiday year. The employment dates decide
+    /// which days count as employed, and the end date is also the settlement cutoff, so the figures
+    /// already sent or settled may be stale. Raised by the start-date PUT, the end-date PUT and a
+    /// settlement reversal that corrects the end date. Flag only. NON-BLOCKING: a date change
+    /// touches no wage-type key, so <see cref="BackdateWorklistDerivation.RecalcBlockedByForTrigger"/>
+    /// derives no block.
+    /// </summary>
+    public const string EmploymentWindowChange = "EMPLOYMENT_WINDOW_CHANGE";
+
     public static bool IsKnown(string? kind) =>
         string.Equals(kind, ProfileChange, StringComparison.Ordinal)
         || string.Equals(kind, AgreementCodeChange, StringComparison.Ordinal)
         || string.Equals(kind, EmploymentCategoryChange, StringComparison.Ordinal)
         || string.Equals(kind, PriorMonthReopened, StringComparison.Ordinal)
-        || string.Equals(kind, OrganisationTransfer, StringComparison.Ordinal);
+        || string.Equals(kind, OrganisationTransfer, StringComparison.Ordinal)
+        || string.Equals(kind, EmploymentWindowChange, StringComparison.Ordinal);
 }
 
 /// <summary>The two row kinds of <c>hr_backdate_worklist</c> (the <c>kind</c> CHECK).</summary>
@@ -337,6 +363,8 @@ public static class BackdateWorklistDerivation
             WorklistTriggerKinds.PriorMonthReopened => null,
             // S148 C-13: a transfer changes no wage-type key, so it never blocks the re-plan.
             WorklistTriggerKinds.OrganisationTransfer => null,
+            // S148 P-27: a date change touches no wage-type key, so it never blocks the re-plan.
+            WorklistTriggerKinds.EmploymentWindowChange => null,
             _ => null,
         };
 
@@ -525,6 +553,29 @@ public static class BackdateWorklistDerivation
         if (openingMonday == nextMonthStart)
             return null;
         return (nextMonthStart.Year, nextMonthStart.Month, openingMonday);
+    }
+
+    /// <summary>
+    /// S148 P-27 (NR-19 as amended by C-2 (c4); N-1) — the interval an employment END-date change
+    /// hands to both worklist writers, or <c>null</c> when the date did not change (both null
+    /// included), so nothing is listed. It is <c>[min(old, new), max(old, new) + 1 day)</c>: one day
+    /// earlier than the first day whose employed status changes, because the end date is also the
+    /// settlement cutoff that decides which month pays a leaver's last partial week, so the month
+    /// whose last day is the earlier end date can change too. A null side is unbounded (an open end
+    /// runs into the future): <c>From</c> is then the dated side and <c>ToExclusive</c> is null. The
+    /// trigger's <c>EffectiveFrom</c> is <c>From</c>. Shared by the end-date PUT and the settlement
+    /// reversal's end-date correction.
+    /// </summary>
+    public static (DateOnly From, DateOnly? ToExclusive)? EmploymentEndDateChangeInterval(
+        DateOnly? oldEndDate, DateOnly? newEndDate)
+    {
+        if (oldEndDate == newEndDate)
+            return null;
+        if (oldEndDate is not { } oldEnd)
+            return (newEndDate!.Value, null);
+        if (newEndDate is not { } newEnd)
+            return (oldEnd, null);
+        return (oldEnd < newEnd ? oldEnd : newEnd, (oldEnd > newEnd ? oldEnd : newEnd).AddDays(1));
     }
 
     /// <summary>
@@ -730,6 +781,15 @@ public sealed class HrBackdateWorklistRepository
           AND make_date(year, month, 1) >= @lo
           AND make_date(year, month, 1) < @hi
         ORDER BY year, month
+        """;
+
+    // Cross-context READ, as above: the first day of the employee's EARLIEST exported month, or
+    // NULL when nothing is exported (S148 NR-P2: the lower bound of a start date open towards the past).
+    private const string SelectEarliestExportedMonthSql =
+        """
+        SELECT MIN(make_date(year, month, 1))
+        FROM payroll_export_records
+        WHERE employee_id = @employeeId
         """;
 
     // The ACTIVE settlement per tuple: highest sequence AND not REVERSED (the ADR-033 D5 state
@@ -1071,6 +1131,90 @@ public sealed class HrBackdateWorklistRepository
             return Array.Empty<Guid>();
 
         return await UpsertAndEmitSettledYearsAsync(conn, tx, employeeId, subject, trigger, selected, ct);
+    }
+
+    /// <summary>
+    /// S148 P-27 (N-1 as amended by NR-P2) — the first day of the employee's earliest exported month,
+    /// read in the caller's tx, or <c>null</c> when no month is exported. A start date set from none or
+    /// cleared to none changes every day before the dated side; this is where its exported-month
+    /// selection begins (the caller takes the Monday of that month's opening week, the first day the
+    /// month's settlement reads), and with no exported month there is no exported-month call.
+    /// </summary>
+    public async Task<DateOnly?> ReadEarliestExportedMonthStartAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(SelectEarliestExportedMonthSql, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct) || reader.IsDBNull(0))
+            return null;
+        return reader.GetFieldValue<DateOnly>(0);
+    }
+
+    /// <summary>
+    /// S148 P-27 (N-1 as amended by NR-P12 and NR-P20) — the DATE path for a start date OPEN TOWARDS
+    /// THE PAST: set from none to a date, or cleared to none, so every day before
+    /// <paramref name="toExclusive"/> (the dated side) changes its employed status. The selection is
+    /// <see cref="WriteForSettledYearsAsync"/>'s, run from <see cref="DateOnly.MinValue"/>: the
+    /// two-part rule picks exactly the threatened years. It is made whether or not any month is
+    /// exported, because settled years are selected independently of exports.
+    ///
+    /// <para>
+    /// What differs is the trigger's <c>EffectiveFrom</c>, which must name a real day ("the earliest
+    /// day whose change can alter the flagged period"): the earliest LOOK-FROM day among the selected
+    /// settlements. A settlement's look-from day is its accrual window's first day, or 1 January of
+    /// its entitlement year when the window cannot be placed (no live reset month for the employee's
+    /// agreement and OK version — the selection keeps such a settlement conservatively). 1 January is
+    /// a true lower bound, because every accrual window starts in its entitlement year; in that rare
+    /// case the day can be up to eleven months early, never meaningless and never <c>0001-01-01</c>.
+    /// </para>
+    ///
+    /// Writes nothing when nothing is selected. Emits <see cref="BackdateWorklistRowCreated"/> per
+    /// affected row in the caller's tx. Returns the affected row ids.
+    /// </summary>
+    public async Task<IReadOnlyList<Guid>> WriteForSettledYearsOpenTowardsThePastAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string employeeId,
+        string triggerKind,
+        Guid eventId,
+        string actorId,
+        DateOnly toExclusive,
+        CancellationToken ct)
+    {
+        // Validated before any read, like the other writers; EffectiveFrom is set from the selection below.
+        var trigger = new WorklistTrigger(triggerKind, eventId, toExclusive, actorId);
+        ValidateTrigger(trigger);
+
+        var active = await ReadActiveSettlementsAsync(conn, tx, employeeId, ct);
+        if (active.Count == 0)
+            return Array.Empty<Guid>();
+
+        var subject = await ReadSubjectAsync(conn, tx, employeeId, ct);
+        var resetMonthByType = new Dictionary<string, int?>(StringComparer.Ordinal);
+        var selected = new List<ActiveSettlement>(active.Count);
+        DateOnly? earliestLookFrom = null;
+
+        foreach (var settlement in active)
+        {
+            if (!await ThreatensSettledYearAsync(
+                    conn, tx, subject, settlement, DateOnly.MinValue, toExclusive, resetMonthByType, ct))
+                continue;
+            selected.Add(settlement);
+
+            var resetMonth = await ResolveResetMonthAsync(
+                conn, tx, subject, settlement.EntitlementType, resetMonthByType, ct);
+            var lookFrom = resetMonth is { } placed
+                ? EntitlementPeriodResolver.ResolveForYear(settlement.EntitlementType, placed, settlement.EntitlementYear).AccrualStart
+                : new DateOnly(settlement.EntitlementYear, 1, 1);
+            if (earliestLookFrom is null || lookFrom < earliestLookFrom.Value)
+                earliestLookFrom = lookFrom;
+        }
+        if (earliestLookFrom is not { } effectiveFrom)
+            return Array.Empty<Guid>();
+
+        return await UpsertAndEmitSettledYearsAsync(
+            conn, tx, employeeId, subject, trigger with { EffectiveFrom = effectiveFrom }, selected, ct);
     }
 
     /// <summary>
@@ -1496,27 +1640,36 @@ public sealed class HrBackdateWorklistRepository
             return false;
 
         // Half (b) — the entitlement-window geometry. Needs the live reset_month to place the window.
-        int resetMonth;
-        if (EntitlementPeriodResolver.IsSpecialHoliday(settlement.EntitlementType))
-        {
-            resetMonth = 1; // ignored by the resolver for SPECIAL_HOLIDAY (fixed 1 Jan accrual / 1 May taking geometry).
-        }
-        else
-        {
-            if (!resetMonthByType.TryGetValue(settlement.EntitlementType, out var cached))
-            {
-                cached = await ReadLiveResetMonthAsync(
-                    conn, tx, settlement.EntitlementType, subject.AgreementCode, subject.OkVersion, ct);
-                resetMonthByType[settlement.EntitlementType] = cached;
-            }
-            if (cached is null)
-                return true; // conservative on THIS half only: the window cannot be placed, and (a) already held.
-            resetMonth = cached.Value;
-        }
+        var resetMonth = await ResolveResetMonthAsync(
+            conn, tx, subject, settlement.EntitlementType, resetMonthByType, ct);
+        if (resetMonth is null)
+            return true; // conservative on THIS half only: the window cannot be placed, and (a) already held.
 
         return BackdateWorklistDerivation.SettledYearThreatened(
-            settlement.EntitlementType, resetMonth, settlement.EntitlementYear,
+            settlement.EntitlementType, resetMonth.Value, settlement.EntitlementYear,
             from, toExclusive, settlement.SettlementBoundaryDate);
+    }
+
+    /// <summary>
+    /// The reset month that places an entitlement type's window for this subject, cached per type
+    /// for one call: SPECIAL_HOLIDAY's geometry is fixed (1 Jan accrual / 1 May taking; the resolver
+    /// ignores the value, so 1 is returned), every other type reads the live config. <c>null</c> when
+    /// no live config exists, i.e. the window cannot be placed.
+    /// </summary>
+    private static async Task<int?> ResolveResetMonthAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, Subject subject, string entitlementType,
+        Dictionary<string, int?> resetMonthByType, CancellationToken ct)
+    {
+        if (EntitlementPeriodResolver.IsSpecialHoliday(entitlementType))
+            return 1;
+
+        if (!resetMonthByType.TryGetValue(entitlementType, out var cached))
+        {
+            cached = await ReadLiveResetMonthAsync(
+                conn, tx, entitlementType, subject.AgreementCode, subject.OkVersion, ct);
+            resetMonthByType[entitlementType] = cached;
+        }
+        return cached;
     }
 
     private static async Task<(Guid WorklistId, long Version)> UpsertExportedMonthAsync(
