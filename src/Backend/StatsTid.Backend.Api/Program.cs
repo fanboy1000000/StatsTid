@@ -143,6 +143,7 @@ builder.Services.AddSingleton<WageTypeMappingRepository>();
 builder.Services.AddSingleton<EntitlementConfigRepository>();
 builder.Services.AddSingleton<EmployeeProfileRepository>();
 builder.Services.AddSingleton<UserAgreementCodeRepository>();
+builder.Services.AddSingleton<UserOrganisationRepository>(); // S148 C-13 — the dated organisation's writer (user create, user edit)
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
 // S146 / TASK-14602 (QUAL-198) — the team overview's one-query read of every roster employee's
 // part-time fraction at month end. Registered under its INTERFACE so a test host can swap in one
@@ -562,6 +563,21 @@ if (args.Contains("--openapi"))
     var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
     await UserAgreementCodeBackfillSeeder.SeedAsync(dbFactory, outbox, logger);
+}
+
+// ── S148 C-13 (ADR-040 D4): seed user_organisations for any active user lacking an open row ──
+// Gives each such user one row holding their users.primary_org_id from 0001-01-01, so every past day
+// has an organisation and EmploymentProfileResolver (which refuses a profile day with no organisation
+// row) answers the organisation the user holds today, as it did before the organisation was dated
+// (NR-P7). The only source of the rows of users inserted by SQL (init.sql's seed users, the demo world).
+// Per-user atomic tx (row + audit CREATED + UserOrganisationSeeded outbox event); a concurrent-startup
+// 23505 is skipped. Runs after the users exist and before the projection and audit backfills (the
+// latter projects the seed events).
+{
+    var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
+    var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    await UserOrganisationBackfillSeeder.SeedAsync(dbFactory, outbox, logger);
 }
 
 // ── S27 Phase 4c.6 / Step 7a cycle 1 BLOCKER fix ──

@@ -35,7 +35,8 @@ namespace StatsTid.Infrastructure;
 /// <param name="Kind">One of <see cref="WorklistTriggerKinds"/>.</param>
 /// <param name="EventId">The causing event — the causal link back to what HR must look at: the
 /// correction event (e.g. <c>EmployeeProfileSuperseded</c>) for the three correction kinds, the
-/// <c>PeriodReopened</c> event for <see cref="WorklistTriggerKinds.PriorMonthReopened"/>.</param>
+/// <c>PeriodReopened</c> event for <see cref="WorklistTriggerKinds.PriorMonthReopened"/>, the
+/// <c>UserOrganisationTransferred</c> event for <see cref="WorklistTriggerKinds.OrganisationTransfer"/>.</param>
 /// <param name="EffectiveFrom">
 /// The EARLIEST DAY whose change can alter the flagged period — the date HR should start looking
 /// from. Its meaning is the same for every kind; only where the date comes from differs (S145,
@@ -53,6 +54,9 @@ namespace StatsTid.Infrastructure;
 ///     month's opening week (week-by-week settlement, owner ruling Q3 = F1). September 2026
 ///     reopened under an exported October gives Mon 28 Sep 2026: October's first week runs
 ///     Mon 28 Sep – Sun 4 Oct, so 28–30 September are the September days October paid.</item>
+///   <item><b><see cref="WorklistTriggerKinds.OrganisationTransfer"/></b> (S148 C-13): the transfer's
+///     date — the day the new organisation's rules start to apply, dated back when HR records a move
+///     after the fact.</item>
 /// </list>
 /// </param>
 /// <param name="ActorId">Who made the correction or the reopen (becomes <c>created_by</c> on a new row; recorded per trigger).</param>
@@ -60,8 +64,8 @@ public sealed record WorklistTrigger(string Kind, Guid EventId, DateOnly Effecti
 
 /// <summary>
 /// The kinds of change that can land a worklist row: the three corrections of dated history
-/// (refinement rev 4, TASK-13803) and, since S145 (refinement A6, R5(c)), the reopen of the month
-/// before an exported month.
+/// (refinement rev 4, TASK-13803), the reopen of the month before an exported month (S145,
+/// refinement A6, R5(c)), and a transfer to another organisation (S148 C-13, P-24).
 /// </summary>
 public static class WorklistTriggerKinds
 {
@@ -79,11 +83,22 @@ public static class WorklistTriggerKinds
     /// </summary>
     public const string PriorMonthReopened = "PRIOR_MONTH_REOPENED";
 
+    /// <summary>
+    /// S148 C-13 (P-24, A-4, NR-11) — the user edit moved the employee to another organisation from a
+    /// date, and that date reaches an exported month or a settled holiday year: from that day the new
+    /// organisation's local profile (its weekly norm, its flex cap) applies, so the figures already
+    /// sent or settled may be stale. Flag only; nothing is recalculated or revalued. NON-BLOCKING:
+    /// a transfer changes no wage-type key, so <see cref="BackdateWorklistDerivation.RecalcBlockedByForTrigger"/>
+    /// derives no block.
+    /// </summary>
+    public const string OrganisationTransfer = "ORGANISATION_TRANSFER";
+
     public static bool IsKnown(string? kind) =>
         string.Equals(kind, ProfileChange, StringComparison.Ordinal)
         || string.Equals(kind, AgreementCodeChange, StringComparison.Ordinal)
         || string.Equals(kind, EmploymentCategoryChange, StringComparison.Ordinal)
-        || string.Equals(kind, PriorMonthReopened, StringComparison.Ordinal);
+        || string.Equals(kind, PriorMonthReopened, StringComparison.Ordinal)
+        || string.Equals(kind, OrganisationTransfer, StringComparison.Ordinal);
 }
 
 /// <summary>The two row kinds of <c>hr_backdate_worklist</c> (the <c>kind</c> CHECK).</summary>
@@ -320,6 +335,8 @@ public static class BackdateWorklistDerivation
             // S145 R5(c): a reopen of the previous month changes no agreement row, so it never
             // blocks the re-plan. Stated explicitly rather than left to the default arm.
             WorklistTriggerKinds.PriorMonthReopened => null,
+            // S148 C-13: a transfer changes no wage-type key, so it never blocks the re-plan.
+            WorklistTriggerKinds.OrganisationTransfer => null,
             _ => null,
         };
 

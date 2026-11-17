@@ -25,8 +25,12 @@ namespace StatsTid.Infrastructure;
 /// NOT read here — it lives in the agreement config, not on the profile row.)
 /// <c>AgreementCode</c> is dated too, sourced via
 /// <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/> (TASK-3402) under the
-/// identical end-exclusive predicate. The ONE remaining live field is <c>primary_org_id</c>
-/// — org-membership history is the ADR-040 D4 named follow-up program.
+/// identical end-exclusive predicate. <c>OrgId</c> is dated as well (S148 C-13, ADR-040 D4;
+/// QUAL-206): it is the <c>org_id</c> of the <c>user_organisations</c> row covering
+/// <paramref name="asOfDate"/>, read in the same statement as the profile row, so no employee
+/// attribute this class returns is live any more. <c>users.primary_org_id</c> stays the access and
+/// login-token anchor (ADR-038 D1), which this class does not serve; <c>users</c> is joined only to
+/// tie the profile to an existing user, and none of its columns is returned.
 /// </para>
 ///
 /// <para>
@@ -69,8 +73,8 @@ namespace StatsTid.Infrastructure;
 /// <para>
 /// <b>Read-consistency note (Step 0b Codex cycle 2 absorption).</b> The cutover changes
 /// the resolver from a single-statement snapshot (one JOIN) to TWO queries on the same
-/// <paramref name="asOfDate"/>: (1) the existing JOIN of <c>employee_profiles</c> (dated)
-/// + <c>users</c> (live tail of fields), and (2) the new
+/// <paramref name="asOfDate"/>: (1) the JOIN of <c>employee_profiles</c> (dated) with the
+/// covering <c>user_organisations</c> row (dated, S148 C-13), and (2) the new
 /// <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/> call for the dated
 /// agreement code. Under PostgreSQL READ COMMITTED the two reads could see different
 /// snapshots if a writer commits between them. This is acceptable for S34 because:
@@ -112,16 +116,17 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// <b>Data-integrity fail-loud (S34 / TASK-3406).</b> If the
-/// <c>employee_profiles</c> JOIN succeeds but
-/// <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/> returns <c>null</c> for
-/// the same (user_id, asOfDate), the resolver throws
-/// <see cref="EmployeeProfileNotFoundException"/>. This is an inconsistent-state
-/// violation that should never occur post-backfill seeder (TASK-3403 seeds at
-/// <c>'0001-01-01'</c> covering every historical period for every user with an
-/// <c>employee_profiles</c> row). Surfacing it as an exception keeps the data-integrity
-/// contract loud rather than silently substituting an empty string and corrupting PCS
-/// replays.
+/// <b>Data-integrity fail-loud (S34 / TASK-3406; the organisation since S148 C-13).</b> If the
+/// <c>employee_profiles</c> row covering the day exists but no <c>user_organisations</c> row covers
+/// it, or <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/> returns <c>null</c> for the
+/// same (user_id, asOfDate), the resolver throws <see cref="EmployeeProfileNotFoundException"/> —
+/// never <c>null</c>, which means "no profile" and which callers treat as a graceful absence. The
+/// backfill seeders write each user's first rows from <c>'0001-01-01'</c>; the user create writes the
+/// organisation row from <c>'0001-01-01'</c> and the agreement-code row from the profile's own first
+/// day. So the throw marks a record gap (or the future-dated agreement code of the S141 note above),
+/// not a normal state. Surfacing it keeps the data-integrity contract loud
+/// rather than silently substituting a value and corrupting PCS replays (a guessed organisation
+/// would pick the wrong institution's local profile).
 /// </para>
 ///
 /// <para>
@@ -161,16 +166,27 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
         // asOfDate (OkVersionResolver, see the class doc; closes QUAL-147).
         // S138 / TASK-13804: employment_category reads the DATED ep cell ALONE — the S137
         // COALESCE-to-users fail-safe is retired now that the column is NOT NULL and a dated
-        // value may legitimately differ from the live cache (see the class doc). The only live
-        // field left is primary_org_id (org-history is the named follow-up). agreement_code is
-        // NOT joined here — TASK-3406 sources it from UserAgreementCodeRepository below.
+        // value may legitimately differ from the live cache (see the class doc).
+        // S148 C-13 (ADR-040 D4; QUAL-206): the organisation is the DATED user_organisations row
+        // covering the day, under the same end-exclusive predicate, never the live
+        // users.primary_org_id. A scalar subselect, so a day no organisation row covers reads NULL
+        // (thrown below) instead of dropping the profile row, and latest-start-wins keeps the read
+        // deterministic if two rows ever overlapped (non-overlap is a writer invariant, not an
+        // index; the GetByUserIdAtAsync tie-break). agreement_code is NOT joined here — TASK-3406
+        // sources it from UserAgreementCodeRepository below.
         const string sql =
             """
             SELECT
                 ep.part_time_fraction,
                 ep.position,
                 ep.employment_category,
-                u.primary_org_id
+                (SELECT uo.org_id
+                 FROM user_organisations uo
+                 WHERE uo.user_id = ep.employee_id
+                   AND uo.effective_from <= @asOfDate
+                   AND (uo.effective_to IS NULL OR uo.effective_to > @asOfDate)
+                 ORDER BY uo.effective_from DESC
+                 LIMIT 1) AS org_id
             FROM employee_profiles ep
             INNER JOIN users u ON u.user_id = ep.employee_id
             WHERE ep.employee_id = @employeeId
@@ -187,7 +203,7 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
         decimal partTimeFraction;
         string? position;
         string employmentCategory;
-        string orgId;
+        string? orgId;
 
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
@@ -203,7 +219,21 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
                 ? null
                 : reader.GetString(reader.GetOrdinal("position"));
             employmentCategory = reader.GetString(reader.GetOrdinal("employment_category"));
-            orgId = reader.GetString(reader.GetOrdinal("primary_org_id"));
+            orgId = reader.IsDBNull(reader.GetOrdinal("org_id"))
+                ? null
+                : reader.GetString(reader.GetOrdinal("org_id"));
+        }
+
+        if (orgId is null)
+        {
+            // S148 C-13 — data-integrity fail-loud, the organisation's twin of the agreement-code
+            // check below: a profile row covers this day but no user_organisations row does. Never
+            // `null` (that means "no profile", a graceful absence to every caller) and never the live
+            // users.primary_org_id (today's organisation pasted onto a past day is the QUAL-206
+            // defect). The backfill seeder and the user create give every user a row from
+            // 0001-01-01, so reaching this is a record gap; callers that catch the agreement-code
+            // throw as `employment_record_gap` catch this one too (same exception).
+            throw new EmployeeProfileNotFoundException(employeeId, asOfDate);
         }
 
         // S137 / ADR-040 D4 (QUAL-147) — the OK version governing asOfDate, resolved from the

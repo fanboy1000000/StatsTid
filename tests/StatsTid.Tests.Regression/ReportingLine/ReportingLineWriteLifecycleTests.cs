@@ -1506,18 +1506,14 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     private static async Task<HttpResponseMessage> PutTransferAsync(
         HttpClient client, string userId, string newPrimaryOrgId, long ifMatchVersion)
     {
-        // S142 test-clock sweep: INERT, VERIFIED BY FULL TRACE (this site was flagged as the sharpest
-        // GATING candidate going in — it is not). This PUT never supplies agreementCode, so the entire
-        // `if (agreementCodeSupplied)` block in AdminEndpoints.cs (the ONLY reader of request.EffectiveFrom
-        // — confirmed by reading every `request.EffectiveFrom` occurrence in the handler and the exact
-        // opening/closing braces of that block) never executes; effectiveFrom here is dead. The actual
+        // effectiveFrom is the transfer's date when the organisation changes (S148 C-13): a date after
+        // the server's Copenhagen today answers 400, one before the open organisation row's start
+        // answers 400, and the UTC day sent here is never ahead of Copenhagen's. This PUT never supplies
+        // agreementCode, so the agreement-code branch (the other reader of the field) does not run. The
         // dated writes of this transfer's fan-out (closing/reopening reporting lines and vikar rows) use
-        // the HANDLER's own `CopenhagenBusinessDate.Today(timeProvider)`, never this request field — and
-        // AdminEndpoints.cs's own XML doc on UpdateUserRequest.EffectiveFrom says so explicitly: "Nothing
-        // on this path COMPARES the supplied date to the server's today any more ... it decides which DAY
-        // an unattended client would name" (i.e., only when agreementCode is ALSO supplied). None of this
-        // helper's 3 callers assert a specific date on the transfer's closed/created rows either (they
-        // check status codes, primary_org_id, and edge existence/absence).
+        // the HANDLER's own `CopenhagenBusinessDate.Today(timeProvider)`, never this request field. None
+        // of this helper's 3 callers assert a specific date on the transfer's closed/created rows
+        // (they check status codes, primary_org_id, and edge existence/absence).
         var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
         var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
