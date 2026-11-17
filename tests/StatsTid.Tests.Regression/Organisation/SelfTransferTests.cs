@@ -76,10 +76,63 @@ public sealed class SelfTransferTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// <b>R.</b> The same actor moves ANOTHER person STY01 → STY02: 200 and the new organisation row.
-    /// <b>Discriminating assertion:</b> the 200 with the two-row history. It breaks if the self refusal
-    /// is widened to every transfer by an HR user who is a person, or if it compares organisations
-    /// instead of identities.
+    /// <b>F.</b> A GlobalAdmin (GLOBAL scope) whose token carries the id of a person homed in STY01
+    /// moves THEMSELVES STY01 → STY02: 403 with the same date-free reason; nothing is written. Nobody
+    /// moves themselves, whatever the role.
+    /// <para><b>Red conditions.</b> Before C-13 a self-transfer is allowed: the request answers 200 and
+    /// <c>Assert.Equal(Forbidden, status)</c> fails. It is also red if the self refusal is limited to HR roles.</para>
+    /// </summary>
+    [Fact]
+    public async Task GlobalAdminTransfersThemselves_403_NothingWritten()
+    {
+        var cs = _harness.ConnectionString;
+        var self = await SeedPersonAsync(cs, "STY01");
+        var client = GlobalAdminClient(_host, self);
+        var before = await SnapshotAsync(cs, self);
+
+        var rsp = await PutUserAsync(client, cs, self, new { primaryOrgId = "STY02" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Access denied", body.GetProperty("error").GetString());
+        Assert.Equal("Own organisation cannot be changed; a second administrator must perform this change",
+            body.GetProperty("reason").GetString());
+        Assert.Equal(before, await SnapshotAsync(cs, self));
+    }
+
+    /// <summary>
+    /// <b>F.</b> The acting LocalHR moves THEMSELVES STY01 → STY02 dated Wednesday 11 November 2026
+    /// (after the clock): 403 with the self reason, not the 400 date refusal; nothing is written. The
+    /// self refusal comes before the date rules.
+    /// <para><b>Red conditions.</b> Before C-13 the self-transfer is allowed and a future date has no
+    /// rule: 200, so <c>Assert.Equal(Forbidden, status)</c> fails. It is also red if the date rule runs
+    /// first (400).</para>
+    /// </summary>
+    [Fact]
+    public async Task HrTransfersThemselves_FutureDate_403_NotTheDateRefusal()
+    {
+        var cs = _harness.ConnectionString;
+        var self = await SeedPersonAsync(cs, "STY01");
+        var client = LocalHrClient(_host, self, "STY01", "STY02");
+        var before = await SnapshotAsync(cs, self);
+
+        var rsp = await PutUserAsync(client, cs, self, new { primaryOrgId = "STY02", effectiveFrom = "2026-11-11" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Access denied", body.GetProperty("error").GetString());
+        Assert.Equal("Own organisation cannot be changed; a second administrator must perform this change",
+            body.GetProperty("reason").GetString());
+        Assert.Equal(before, await SnapshotAsync(cs, self));
+    }
+
+    /// <summary>
+    /// <b>F.</b> The same actor moves ANOTHER person STY01 → STY02: 200 and the new organisation row.
+    /// F as a whole: red on the base by the two-row history. The 200 is the control that breaks if the
+    /// self refusal is widened to every transfer by an HR user who is a person, or if it compares
+    /// organisations instead of identities.
+    /// <para><b>Red conditions.</b> Before C-13 the 200 holds but no organisation row is added:
+    /// <c>Assert.Equal(2, rows.Count)</c> fails.</para>
     /// </summary>
     [Fact]
     public async Task HrTransfersSomeoneElse_SameOrganisations_200()

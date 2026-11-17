@@ -159,6 +159,12 @@ public sealed class TransferWriteTests : IAsyncLifetime
         Assert.False(evt.Payload.GetProperty("inPlace").GetBoolean());
         Assert.Equal(closedId, evt.Payload.GetProperty("predecessorAssignmentId").GetGuid());
         Assert.Equal("2026-11-02", evt.Payload.GetProperty("effectiveFrom").GetString());
+        Assert.Equal(rows[1].AssignmentId, evt.Payload.GetProperty("assignmentId").GetGuid());
+        Assert.Equal("STY01", evt.Payload.GetProperty("oldOrgId").GetString());
+        Assert.Equal("STY02", evt.Payload.GetProperty("newOrgId").GetString());
+        Assert.Equal(1L, evt.Payload.GetProperty("versionBefore").GetInt64());
+        Assert.Equal(2L, evt.Payload.GetProperty("versionAfter").GetInt64());
+        Assert.Equal(((long?)1L, 2L), (auditRow.VersionBefore, auditRow.VersionAfter));
 
         // The projection row targets the NEW organisation (never the old one, never the actor's).
         Assert.Equal("STY02", await ProjectionTargetOrgAsync(cs, evt.EventId));
@@ -209,6 +215,10 @@ public sealed class TransferWriteTests : IAsyncLifetime
         var first = await PutUserAsync(client, cs, userId,
             new { primaryOrgId = "STY02", effectiveFrom = "2026-11-02" });
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var rowsAfterFirst = await ReadOrgRowsAsync(cs, userId);
+        var auditAfterFirst = await ReadOrgAuditAsync(cs, userId);
+        var firstEvent = Assert.Single(await ReadEventsAsync(cs, userId, "UserOrganisationTransferred"));
+        var assignmentAfterFirst = firstEvent.Payload.GetProperty("assignmentId").GetGuid();
 
         var rsp = await PutUserAsync(client, cs, userId,
             new { primaryOrgId = "STY03", effectiveFrom = "2026-11-02" });
@@ -216,11 +226,14 @@ public sealed class TransferWriteTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         var rows = await ReadOrgRowsAsync(cs, userId);
         Assert.Equal(2, rows.Count);
+        Assert.Equal(rowsAfterFirst[0], rows[0]);
         Assert.Equal((new DateOnly(2026, 11, 2), (DateOnly?)null, "STY03", 3L),
             (rows[1].From, rows[1].To, rows[1].OrgId, rows[1].Version));
 
         var audit = await ReadOrgAuditAsync(cs, userId);
         Assert.Equal(2, audit.Count);
+        Assert.Equal(auditAfterFirst[0], audit[0]);
+        Assert.Equal(("SUPERSEDED", (long?)1L, 2L), (audit[0].Action, audit[0].VersionBefore, audit[0].VersionAfter));
         Assert.Equal("UPDATED", audit[1].Action);
         Assert.Equal(((long?)2L, (long?)3L), (audit[1].VersionBefore, (long?)audit[1].VersionAfter));
 
@@ -231,6 +244,12 @@ public sealed class TransferWriteTests : IAsyncLifetime
         Assert.True(!second.Payload.TryGetProperty("predecessorAssignmentId", out var pred)
                     || pred.ValueKind == JsonValueKind.Null);
         Assert.Equal("STY03", second.Payload.GetProperty("newOrgId").GetString());
+        Assert.Equal(rows[1].AssignmentId, second.Payload.GetProperty("assignmentId").GetGuid());
+        Assert.Equal(assignmentAfterFirst, second.Payload.GetProperty("assignmentId").GetGuid());
+        Assert.Equal("STY02", second.Payload.GetProperty("oldOrgId").GetString());
+        Assert.Equal(2L, second.Payload.GetProperty("versionBefore").GetInt64());
+        Assert.Equal(3L, second.Payload.GetProperty("versionAfter").GetInt64());
+        Assert.Equal("2026-11-02", second.Payload.GetProperty("effectiveFrom").GetString());
         Assert.Equal("STY03", await ProjectionTargetOrgAsync(cs, second.EventId));
         Assert.Equal("STY03", await UsersPrimaryOrgAsync(cs, userId));
     }
@@ -390,12 +409,12 @@ public sealed class TransferWriteTests : IAsyncLifetime
         ExpirationMinutes = 60,
     });
 
-    /// <summary>A GlobalAdmin (employee id <c>ADMIN_S148_ORG</c>, no home organisation, GLOBAL scope).</summary>
-    internal static HttpClient GlobalAdminClient(WebApplicationFactory<Program> host)
+    /// <summary>A GlobalAdmin (employee id <c>ADMIN_S148_ORG</c> unless given, no home organisation, GLOBAL scope).</summary>
+    internal static HttpClient GlobalAdminClient(WebApplicationFactory<Program> host, string employeeId = "ADMIN_S148_ORG")
     {
         var client = host.CreateClient();
         var token = TokenService().GenerateToken(
-            employeeId: "ADMIN_S148_ORG", name: "S148 Organisation Admin", role: StatsTidRoles.GlobalAdmin,
+            employeeId: employeeId, name: "S148 Organisation Admin", role: StatsTidRoles.GlobalAdmin,
             agreementCode: "AC", scopes: new[] { new RoleScope(StatsTidRoles.GlobalAdmin, null, "GLOBAL") });
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;

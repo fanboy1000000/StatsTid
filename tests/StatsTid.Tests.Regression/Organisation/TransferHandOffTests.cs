@@ -55,7 +55,8 @@ public sealed class TransferHandOffTests : IAsyncLifetime
     /// dated 2026-05-25, carrying the transfer event's id; and the row derives no recalculation block.
     /// <para><b>Red conditions.</b> Before C-13 a transfer writes no worklist row: the
     /// <c>Assert.Single</c> on the EXPORTED_MONTH rows fails (and <c>ORGANISATION_TRANSFER</c> is not
-    /// even a known trigger kind).</para>
+    /// even a known trigger kind). The no-block assertion is red if the transfer kind ever starts to
+    /// block a mid-week date (the agreement-kind control on the same date shows that date can block).</para>
     /// </summary>
     [Fact]
     public async Task TransferBeforeExportedMonth_RowWithTransferTrigger_NoBlock()
@@ -75,8 +76,12 @@ public sealed class TransferHandOffTests : IAsyncLifetime
         Assert.Equal("2026-05-25", trigger.GetProperty("effectiveFrom").GetString());
         var evt = Assert.Single(await ReadEventsAsync(cs, userId, "UserOrganisationTransferred"));
         Assert.Equal(evt.EventId, trigger.GetProperty("eventId").GetGuid());
-        Assert.Null(BackdateWorklistDerivation.RecalcBlockedByForTrigger(
-            "ORGANISATION_TRANSFER", new DateOnly(2026, 5, 25), 2026, 6));
+        // The block is derived per trigger kind. 25 May is outside June's weeks, so it could not tell a
+        // kind that never blocks from one that does. Wednesday 3 June is mid-week inside June: the
+        // agreement trigger blocks there (the control), the transfer trigger must not.
+        var midWeek = new DateOnly(2026, 6, 3);
+        Assert.NotNull(BackdateWorklistDerivation.RecalcBlockedByForTrigger("AGREEMENT_CODE_CHANGE", midWeek, 2026, 6));
+        Assert.Null(BackdateWorklistDerivation.RecalcBlockedByForTrigger("ORGANISATION_TRANSFER", midWeek, 2026, 6));
     }
 
     /// <summary>
