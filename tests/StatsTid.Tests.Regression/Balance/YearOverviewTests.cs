@@ -2038,6 +2038,9 @@ public sealed class YearOverviewTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("ac", agreementCode);
         cmd.Parameters.AddWithValue("ok", okVersion);
         await cmd.ExecuteNonQueryAsync();
+
+        // The dated organisation row (0001-01-01, NR-P7). "Bare" means no profile and no agreement code.
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, orgId);
     }
 
     /// <summary>
