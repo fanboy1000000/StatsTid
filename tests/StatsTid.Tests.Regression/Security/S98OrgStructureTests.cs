@@ -558,10 +558,12 @@ public sealed class S98OrgStructureTests : IAsyncLifetime
         var getRsp = await client.GetAsync($"/api/admin/users/{userId}");
         getRsp.EnsureSuccessStatusCode();
         var version = getRsp.Headers.ETag!.Tag.Trim('"');
-        // S142 test-clock sweep: INERT, same mechanism as ReportingLineWriteLifecycleTests.cs's
-        // PutTransferAsync — this PUT never supplies agreementCode, so effectiveFrom never reaches
-        // AdminEndpoints.cs's agreement-code branch (the only reader of request.EffectiveFrom); the
-        // one caller (:402) asserts a 403 status code and that primary_org_id is unchanged, never a date.
+        // effectiveFrom is the transfer's date when the organisation changes (S148 C-13: a date after
+        // the server's Copenhagen today answers 400, one before the open organisation row's start
+        // answers 400; the UTC day sent here is never ahead of Copenhagen's). The one caller (:402)
+        // asserts a 403 status code and that primary_org_id is unchanged, never a date, so the value
+        // is immaterial to it. This PUT never supplies agreementCode, so the agreement-code branch
+        // (the other reader of the field) does not run.
         var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
         var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {
