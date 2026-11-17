@@ -35,10 +35,13 @@ public static class EmployeeConsumptionLock
 {
     /// <summary>
     /// Acquires the transaction-scoped advisory lock for <paramref name="employeeId"/> on
-    /// <paramref name="conn"/>/<paramref name="tx"/>. MUST be the first statement inside the
-    /// consumption transaction (ADR-032 D4: acquired first, held to commit, precedes any
-    /// <c>FOR UPDATE</c>). Blocks until the lock is available; released automatically at
-    /// commit/rollback.
+    /// <paramref name="conn"/>/<paramref name="tx"/>. MUST be the first statement of the
+    /// consumption transaction, or, where the transaction also takes the pay-inputs lock
+    /// (<see cref="StatsTid.Infrastructure.PayInputsLock.AcquireExclusiveAsync"/>; the profile PUT
+    /// and both employment-date PUTs), the first lock after it. Either way it precedes any
+    /// <c>FOR UPDATE</c> (ADR-032 D4: acquired first, held to commit; the pay-inputs lock comes
+    /// first in every transaction that takes it). Blocks until the lock is available; released
+    /// automatically at commit/rollback.
     /// </summary>
     public static async Task AcquireAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct = default)

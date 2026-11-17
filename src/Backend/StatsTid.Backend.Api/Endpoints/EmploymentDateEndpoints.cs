@@ -29,7 +29,7 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///     <item><description>
 ///       <b>PUT /api/admin/employees/{employeeId}/employment-start-date</b> (S60; S136 /
 ///       TASK-13604 lifecycle upgrade) — terminated-INCLUSIVE write via
-///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync"/> (a
+///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync"/> (a
 ///       DELIBERATE S70 R9c allowlist EXTENSION, ruled by ADR-040 D3), admin-strict If-Match
 ///       (ADR-019 D2), one atomic tx (ADR-018 D3) opened by the S148 pay-inputs lock and then the
 ///       ADR-032 D4 employee advisory lock (the S136 lock regime); null clears the date. In-tx
@@ -48,7 +48,7 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///     <item><description>
 ///       <b>PUT /api/admin/employees/{employeeId}/employment-end-date</b> (S70; S71 / TASK-7102
 ///       refactor) — terminated-INCLUSIVE write via
-///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync"/>, with the
+///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync"/>, with the
 ///       R1 deactivation lifecycle (delegated to the SHARED
 ///       <see cref="EmploymentEndDateLifecycleWriter"/> — SPRINT-71 R4 one-implementation; the
 ///       S70 transitional inline choreography is deleted), the SPRINT-71 R13 range-widened

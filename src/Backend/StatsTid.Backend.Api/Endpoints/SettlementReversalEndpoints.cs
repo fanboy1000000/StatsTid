@@ -62,8 +62,10 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///   <item><description>409 — <c>SequenceMismatch</c> (with <c>actualSettlementSequence</c>),
 ///   <c>CarryoverWritingRow</c> (D-A zero-bucket), <c>ReconciledRow</c> (R4 exclusion),
 ///   <c>AffectedSpanConflict</c> (the B2/R13 guard — the reason NAMES every blocker),
-///   <c>SupersedeNotEligible</c>, <c>SupersedeCarryoverConflict</c>, and the dormant-go-live
-///   supersession refusal;</description></item>
+///   <c>SupersedeNotEligible</c>, <c>SupersedeCarryoverConflict</c>, <c>OrganisationDrift</c>
+///   (SEC-062 — the person's organisation, read under the users-row lock, is not the one the
+///   scope check authorised; the reason is the fixed refresh-and-retry sentence, with no
+///   organisation and no date), and the dormant-go-live supersession refusal;</description></item>
 ///   <item><description>412 — <c>CasConflict</c> (stale settlement If-Match, with
 ///   <c>actualVersion</c>) / <c>UserVersionConflict</c> (stale <c>expectedUserVersion</c>, with
 ///   <c>actualUserVersion</c>);</description></item>
