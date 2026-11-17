@@ -865,16 +865,21 @@ public static class AdminEndpoints
             // to carry its own INSERT statement (step (2) below). Not the ONLY insert into the table:
             // the dated writer's Case A also produces a net-new row, by design.
             EmployeeProfileRepository employeeProfileRepo,
+            // S148 C-13 (ADR-040 D4) — writes the person's first dated organisation row, step (2e).
+            UserOrganisationRepository userOrganisationRepo,
             IAuditProjectionMapper<UserCreated> auditMapper,
             IAuditProjectionMapper<EmployeeProfileCreated> profileCreatedMapper,
             IAuditProjectionMapper<UserAgreementCodeSeeded> uacSeededMapper,
+            IAuditProjectionMapper<UserOrganisationSeeded> orgSeededMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
-            // Read exactly ONCE below into `effectiveFrom`, which then supplies EVERY dated value
-            // of this create: the profile row's effective_from, the defaulted employment start,
-            // the agreement-code effective_from and the reporting-line effective_from. The AUDIT
-            // timestamps below deliberately keep DateTime.UtcNow.
+            // Read exactly ONCE below into `effectiveFrom`, which then supplies every dated value
+            // of this create that starts today: the profile row's effective_from, the defaulted
+            // employment start, the agreement-code effective_from and the reporting-line
+            // effective_from. The organisation row is the one dated value that does not: it starts
+            // at the fixed 0001-01-01 (step (2e), NR-P7). The AUDIT timestamps below deliberately
+            // keep DateTime.UtcNow.
             //
             // S142 / TASK-14202 — the INSTANT this provider yields is still UTC; the CALENDAR DAY
             // derived from it below is now the Europe/Copenhagen day (CopenhagenBusinessDate). The
@@ -975,8 +980,9 @@ public static class AdminEndpoints
             // (TimeProvider.System in production), not the wall clock. Step-5a EXTENDED the S137
             // "ONE date" rule above to the create's other two dated writes: the agreement-code row
             // and the new PRIMARY reporting line now REUSE this value instead of each reading the
-            // clock again, so "the three can never disagree" is true of every dated cell this
-            // request writes, not just the first three.
+            // clock again, so "the three can never disagree" is true of every today-dated cell this
+            // request writes, not just the first three. (The organisation row reads no clock at all:
+            // it starts at the fixed 0001-01-01, step (2e).)
             //
             // S142 / TASK-14202 (census row 1) — THE DAY CHANGED, NOT THE CLOCK. This used to be
             // `DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime)` — the UTC calendar day.
@@ -1265,6 +1271,18 @@ public static class AdminEndpoints
                     await cacheAuditCmd.ExecuteNonQueryAsync(ct);
                 }
 
+                // (2e) S148 C-13 (ADR-040 D4) — the person's first dated organisation row and its
+                // user_organisations_audit CREATED row, in this transaction (the event is step (5b)).
+                // It starts at 0001-01-01, NOT at `effectiveFrom` like every other dated row here
+                // (NR-P7, DV-7): HR may later move this person's start date, profile and agreement code
+                // back to their real first day, before today, and no route can move an organisation
+                // row earlier — so the row must already cover those days, or the dated lookup would
+                // find a profile with no organisation and refuse them. The backfill seeder uses the
+                // same anchor through the same write path.
+                var organisationRow = await userOrganisationRepo.InsertFirstRowAsync(
+                    conn, tx, request.UserId, request.PrimaryOrgId,
+                    actor.ActorId ?? "unknown", actor.ActorRole ?? "unknown", ct);
+
                 // (3) UserCreated outbox emit in-tx (BEFORE CommitAsync) so the
                 // users row and the outbox row commit atomically per ADR-018 D3.
                 var @event = new UserCreated
@@ -1366,6 +1384,31 @@ public static class AdminEndpoints
                     ResolvedTargetOrgId: request.PrimaryOrgId);
                 var uacSeededRow = uacSeededMapper.Map(agreementSeededEvent, uacSeededCtx);
                 await auditRepo.InsertAsync(conn, tx, agreementSeededEvent.EventId, uacSeededOutboxId, agreementSeededEvent.EventType, uacSeededRow, uacSeededCtx, ct);
+
+                // (5b) S148 C-13 — UserOrganisationSeeded for the row written at (2e), on the same
+                // user-{userId} stream, with its inline audit projection row (ADR-026 D2), TENANT_TARGETED
+                // at the request's organisation. Its values come from the row as read back, so row and
+                // event cannot disagree (ADR-018 D3).
+                var organisationSeededEvent = new UserOrganisationSeeded
+                {
+                    UserId = request.UserId,
+                    AssignmentId = organisationRow.AssignmentId,
+                    OrgId = organisationRow.OrgId,
+                    EffectiveFrom = organisationRow.EffectiveFrom,
+                    RowVersion = organisationRow.Version,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                var orgSeededOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{request.UserId}", organisationSeededEvent, ct);
+                var orgSeededCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(organisationSeededEvent.OccurredAt),
+                    ResolvedTargetOrgId: request.PrimaryOrgId);
+                var orgSeededRow = orgSeededMapper.Map(organisationSeededEvent, orgSeededCtx);
+                await auditRepo.InsertAsync(conn, tx, organisationSeededEvent.EventId, orgSeededOutboxId, organisationSeededEvent.EventType, orgSeededRow, orgSeededCtx, ct);
 
                 // (6) S74 R9 — OPTIONAL atomic create+assign. When an approverId is supplied,
                 //     create the new person's PRIMARY reporting line under it in the SAME tx, so
@@ -1585,6 +1628,8 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            // S148 C-13 (ADR-040 D4) — the transfer's dated organisation write.
+            UserOrganisationRepository userOrganisationRepo,
             // S138 / TASK-13803 — the HR diagnostic worklist writers (in-tx).
             HrBackdateWorklistRepository worklistRepo,
             ReportingLineRepository reportingLineRepo,
@@ -1593,6 +1638,7 @@ public static class AdminEndpoints
             IAuditProjectionMapper<UserUpdated> auditMapper,
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
+            IAuditProjectionMapper<UserOrganisationTransferred> orgTransferredMapper,
             IAuditProjectionMapper<UserUnitChanged> userUnitMapper,
             IAuditProjectionMapper<UnitLeaderRemoved> leaderRemovedMapper,
             AuditProjectionRepository auditRepo,
@@ -1610,7 +1656,8 @@ public static class AdminEndpoints
             // stamp at the top of the transaction — see the BY DESIGN note there for the exact scope
             // of that exemption and why nothing may derive a DATE from it. S147 / TASK-14703 adds a
             // third reader of the same value: the departed-self guard (is the actor, acting on their
-            // own record, past their last day?).
+            // own record, past their last day?). S148 C-13 adds a fourth: a transfer's date (an
+            // omitted date means today, a later one is refused).
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -1668,11 +1715,12 @@ public static class AdminEndpoints
                     return Results.BadRequest(new { error = "A user's primary org must be an Organisation (a MAO holds no employees)." });
             }
 
-            // ONE clock read for the whole handler (S139 / TASK-13907's "compute once" rule). Three
+            // ONE clock read for the whole handler (S139 / TASK-13907's "compute once" rule). Four
             // consumers: the S147 departed-self guard right below, owner ruling OQ-6's test for whether
-            // the row that truncated an agreement write is a SCHEDULED change or ordinary history, and
-            // the cross-Organisation transfer fan-out's four dated writes far below. Reading the
-            // provider twice would not be the same instant.
+            // the row that truncated an agreement write is a SCHEDULED change or ordinary history, the
+            // transfer's date and its future-date refusal (S148 C-13), and the cross-Organisation
+            // transfer fan-out's four dated writes far below. Reading the provider twice would not be
+            // the same instant.
             //
             // S147 / TASK-14703 (BC-P1) — HOISTED here from just above the transaction, unchanged, so the
             // guard below reads the same single value; the two older consumers still read it.
@@ -1730,9 +1778,11 @@ public static class AdminEndpoints
             // injected TimeProvider (S139 / TASK-13907) — but since S142 / TASK-14202 it is the
             // Europe/Copenhagen calendar day, not the UTC one. The frontend's own
             // `new Date().toISOString().slice(0,10)` UTC extraction (TASK-3409) is the browser half
-            // of the same defect and is another task's scope; it does not gate this handler, which
-            // no longer compares the client's date to `today` at all (that refusal was lifted in
-            // S141 / TASK-14104).
+            // of the same defect and is another task's scope; it does not gate the agreement-code
+            // path, which no longer compares the client's date to `today` (that refusal was lifted in
+            // S141 / TASK-14104). A TRANSFER does compare it: an organisation change dated after
+            // today is refused inside the transaction (S148 C-13), because the access anchor
+            // users.primary_org_id would otherwise disagree with the dated organisation until then.
             if (agreementCodeSupplied && request.EffectiveFrom == default)
                 return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
 
@@ -1840,7 +1890,8 @@ public static class AdminEndpoints
                 // pick up stale data under concurrent admin edits.
                 //
                 // Lock order (S78): tree advisory (above, on transfer) → users (this
-                // read) → user_agreement_codes (the agreementPredecessor read below, on
+                // read) → user_organisations (the timeline lock below, on a transfer; S148 C-13)
+                // → user_agreement_codes (the agreementPredecessor read below, on
                 // the mutation branch). users is the foreign-key parent in conventional
                 // admin write flows; locking the parent first avoids deadlocks against the
                 // UserAgreementCodeBackfillSeeder (UserAgreementCodeBackfillSeeder.cs:107-117)
@@ -1862,15 +1913,89 @@ public static class AdminEndpoints
                         actualVersion: lockedVersion);
 
                 // ═══ S104 / ADR-038 D8 — CROSS-ORGANISATION TRANSFER pre-checks (canonical, post-lock) ═══
-                // A transfer is a unit-change that crosses Organisations. Decided against the FOR-UPDATE'd
-                // lockedUser (the version-matched canonical home). The unit-org advisories for both the
-                // OLD + NEW Organisations are already held (acquired above, after the reporting-org pair).
+                // A transfer is a unit-change that crosses Organisations and, since S148 C-13, a dated
+                // change of the employee's organisation history. Decided against the FOR-UPDATE'd
+                // lockedUser (the version-matched canonical home), never on the request merely CARRYING
+                // an organisation (B-6): the edit drawer sends the unchanged organisation, the agreement
+                // code and one date on every save, so with the organisation unchanged nothing below runs
+                // — no date rule, no self refusal, no organisation row. The unit-org advisories for both
+                // the OLD + NEW Organisations are already held (acquired above, after the reporting-org pair).
                 var isTransfer = request.PrimaryOrgId is not null &&
                     !string.Equals(request.PrimaryOrgId, lockedUser.PrimaryOrgId, StringComparison.Ordinal);
                 var currentUnitId = await unitRepo.GetUserUnitIdInTxAsync(conn, tx, userId, ct);
                 var newUnitId = currentUnitId; // non-transfer PUT: unit_id is untouched (no-op write).
+
+                // S148 C-13 — the transfer's date: the request's one EffectiveFrom, the same member the
+                // agreement branch uses (one request, one date). Omitted, it binds default(DateOnly) and
+                // means today; an explicit 0001-01-01 reads the same. Only a transfer reads it.
+                var transferDate = request.EffectiveFrom == default ? today : request.EffectiveFrom;
+                UserOrganisationRow? liveOrganisation = null; // the locked open organisation row (a transfer only)
                 if (isTransfer)
                 {
+                    // ── S148 C-13 — the transfer's refusals, in this order: authorization before
+                    // validation, so a self-transfer is refused whatever its date. Each is decided here,
+                    // before any write, and rolls the transaction back. Both 400s share one body shape.
+                    static IResult TransferDateRefusal(Validators.FieldValidationError error) => Results.BadRequest(new
+                    {
+                        error = "Transfer date validation failed",
+                        fields = new[]
+                        {
+                            new
+                            {
+                                field = error.Field,
+                                code = error.Code,
+                                nearestValid = error.NearestValid?.Select(d => d.ToString("O")).ToArray(),
+                            },
+                        },
+                    });
+
+                    // (1) Nobody transfers themselves (A-18; RES-003): the organisation decides whose
+                    // local profile (weekly norm, flex cap) applies to the person's own pay, and nobody
+                    // signs off their own pay input (the S147 four-eyes ruling). Every role, GlobalAdmin
+                    // included. The one shared self predicate; the body's reason is date-free (ADR-040 D7)
+                    // and the WARNING names the clause. A departed self has already been refused above.
+                    if (ApprovalSelfGuard.IsSelf(actor, userId))
+                    {
+                        await tx.RollbackAsync(ct);
+                        logger.LogWarning(
+                            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                            "self-transfer", actor.ActorId, actor.ActorRole, "PUT /api/admin/users/{userId}", actor.CorrelationId);
+                        return Results.Json(new
+                        {
+                            error = "Access denied",
+                            reason = "Own organisation cannot be changed; a second administrator must perform this change",
+                        }, statusCode: 403);
+                    }
+
+                    // (2) Not in the future (nearestValid = today): until that day the access anchor
+                    // users.primary_org_id, written now, would disagree with the dated organisation.
+                    var futureDateError = Validators.ProfileAlignmentValidator.ValidateEffectiveFromTemporality(transferDate, today);
+                    if (futureDateError is not null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return TransferDateRefusal(futureDateError);
+                    }
+
+                    // (3) Not before the start of the open organisation row (nearestValid = that start).
+                    // The timeline is locked here, after the users row and before any write (open row
+                    // first, then history): this handler and the dedicated agreement-code route both take
+                    // the users row FOR UPDATE before any dated row, so they never interleave on them.
+                    // The seeder and the user create give every active user an open row; none is a
+                    // record defect, refused loudly rather than papered over with an invented history.
+                    var organisationTimeline = await userOrganisationRepo.LockTimelineAsync(conn, tx, userId, ct);
+                    liveOrganisation = organisationTimeline.FirstOrDefault(r => r.EffectiveTo is null)
+                        ?? throw new InvalidOperationException(
+                            $"User '{userId}' has no open user_organisations row; the transfer cannot date the change.");
+                    if (transferDate < liveOrganisation.EffectiveFrom)
+                    {
+                        // shortcut(pending): a transfer cannot be dated before the start of the employee's current organisation row, so a wrongly dated earlier transfer cannot be corrected in the product; upgrade when organisation history gets a correction path (NR-12, A-16)
+                        await tx.RollbackAsync(ct);
+                        return TransferDateRefusal(new Validators.FieldValidationError(
+                            Field: "EffectiveFrom",
+                            Code: "BEFORE_CURRENT_ORGANISATION",
+                            NearestValid: new[] { liveOrganisation.EffectiveFrom }));
+                    }
+
                     // (c) the manager-side fan-out — BLOCK (422) the transfer of a user who still
                     // MANAGES active reports (owner-decided: re-assign the reports first rather than
                     // silently orphan them cross-Organisation).
@@ -2380,12 +2505,76 @@ public static class AdminEndpoints
                     }
                 }
 
-                // ═══ S104 / ADR-038 D8 — CROSS-ORGANISATION TRANSFER re-sync (the unit + edge fan-out) ═══
+                // ═══ S104 / ADR-038 D8 — CROSS-ORGANISATION TRANSFER re-sync (the dated organisation
+                // write, then the unit + edge fan-out) ═══
                 // Runs AFTER the users UPDATE + UserUpdated emit, BEFORE COMMIT. All under the held
-                // reporting-org + unit-org advisories for both Organisations (acquired at the top).
+                // reporting-org + unit-org advisories for both Organisations (acquired at the top) and the
+                // organisation timeline lock (taken in the pre-checks). The organisation write is dated
+                // `transferDate`; the fan-out after it keeps its one `today` (C-13: the reporting history
+                // records who managed when, and moving it back could withdraw an approval authority that
+                // was real at the time).
                 if (isTransfer)
                 {
-                    // S140 / TASK-14009 (PAT-028: one operation, one date) — THE transfer's single
+                    // ── S148 C-13 (ADR-040 D4; A-2) — the dated organisation write, on the open row
+                    // locked in the pre-checks. The shape is decided by the date alone: equal to the open
+                    // row's start → that row's organisation is replaced in place (audit UPDATED); later →
+                    // the open row is closed at the date and a new one opened (audit SUPERSEDED). The row,
+                    // its audit row (written by the repository), the event and its projection row ride
+                    // this transaction (ADR-018 D3, ADR-026 D2). users.primary_org_id was written above
+                    // and stays the access anchor; with no future or before-the-open-row transfer, the
+                    // newest row always covers today, so the column remains the cache of today's row.
+                    var organisationWrite = await userOrganisationRepo.TransferAsync(
+                        conn, tx, userId, liveOrganisation!, newPrimaryOrgId, transferDate,
+                        actor.ActorId ?? "unknown", actor.ActorRole ?? "unknown", ct);
+
+                    // OldOrgId is the open ROW's organisation (the pre-image this write replaced, as the
+                    // audit row's previous_data records it), not the locked users row's: the event
+                    // narrates the organisation history. VersionBefore/VersionAfter: the open row's
+                    // version before the write, and the version of the row live after it.
+                    var organisationTransferred = new UserOrganisationTransferred
+                    {
+                        UserId = userId,
+                        AssignmentId = organisationWrite.AssignmentId,
+                        PredecessorAssignmentId = organisationWrite.PredecessorAssignmentId,
+                        OldOrgId = liveOrganisation!.OrgId,
+                        NewOrgId = newPrimaryOrgId,
+                        EffectiveFrom = transferDate,
+                        InPlace = organisationWrite.InPlace,
+                        VersionBefore = liveOrganisation.Version,
+                        VersionAfter = organisationWrite.VersionAfter,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    // Always projected HERE, in this transaction, at the NEW organisation (as UserUpdated
+                    // above): the startup audit backfill would resolve this event by the user's organisation
+                    // at backfill time, which is never the designed path.
+                    var orgTransferredOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, $"user-{userId}", organisationTransferred, ct);
+                    var orgTransferredCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(organisationTransferred.OccurredAt),
+                        ResolvedTargetOrgId: newPrimaryOrgId);
+                    var orgTransferredRow = orgTransferredMapper.Map(organisationTransferred, orgTransferredCtx);
+                    await auditRepo.InsertAsync(conn, tx, organisationTransferred.EventId, orgTransferredOutboxId, organisationTransferred.EventType, orgTransferredRow, orgTransferredCtx, ct);
+
+                    // The hand-off (P-24, A-4, NR-11): a transfer dated back into a month already sent to
+                    // payroll, or into a settled holiday year, flags it on HR's worklist under its own
+                    // trigger. Open-ended: the new organisation applies from the date onward. Flag only —
+                    // nothing is recalculated or revalued (ADR-013, ADR-040 D8), and the trigger never
+                    // blocks the re-plan.
+                    var transferTrigger = new WorklistTrigger(
+                        WorklistTriggerKinds.OrganisationTransfer,
+                        organisationTransferred.EventId,
+                        transferDate,
+                        actor.ActorId ?? "unknown");
+                    await worklistRepo.WriteForExportedMonthsAsync(
+                        conn, tx, userId, transferTrigger, transferDate, null, ct);
+                    await worklistRepo.WriteForSettledYearsAsync(
+                        conn, tx, userId, transferTrigger, transferDate, null, ct);
+
+                    // S140 / TASK-14009 (PAT-028: one operation, one date) — the FAN-OUT's single
                     // BUSINESS date, read off the INJECTED TimeProvider seam, NOT from the audit
                     // stamp `now` above. It is the only date this fan-out writes, and it writes it
                     // four times: the closed reporting line's `effective_to` (the `closeDate:`
@@ -2404,9 +2593,10 @@ public static class AdminEndpoints
                     // S141 / TASK-14104 — `today` is now read ONCE for the whole handler (see its
                     // declaration near the top) rather than a second time here. Two reads of the
                     // same provider are not the same instant: a request crossing the day boundary
-                    // can land on different days, and this handler's two consumers — the OQ-6
-                    // scheduled-vs-history test and this fan-out's four dated writes — would then
-                    // disagree about what day it is inside one transaction. S142 / TASK-14202: the
+                    // can land on different days, and this handler's consumers of it — among them the
+                    // OQ-6 scheduled-vs-history test, the transfer date's default and future-date
+                    // refusal, and this fan-out's four dated writes — would then disagree about what
+                    // day it is inside one transaction. S142 / TASK-14202: the
                     // boundary those four STAMPS cross is Copenhagen midnight, not UTC midnight.
 
                     // (a) Clear the moved user's OLD-unit `unit_leaders` rows + emit UnitLeaderRemoved per
@@ -3970,9 +4160,13 @@ public static class AdminEndpoints
         /// a mid-sprint state and is never revisited becomes a false instruction the moment the sprint
         /// moves past it.</i></para>
         /// <para>
-        /// Nothing on this path COMPARES the supplied date to the server's today any more (the refusal
-        /// was lifted in S141 / TASK-14104), so the two calendars disagreeing cannot make a request
-        /// fail; it decides which DAY an unattended client would name.
+        /// On the agreement-code path nothing COMPARES the supplied date to the server's today any more
+        /// (the refusal was lifted in S141 / TASK-14104). <b>A transfer does (S148 C-13).</b> When
+        /// <c>PrimaryOrgId</c> changes the user's organisation, this is also the transfer's date (one
+        /// request, one date): omitted (the type's default, <c>0001-01-01</c>) means today; a date after
+        /// the server's today answers 400 <c>EFFECTIVE_FROM_NOT_TODAY_OR_PAST</c>, and a date before the
+        /// start of the user's current organisation row answers 400 <c>BEFORE_CURRENT_ORGANISATION</c>.
+        /// So a client that sends a date with a transfer must name the Copenhagen day.
         /// </para>
         /// drives ADR-020 D2 3-case routing in
         /// <c>UserAgreementCodeRepository.SupersedeAndCreateAsync</c> when
