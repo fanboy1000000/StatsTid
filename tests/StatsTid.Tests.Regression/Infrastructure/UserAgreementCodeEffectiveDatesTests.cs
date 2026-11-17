@@ -1,4 +1,5 @@
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Infrastructure;
 using StatsTid.Tests.Regression.Hosting;
 
@@ -145,6 +146,9 @@ public sealed class UserAgreementCodeEffectiveDatesTests : IAsyncLifetime
             VALUES (@p0, @p0, 'dev-only', 'S144 Agreement Dates User', NULL,
                     'STY01', 'AC', 'OK24', 'Standard', TRUE)
             """, userId);
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, "STY01");
         return userId;
     }
 

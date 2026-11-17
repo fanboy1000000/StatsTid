@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
@@ -1005,6 +1006,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             agreementCmd.Parameters.AddWithValue("u", employeeId);
             await agreementCmd.ExecuteNonQueryAsync();
         }
+        await RegressionSeed.SeedOrganisationRowAsync(conn, employeeId, OrgId);
         return employeeId;
     }
 

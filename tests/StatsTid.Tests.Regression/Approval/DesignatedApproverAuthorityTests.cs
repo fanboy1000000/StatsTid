@@ -257,6 +257,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // per user; drop ours before the users (the FK constraints to users(user_id)).
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
 
         async Task ExecAsync(NpgsqlConnection c, string sql)

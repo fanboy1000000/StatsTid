@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Outbox;
@@ -172,6 +173,7 @@ public sealed class AdminAtomicHttpTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("username", userId.ToLowerInvariant());
         cmd.Parameters.AddWithValue("orgId", primaryOrgId);
         await cmd.ExecuteNonQueryAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, primaryOrgId);
     }
 
     private static HttpClient ThrowingClient(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> host)

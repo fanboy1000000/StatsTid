@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.RuleEngine.Api.Contracts;
@@ -391,6 +392,8 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
             agreementCmd.Parameters.AddWithValue("a", agreementCode);
             await agreementCmd.ExecuteNonQueryAsync();
         }
+
+        await RegressionSeed.SeedOrganisationRowAsync(conn, employeeId, "STY01");
     }
 
     /// <summary>

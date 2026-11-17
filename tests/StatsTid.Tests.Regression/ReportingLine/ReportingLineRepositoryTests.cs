@@ -101,6 +101,21 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
 
         await using (var del = new NpgsqlCommand(
             """
+            DELETE FROM user_organisations
+            WHERE user_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl, @mgrC)
+            """, conn))
+        {
+            del.Parameters.AddWithValue("emp", TestEmp);
+            del.Parameters.AddWithValue("mgrA", TestMgrA);
+            del.Parameters.AddWithValue("mgrB", TestMgrB);
+            del.Parameters.AddWithValue("empCross", TestEmpCross);
+            del.Parameters.AddWithValue("empNoRl", TestEmpNoRl);
+            del.Parameters.AddWithValue("mgrC", TestMgrC);
+            await del.ExecuteNonQueryAsync();
+        }
+
+        await using (var del = new NpgsqlCommand(
+            """
             DELETE FROM users
             WHERE user_id IN (@emp, @mgrA, @mgrB, @empCross, @empNoRl, @mgrC)
             """, conn))

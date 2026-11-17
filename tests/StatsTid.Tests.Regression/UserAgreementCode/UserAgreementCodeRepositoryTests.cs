@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Security;
@@ -392,6 +393,7 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
             """, conn);
         cmd.Parameters.AddWithValue("userId", userId);
         await cmd.ExecuteNonQueryAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, "STY01");
         return userId;
     }
 

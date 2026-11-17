@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.AuditMappers;
@@ -768,6 +769,8 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
                 scheduledCmd.Parameters.AddWithValue("from", scheduledStart);
                 await scheduledCmd.ExecuteNonQueryAsync();
             }
+
+            await RegressionSeed.SeedOrganisationRowAsync(conn, userId, OrgId);
         }
 
         var loginRsp = await client.PostAsJsonAsync("/api/auth/login", new { username = userId, password });
@@ -946,6 +949,8 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("oldOrg", TransferOldOrg);
             await cmd.ExecuteNonQueryAsync();
         }
+        // The transfer route moves this user (the user-edit route reads and closes the dated row).
+        await RegressionSeed.SeedOrganisationRowAsync(conn, transferredUserId, TransferOldOrg);
 
         var dbFactory = new DbConnectionFactory(_harness.ConnectionString);
 
@@ -1076,6 +1081,8 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
             agreementCmd.Parameters.AddWithValue("hire", hireDate);
             await agreementCmd.ExecuteNonQueryAsync();
         }
+
+        await RegressionSeed.SeedOrganisationRowAsync(conn, employeeId, OrgId);
 
         return (employeeId, profileId);
     }

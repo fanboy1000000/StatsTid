@@ -430,6 +430,8 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
             uacCmd.Parameters.AddWithValue("agreementCode", agreementCode);
             await uacCmd.ExecuteNonQueryAsync();
         }
+
+        await RegressionSeed.SeedOrganisationRowAsync(conn, EmployeeId, OrgId);
     }
 
     /// <summary>

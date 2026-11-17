@@ -334,6 +334,7 @@ public sealed class S105UnitLeaderApprovalTests : IAsyncLifetime
         await ExecUsersAsync(conn, "DELETE FROM unit_leaders WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM role_assignments WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecUsersAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
 
         // Drop EVERY non-demo unit in the test Organisations (the isolated s105 fixtures AND any units a

@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
@@ -324,6 +325,7 @@ public sealed class SkemaAccrualCapTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("org", orgId);
         cmd.Parameters.AddWithValue("ac", agreementCode);
         await cmd.ExecuteNonQueryAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, orgId);
         return userId;
     }
 

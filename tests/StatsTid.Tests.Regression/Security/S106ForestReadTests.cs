@@ -155,6 +155,7 @@ public sealed class S106ForestReadTests : IAsyncLifetime
             """
             DELETE FROM unit_leaders WHERE user_id = ANY(@users)
               OR unit_id IN (SELECT unit_id FROM units WHERE organisation_id = ANY(@orgs));
+            DELETE FROM user_organisations WHERE user_id = ANY(@users);
             DELETE FROM users WHERE user_id = ANY(@users);
             UPDATE units SET parent_unit_id = NULL WHERE organisation_id = ANY(@orgs);
             DELETE FROM units WHERE organisation_id = ANY(@orgs);

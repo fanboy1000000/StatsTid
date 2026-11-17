@@ -445,6 +445,7 @@ public sealed class SiblingReadMonthGateTests : IAsyncLifetime
             DELETE FROM event_streams WHERE stream_id = ANY(@streams);
             DELETE FROM employee_profiles WHERE employee_id = ANY(@ids);
             DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids);
+            DELETE FROM user_organisations WHERE user_id = ANY(@ids);
             DELETE FROM users WHERE user_id = ANY(@ids);
             """, conn);
         cmd.Parameters.AddWithValue("ids", AllUsers);

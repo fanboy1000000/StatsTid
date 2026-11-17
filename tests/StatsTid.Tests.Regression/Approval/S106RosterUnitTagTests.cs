@@ -273,6 +273,7 @@ public sealed class S106RosterUnitTagTests : IAsyncLifetime
             """
             UPDATE users SET unit_id = NULL WHERE unit_id = ANY(@uids);
             DELETE FROM unit_leaders WHERE unit_id = ANY(@uids);
+            DELETE FROM user_organisations WHERE user_id = ANY(@ids);
             DELETE FROM users WHERE user_id = ANY(@ids);
             DELETE FROM units WHERE unit_id = ANY(@uids);
             """, conn))

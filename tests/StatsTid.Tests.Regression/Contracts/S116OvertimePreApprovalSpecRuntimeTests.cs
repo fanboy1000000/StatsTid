@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -427,5 +428,12 @@ public sealed class S116OvertimePreApprovalSpecRuntimeTests : IAsyncLifetime
         {
             await cmd.ExecuteNonQueryAsync();
         }
+
+        foreach (var (user, org) in new[]
+                 {
+                     ("s116o_e1", "S116O01"), ("s116o_e2", "S116O02"), ("s116o_e3", "S116O01"),
+                     ("s116o_e10", "S116O03"), ("s116o_e11", "S116O03"), ("s116o_e12", "S116O03"),
+                 })
+            await RegressionSeed.SeedOrganisationRowAsync(conn, user, org);
     }
 }

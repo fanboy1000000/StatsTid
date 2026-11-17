@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -134,6 +135,7 @@ public sealed class SearchEndpointContractTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("id", PersonId);
             await cmd.ExecuteNonQueryAsync();
         }
+        await RegressionSeed.SeedOrganisationRowAsync(conn, PersonId, Org);
     }
 
     /// <summary>The search is the <c>{ units: [...], people: [...] }</c> two-section envelope; each unit

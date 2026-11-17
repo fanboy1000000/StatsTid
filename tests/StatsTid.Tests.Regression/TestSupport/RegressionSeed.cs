@@ -5,8 +5,9 @@ namespace StatsTid.Tests.Regression.TestSupport;
 
 /// <summary>
 /// S64 / TASK-6402 — shared regression seed helper. Atomically writes the
-/// three rows a dated <see cref="EmploymentProfileResolver"/> lookup requires:
-/// <c>users</c> + <c>user_agreement_codes</c> + <c>employee_profiles</c>.
+/// four rows a dated <see cref="EmploymentProfileResolver"/> lookup requires:
+/// <c>users</c> + <c>user_organisations</c> + <c>user_agreement_codes</c> + <c>employee_profiles</c>.
+/// The organisation row is always dated <c>0001-01-01</c> (NR-P7), whatever <c>effectiveFrom</c> is.
 ///
 /// <para>
 /// <b>Why this exists.</b> The resolver enforces the S34 / TASK-3406
@@ -56,7 +57,7 @@ internal static class RegressionSeed
     }
 
     /// <summary>
-    /// Atomically writes the three resolver-required rows on the supplied open
+    /// Atomically writes the four resolver-required rows on the supplied open
     /// connection. The caller owns the connection lifetime.
     /// </summary>
     /// <param name="conn">An OPEN connection. Not enrolled in any caller transaction —
@@ -148,6 +149,9 @@ internal static class RegressionSeed
             await epCmd.ExecuteNonQueryAsync(ct);
         }
 
+        // user_organisations — the dated organisation row, always 0001-01-01 (see SeedOrganisationRowAsync).
+        await SeedOrganisationRowAsync(conn, employeeId, orgId, ct);
+
         // user_agreement_codes — the row the S34 resolver contract requires.
         // Anchored at the SAME effectiveFrom so it covers every date the profile does.
         await using (var uacCmd = new NpgsqlCommand(
@@ -164,6 +168,31 @@ internal static class RegressionSeed
             uacCmd.Parameters.AddWithValue("effectiveFrom", from);
             await uacCmd.ExecuteNonQueryAsync(ct);
         }
+    }
+
+    /// <summary>
+    /// Writes the one open <c>user_organisations</c> row for a user: the user, <paramref name="orgId"/>
+    /// (the organisation the fixture put on <c>users.primary_org_id</c>), from <c>0001-01-01</c>,
+    /// open-ended. Always <c>0001-01-01</c>, whatever <c>effectiveFrom</c> a caller gives the profile and
+    /// agreement-code rows: it is the anchor the product's own create and the backfill seeder use
+    /// (NR-P7, C-13). Neither <c>effective_from</c> nor <c>assignment_id</c> has a column default, so
+    /// both are named. Idempotent. Call it AFTER the <c>users</c> insert (foreign key). Fixtures that
+    /// insert <c>users</c> by their own SQL call this beside that insert.
+    /// </summary>
+    public static async Task SeedOrganisationRowAsync(
+        NpgsqlConnection conn, string userId, string orgId, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO user_organisations (
+                assignment_id, user_id, org_id, effective_from, effective_to, version)
+            VALUES (
+                gen_random_uuid(), @userId, @orgId, '0001-01-01', NULL, 1)
+            ON CONFLICT DO NOTHING
+            """, conn);
+        cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>

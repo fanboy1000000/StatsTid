@@ -315,6 +315,7 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
         // The factory boot backfills an employee_profiles row per user (TASK-3403) → delete before users.
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
 
         async Task ExecAsync(NpgsqlConnection c, string sql)

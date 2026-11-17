@@ -128,6 +128,9 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
+        foreach (var user in AllUsers)
+            await RegressionSeed.SeedOrganisationRowAsync(conn, user, user is EmpX or MgrX ? "STY05" : "STY02");
+
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
@@ -214,6 +217,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM event_streams WHERE stream_id = ANY(@streams)");
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
 
         async Task ExecAsync(NpgsqlConnection c, string sql)

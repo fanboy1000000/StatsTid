@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Temporal;
@@ -1174,6 +1175,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             """, conn);
         cmd.Parameters.AddWithValue("userId", userId);
         await cmd.ExecuteNonQueryAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, "STY01");
         return userId;
     }
 

@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Http;
 using StatsTid.RuleEngine.Api.Contracts;
@@ -430,6 +431,8 @@ public sealed class RuleEngineAuthForwardingTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("from", new DateOnly(1, 1, 1));
             await cmd.ExecuteNonQueryAsync();
         }
+
+        await RegressionSeed.SeedOrganisationRowAsync(conn, employeeId, OrgId);
 
         return employeeId;
     }

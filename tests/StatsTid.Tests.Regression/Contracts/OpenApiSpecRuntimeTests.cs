@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Security;
@@ -241,6 +242,7 @@ public sealed class OpenApiSpecRuntimeTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("id", Member);
             await cmd.ExecuteNonQueryAsync();
         }
+        await RegressionSeed.SeedOrganisationRowAsync(conn, Member, Org);
 
         // The member's active PRIMARY reporting edge → Leader (non-null primaryReportingLineVersion etag).
         var rlRepo = new ReportingLineRepository(_dbFactory);

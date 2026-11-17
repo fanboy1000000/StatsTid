@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -168,6 +169,8 @@ public sealed class S106SearchReadTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("pos", (object?)position ?? DBNull.Value);
             await cmd.ExecuteNonQueryAsync();
         }
+
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, orgId);
     }
 
     private async Task CleanupAsync(NpgsqlConnection conn)
@@ -177,6 +180,7 @@ public sealed class S106SearchReadTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             DELETE FROM employee_profiles WHERE employee_id = ANY(@users);
+            DELETE FROM user_organisations WHERE user_id = ANY(@users);
             DELETE FROM users WHERE user_id = ANY(@users);
             UPDATE units SET parent_unit_id = NULL WHERE organisation_id = ANY(@orgs);
             DELETE FROM units WHERE organisation_id = ANY(@orgs);
