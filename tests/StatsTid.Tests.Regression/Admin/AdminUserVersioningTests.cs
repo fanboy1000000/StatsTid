@@ -7,6 +7,7 @@ using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Admin;
 
@@ -668,6 +669,8 @@ public sealed class AdminUserVersioningTests : IAsyncLifetime
             """, conn);
         uacCmd.Parameters.AddWithValue("userId", userId);
         await uacCmd.ExecuteNonQueryAsync();
+
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, "STY01");
 
         return userId;
     }

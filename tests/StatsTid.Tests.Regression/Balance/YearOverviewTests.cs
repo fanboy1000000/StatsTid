@@ -2082,6 +2082,8 @@ public sealed class YearOverviewTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("ok", okVersion);
         await cmd.ExecuteNonQueryAsync();
 
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, orgId);
+
         return userId;
     }
 

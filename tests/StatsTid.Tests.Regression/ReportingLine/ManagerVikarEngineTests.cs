@@ -177,6 +177,12 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             await del.ExecuteNonQueryAsync();
         }
         await using (var del = new NpgsqlCommand(
+            "DELETE FROM user_organisations WHERE user_id = ANY(@ids)", conn))
+        {
+            del.Parameters.AddWithValue("ids", ids);
+            await del.ExecuteNonQueryAsync();
+        }
+        await using (var del = new NpgsqlCommand(
             "DELETE FROM users WHERE user_id = ANY(@ids)", conn))
         {
             del.Parameters.AddWithValue("ids", ids);

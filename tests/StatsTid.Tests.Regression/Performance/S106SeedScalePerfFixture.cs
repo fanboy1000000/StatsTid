@@ -471,6 +471,7 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
             DELETE FROM manager_vikar WHERE vikar_user_id LIKE 'perf_o3_x%' OR absent_approver_id LIKE 'perf_o3_x%'
                                         OR vikar_user_id LIKE 'perf_o1_x%' OR absent_approver_id LIKE 'perf_o1_x%';
             DELETE FROM role_assignments WHERE user_id LIKE 'perf_o3_x%' OR user_id LIKE 'perf_o1_x%';
+            DELETE FROM user_organisations WHERE user_id LIKE 'perf_o3_x%' OR user_id LIKE 'perf_o1_x%';
             DELETE FROM users WHERE user_id LIKE 'perf_o3_x%' OR user_id LIKE 'perf_o1_x%';
             """, conn);
         await cmd.ExecuteNonQueryAsync();
@@ -487,6 +488,7 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
             DELETE FROM approval_periods WHERE employee_id LIKE 'perf_o3_p%';
             DELETE FROM reporting_lines WHERE employee_id LIKE 'perf_o3_p%' OR manager_id LIKE 'perf_o3_p%';
             DELETE FROM role_assignments WHERE user_id LIKE 'perf_o3_p%';
+            DELETE FROM user_organisations WHERE user_id LIKE 'perf_o3_p%';
             DELETE FROM users WHERE user_id LIKE 'perf_o3_p%';
             """, conn);
         await cmd.ExecuteNonQueryAsync();

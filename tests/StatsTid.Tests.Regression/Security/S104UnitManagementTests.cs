@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Security;
@@ -166,6 +167,9 @@ public sealed class S104UnitManagementTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
+        foreach (var user in AllUsers)
+            await RegressionSeed.SeedOrganisationRowAsync(conn, user, OrgA);
+
         // LeaderUser is the designated leader of UA2 (the member-invariant holds — leader.unit_id = UA2).
         await using (var cmd = new NpgsqlCommand(
             "INSERT INTO unit_leaders (unit_id, user_id) VALUES (@ua2, @leader) ON CONFLICT DO NOTHING", conn))
@@ -221,6 +225,7 @@ public sealed class S104UnitManagementTests : IAsyncLifetime
         await ExecUsersAsync(conn, "DELETE FROM unit_leaders WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM role_assignments WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecUsersAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecUsersAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
         // Drop EVERY non-demo unit in the test Organisations (the isolated A/B fixtures AND any units
         // the test itself created via the API) — not just the fixed fixture ids: a test-created CHILD of

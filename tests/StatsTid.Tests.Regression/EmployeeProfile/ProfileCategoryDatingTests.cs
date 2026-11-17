@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Security;
@@ -432,6 +433,9 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
             VALUES (@p0, @p0, 'dev-only', 'S137 Category User', NULL,
                     'STY01', 'AC', 'OK24', @p1, TRUE)
             """, userId, employmentCategory);
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, "STY01");
         return userId;
     }
 

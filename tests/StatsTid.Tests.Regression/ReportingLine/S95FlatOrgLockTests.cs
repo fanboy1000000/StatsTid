@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
@@ -151,6 +152,9 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
+        // Emp is the user the transfer PUT moves (STY02 -> STY05); the user-edit route reads its dated row.
+        await RegressionSeed.SeedOrganisationRowAsync(conn, Emp, OrgSty02);
+
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
@@ -219,6 +223,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM role_assignments WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
         // S96 — drop the raw-seeded inactive Organisation (after the homed users are gone; users FK it).
         await using (var orgCmd = new NpgsqlCommand("DELETE FROM organizations WHERE org_id = @org", conn))
@@ -773,6 +778,7 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
             "DELETE FROM employee_profiles WHERE employee_id = @id",
             "DELETE FROM user_agreement_codes WHERE user_id = @id",
             "DELETE FROM role_assignments WHERE user_id = @id",
+            "DELETE FROM user_organisations WHERE user_id = @id",
             "DELETE FROM users WHERE user_id = @id",
         })
         {

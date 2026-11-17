@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Calendar;
@@ -154,6 +155,13 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
+        foreach (var (user, org) in new[]
+                 {
+                     (RootMgr, "STY02"), (EmpA, "STY02"), (EmpB, "STY02"), (AwayMgr, "STY02"),
+                     (EmpAway, "STY02"), (Vikar, "STY02"), (Orphan, "STY02"), (EmpX, "STY05"),
+                 })
+            await RegressionSeed.SeedOrganisationRowAsync(conn, user, org);
+
         // RootMgr is a LocalLeader covering STY02 (so the resolver returns it for the pending tally).
         await using (var cmd = new NpgsqlCommand(
             """
@@ -211,6 +219,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM role_assignments WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
 
         async Task ExecAsync(NpgsqlConnection c, string sql)

@@ -493,6 +493,7 @@ public sealed class S98OrgStructureTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM reporting_lines WHERE employee_id = ANY(@users) OR manager_id = ANY(@users)");
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@users) OR employee_id = 't98_home_new'");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@users) OR user_id = 't98_home_new'");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@users) OR user_id = 't98_home_new'");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@users) OR user_id = 't98_home_new'");
 
         // Audit-projection rows referencing the test orgs (FK target_org_id → organizations) MUST go

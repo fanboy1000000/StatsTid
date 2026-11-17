@@ -435,6 +435,8 @@ public sealed class SkemaQuotaResaveTests : IClassFixture<SkemaQuotaResaveTests.
             await agreementCmd.ExecuteNonQueryAsync();
         }
 
+        await RegressionSeed.SeedOrganisationRowAsync(conn, emp, OrgId);
+
         return emp;
     }
 

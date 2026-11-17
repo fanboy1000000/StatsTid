@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using Xunit.Sdk;
@@ -285,6 +286,9 @@ public sealed class S112AdminOrgUserRoleSpecRuntimeTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("home", HomeOrg);
             await cmd.ExecuteNonQueryAsync();
         }
+
+        foreach (var user in new[] { PutUser, GetUser, RolesUser, GrantUser, GrantUser2, RevokeUser, "s112b_search1", "s112b_search2" })
+            await RegressionSeed.SeedOrganisationRowAsync(conn, user, HomeOrg);
 
         // (a) The roles-GET read seed: expires_at NON-null so the nullable DateTime scalar is
         //     exercised with a value. (b) The revoke's own assignment (explicit id — the revoke

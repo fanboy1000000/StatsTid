@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.AuditMappers;
@@ -200,6 +201,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM user_agreement_codes_audit WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@ids)");
 
         async Task ExecAsync(NpgsqlConnection c, string sql, Action<NpgsqlCommand>? extra = null)
@@ -1595,6 +1597,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         await DelAsync("DELETE FROM user_agreement_codes WHERE user_id = ANY(@ids)");
         await DelAsync("DELETE FROM user_agreement_codes_audit WHERE user_id = ANY(@ids)");
         await DelAsync("DELETE FROM users_audit WHERE user_id = ANY(@ids)");
+        await DelAsync("DELETE FROM user_organisations WHERE user_id = ANY(@ids)");
         await DelAsync("DELETE FROM users WHERE user_id = ANY(@ids)");
     }
 
@@ -1611,6 +1614,7 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("id", userId);
         cmd.Parameters.AddWithValue("org", orgId);
         await cmd.ExecuteNonQueryAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, orgId);
     }
 
     /// <summary>

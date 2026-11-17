@@ -448,6 +448,11 @@ public sealed class SkemaRowPreferencesMonthGetTests : IAsyncLifetime
             INSERT INTO user_agreement_codes (assignment_id, user_id, agreement_code, effective_from, effective_to, version)
             VALUES (gen_random_uuid(), @p0, 'AC', '-infinity', NULL, 1)
             """, emp);
+        await using (var orgConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await orgConn.OpenAsync();
+            await RegressionSeed.SeedOrganisationRowAsync(orgConn, emp, orgId);
+        }
 
         var rsp = await GetMonthResponseAsync(emp, orgId, 2025, 5);
 

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -637,6 +638,7 @@ public sealed class BalanceSeriesTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("org", orgId);
         cmd.Parameters.AddWithValue("ac", agreementCode);
         await cmd.ExecuteNonQueryAsync();
+        await RegressionSeed.SeedOrganisationRowAsync(conn, userId, orgId);
         return userId;
     }
 

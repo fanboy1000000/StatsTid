@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Tests.Regression.TestSupport;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -155,5 +156,8 @@ public sealed class S112EmployeeProfileSpecRuntimeTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("del", DeleteEmployee);
             await cmd.ExecuteNonQueryAsync();
         }
+
+        foreach (var user in new[] { GetEmployee, PutEmployee, DeleteEmployee })
+            await RegressionSeed.SeedOrganisationRowAsync(conn, user, Org);
     }
 }

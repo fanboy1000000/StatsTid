@@ -191,6 +191,19 @@ public sealed class PayrollCalcAuditSmokeTests
             WHERE NOT EXISTS (SELECT 1 FROM user_agreement_codes WHERE user_id = @emp)
             """,
             ("emp", employeeId));
+
+        // The dated organisation row (always 0001-01-01, the anchor the product's create and backfill
+        // use; neither effective_from nor assignment_id has a default). Smoke cannot reach the
+        // Regression project's RegressionSeed, so the row is inserted here.
+        await ExecAsync(conn,
+            """
+            INSERT INTO user_organisations (assignment_id, user_id, org_id, effective_from, effective_to, version)
+            SELECT gen_random_uuid(), u.user_id, u.primary_org_id, DATE '0001-01-01', NULL, 1
+            FROM users u
+            WHERE u.user_id = @emp
+              AND NOT EXISTS (SELECT 1 FROM user_organisations WHERE user_id = @emp)
+            """,
+            ("emp", employeeId));
     }
 
     /// <summary>

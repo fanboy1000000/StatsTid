@@ -310,6 +310,7 @@ public sealed class S110MaoDeleteGuardTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM reporting_lines WHERE employee_id = ANY(@users) OR manager_id = ANY(@users)");
         await ExecAsync(conn, "DELETE FROM employee_profiles WHERE employee_id = ANY(@users)");
         await ExecAsync(conn, "DELETE FROM user_agreement_codes WHERE user_id = ANY(@users)");
+        await ExecAsync(conn, "DELETE FROM user_organisations WHERE user_id = ANY(@users)");
         await ExecAsync(conn, "DELETE FROM users WHERE user_id = ANY(@users)");
 
         // Audit-projection rows (FK target_org_id → organizations) before the orgs.
