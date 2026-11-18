@@ -117,6 +117,9 @@ public static class BackdateWorklistEndpoints
             HrBackdateWorklistRepository worklistRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
+            // SEC-062 — the organisation-drift guard's locked read of the employee's row and its WARNING.
+            UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -150,7 +153,9 @@ public static class BackdateWorklistEndpoints
             if (existing is null)
                 return Results.NotFound(new { error = "Worklist row not found" });
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
                 actor, existing.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
@@ -219,6 +224,21 @@ public static class BackdateWorklistEndpoints
             await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
+                // SEC-062 — the organisation-drift guard, the transaction's first statement, before the
+                // worklist row is locked or read: the employee's row locked (terminated-inclusive, as the
+                // scope check), in the organisation the check authorised (a null authorisation fails
+                // closed), or a transfer committed in between: roll back, 409, nothing written or revealed.
+                var lockedEmployee = await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, existing.EmployeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "POST /api/hr/backdate-worklist/{worklistId}/resolve", ct);
+
                 WorklistResolveResult result;
                 try
                 {

@@ -422,9 +422,12 @@ public static class ApprovalEndpoints
             // effective designated-approver edge for this employee RIGHT NOW (S74 / ADR-027 D4 A3 —
             // the edge grants cross-afdeling authority; asOf = today = "who may act NOW"). The
             // unfloored leader-by-org-scope branch is RETIRED: a non-designated in-scope LEADER must
-            // now hold the edge. S78 R1: orgScopeAllowed is hoisted so the in-tx re-eval knows whether
-            // the actor was admitted by the HR/Admin fallback (JWT-/scope-based, not re-checked in-tx)
-            // or purely by the edge.
+            // now hold the edge. S78 R1: orgScopeAllowed is hoisted so the in-tx steps know whether
+            // the actor was admitted by the HR/Admin fallback or purely by the edge: the in-lock edge
+            // re-evaluation refuses only an edge-admitted actor, and the organisation-drift guard
+            // (SEC-062) applies only to a scope-admitted one. The fallback is not re-run in-tx; the
+            // guard holds its verdict under the tree lock by comparing the organisation it authorised
+            // (orgScopeAuthorisedOrgId) with the one the lock found.
             //
             // S147 / TASK-14713 (QUAL-230 T5b; owner OQ-2: HR only from day 6) — the org-scope arm is
             // the TERMINATED-INCLUSIVE validator (S138's send-command swap, the same floor). For an
@@ -443,8 +446,10 @@ public static class ApprovalEndpoints
             //     at `today`.
             // The switch-off (which the active-only reads also see) is now belt and braces. The refusal is
             // this arm's existing 403; it names no date.
-            var (orgScopeAllowed, orgScopeReason) =
-                await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised (set on every admit),
+            // which the organisation-drift guard compares with the tree-locked organisation.
+            var (orgScopeAllowed, orgScopeReason, orgScopeAuthorisedOrgId) =
+                await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
                 // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path (incl. a unit
@@ -496,17 +501,30 @@ public static class ApprovalEndpoints
             // tree than this approve — the approve-vs-vikar-revoke post-transfer key-mismatch residual.
             // That residual is non-corrupting: the revoke only ENDS an existing edge, and this in-tx
             // re-eval re-reads the committed manager_vikar state under ReadCommitted regardless of which key
-            // either side held.) We re-check ONLY the designated edge / unit-leader path for AUTHORITY (not
-            // org-scope: ValidateOrgAccessAsync is JWT-claim-based and cannot be serialized by a DB lock —
-            // its pre-tx check remains the gate). If the actor passed the pre-tx check PURELY via the edge /
-            // unit-leader path (org-scope denied), a revoke that committed before we got the lock now flips
-            // the re-eval to DENY → 403.
+            // either side held.) We re-check ONLY the designated edge / unit-leader path for AUTHORITY. The
+            // org-scope arm is not re-run in-tx: its pre-tx check is the gate, and the organisation-drift
+            // guard directly after the acquire below (SEC-062) holds that verdict under this lock, because a
+            // transfer takes the same tree advisory, so the organisation the acquire returns cannot move
+            // until we commit. If the actor passed the pre-tx check PURELY via the edge / unit-leader path
+            // (org-scope denied), a revoke that committed before we got the lock now flips the re-eval to
+            // DENY → 403.
             //
             // S147 / TASK-14713 (R-7) — the TERMINATED-INCLUSIVE overload: the same advisory key and the
             // same drift check, but a switched-off employee still resolves to their Organisation, so HR's
             // day-6 approval does not end in a 500. The shared helper and its reporting-line callers are
             // unchanged.
             var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
+
+            // SEC-062 — the organisation-drift guard, for an actor the org-scope arm admitted (R3: an
+            // actor admitted by the edge alone never meets it). The organisation under the tree lock must
+            // be the one the scope check authorised (a null authorisation fails closed), or a transfer
+            // committed in between and the actor was never checked for this person: roll back, 409.
+            // Before the `unit-org-` lock, so a refused request takes no unit lock.
+            if (orgScopeAllowed
+                && (orgScopeAuthorisedOrgId is null
+                    || !string.Equals(empCurrentOrg, orgScopeAuthorisedOrgId, StringComparison.Ordinal)))
+                return await OrganisationDriftGuard.RefuseAsync(
+                    tx, loggerFactory, actor, "POST /api/approval/{periodId}/approve", ct);
 
             // S105 / ADR-038 D4/D8 (BLOCKER fix) — ALSO acquire the employee's current `unit-org-`
             // advisory (keyed on the employee's current Organisation = the verified tree root above), in
@@ -726,15 +744,17 @@ public static class ApprovalEndpoints
             // fallback (floored at LocalHR, bound to the employee's CURRENT Organisation via
             // ValidateEmployeeAccessAsync) OR the effective designated-approver edge at today (S74 /
             // ADR-027 D4 A3). The unfloored leader-by-org-scope branch is RETIRED. S78 R1: orgScopeAllowed
-            // hoisted for the in-tx edge re-eval (same as approve).
+            // hoisted for the in-tx steps: the edge re-eval and the organisation-drift guard (same as
+            // approve).
             //
             // S147 / TASK-14713 (QUAL-230 T5b; OQ-2) — the TERMINATED-INCLUSIVE validator at the same
             // LocalHR floor, for the reason spelled out on approve: HR may reject a switched-off leaver's
             // month from day 6. S147 / TASK-14725 (+ fix-up 1) — "day 6" is decided by DATE on both this
             // org-scope arm (the validator treats a past-grace subject as switched off) and the edge arm
             // (the shared predicate's manager-grace check), whether or not Step A has run; see approve.
-            var (orgScopeAllowed, orgScopeReason) =
-                await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised (as on approve).
+            var (orgScopeAllowed, orgScopeReason, orgScopeAuthorisedOrgId) =
+                await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
                 // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path, centralized
@@ -770,12 +790,23 @@ public static class ApprovalEndpoints
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
             // S78 R1 — in-lock edge-auth re-evaluation (same shape as approve): advisory FIRST, then
-            // re-check the designated edge / unit-leader path under the held lock; org-scope stays a
-            // pre-tx-only gate. S105 / ADR-038 D4/D8 — ALSO acquire the employee's current `unit-org-`
-            // advisory (D8 order `reporting-org-` → `unit-org-` → row FOR UPDATE) so a concurrent
-            // `UnitLeaderRemoved`/member-move serializes against this reject.
+            // re-check the designated edge / unit-leader path under the held lock; the org-scope arm is
+            // not re-run, and the organisation-drift guard below holds its verdict under the lock
+            // (SEC-062, as on approve). S105 / ADR-038 D4/D8 — ALSO acquire the employee's current
+            // `unit-org-` advisory (D8 order `reporting-org-` → `unit-org-` → row FOR UPDATE) so a
+            // concurrent `UnitLeaderRemoved`/member-move serializes against this reject.
             // S147 / TASK-14713 (R-7) — the terminated-inclusive overload (same key, same drift check).
             var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
+
+            // SEC-062 — the organisation-drift guard, for a scope-admitted actor only (as on approve):
+            // the tree-locked organisation must be the authorised one (null fails closed), else 409.
+            // Before the `unit-org-` lock.
+            if (orgScopeAllowed
+                && (orgScopeAuthorisedOrgId is null
+                    || !string.Equals(empCurrentOrg, orgScopeAuthorisedOrgId, StringComparison.Ordinal)))
+                return await OrganisationDriftGuard.RefuseAsync(
+                    tx, loggerFactory, actor, "POST /api/approval/{periodId}/reject", ct);
+
             await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
             // The in-lock re-evaluation reuses the request's single date (`today`, read at the top —
             // PAT-028); it was a second clock read before (S140 / TASK-14001).
@@ -1885,9 +1916,11 @@ public static class ApprovalEndpoints
                 return Results.NotFound(new { error = "Period not found" });
 
             var isEmployee = actor.ActorRole == StatsTidRoles.Employee;
-            // S78 R1: track whether the Leader arm was admitted by org-scope (for the in-tx re-eval) and
-            // the allowed conditional-UPDATE source-state set (R2), which differs per arm.
+            // S78 R1: track whether the Leader arm was admitted by org-scope (for the in-tx re-eval and
+            // the organisation-drift guard, with the organisation that admission authorised — SEC-062)
+            // and the allowed conditional-UPDATE source-state set (R2), which differs per arm.
             var orgScopeAdmittedLeaderArm = false;
+            string? orgScopeAuthorisedOrgId = null;
             string? orgScopeReason = null;
             string[] allowedSourceStates;
 
@@ -1965,9 +1998,11 @@ public static class ApprovalEndpoints
                 // (S147 / TASK-14725 + fix-up 1), whether or not Step A has run; see approve. TASK-14703's
                 // departed-self clause runs inside this overload, so a departed HR-tier self reopening
                 // their own month is refused there, before the HR gate, as on the active-only call.
-                var (allowed2, reason2) =
-                    await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
+                // SEC-062: the sibling also returns the organisation it authorised (as on approve).
+                var (allowed2, reason2, authorisedOrgId2) =
+                    await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
                 orgScopeAdmittedLeaderArm = allowed2;
+                orgScopeAuthorisedOrgId = authorisedOrgId2;
                 orgScopeReason = reason2;
                 if (!allowed2)
                 {
@@ -1998,9 +2033,10 @@ public static class ApprovalEndpoints
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-            // S78 R1 — the LEADER arm only: advisory FIRST, then in-tx edge re-eval (org-scope stays a
-            // pre-tx-only gate). The EMPLOYEE arm carries no designated-edge authority (a self-action
-            // gated by ValidateEmployeeAccessAsync), so it takes NEITHER the advisory nor the re-eval.
+            // S78 R1 — the LEADER arm only: advisory FIRST, then in-tx edge re-eval (the org-scope arm is
+            // not re-run; the organisation-drift guard below holds its verdict under the lock, SEC-062).
+            // The EMPLOYEE arm carries no designated-edge authority (a self-action gated by
+            // ValidateEmployeeAccessAsync), so it takes NEITHER the advisory, the re-eval nor the guard.
             if (!isEmployee)
             {
                 // S105 / ADR-038 D4/D8 — advisory order `reporting-org-` → `unit-org-` → row FOR UPDATE
@@ -2008,6 +2044,16 @@ public static class ApprovalEndpoints
                 // reopen against a concurrent `UnitLeaderRemoved`/member-move on the employee's unit tree.
                 // S147 / TASK-14713 (R-7) — the terminated-inclusive overload (same key, same drift check).
                 var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
+
+                // SEC-062 — the organisation-drift guard, for a leader arm the org-scope check admitted
+                // (R3; as on approve): the tree-locked organisation must be the authorised one (null
+                // fails closed), else 409. Before the `unit-org-` lock.
+                if (orgScopeAdmittedLeaderArm
+                    && (orgScopeAuthorisedOrgId is null
+                        || !string.Equals(empCurrentOrg, orgScopeAuthorisedOrgId, StringComparison.Ordinal)))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "POST /api/approval/{periodId}/reopen (leader arm)", ct);
+
                 await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
                 if (!orgScopeAdmittedLeaderArm)
                 {
@@ -2298,6 +2344,13 @@ public static class ApprovalEndpoints
                 new { error = "Access denied", reason = "Employee can only send own periods" },
                 statusCode: 403);
 
+        // SEC-062 — set below for a send on another person's behalf (the actor is not the subject):
+        // the organisation the scope check authorised, which the organisation-drift guard at (5a′)
+        // compares with the subject's locked row. A send of one's own month takes no row lock and
+        // meets no guard (the self exemption, as the role floor's).
+        var sendOnBehalf = false;
+        string? sendAuthorisedOrgId = null;
+
         if (actor.ActorRole != StatsTidRoles.Employee)
         {
             // ── S138 / TASK-13805 — TERMINATED-INCLUSIVE validator swap (ADR-040 D3) ─────────────
@@ -2315,10 +2368,14 @@ public static class ApprovalEndpoints
             var sendFloor = string.Equals(employeeId, actor.ActorId, StringComparison.Ordinal)
                 ? null
                 : StatsTidRoles.LocalHR;
-            var (allowed, reason) = await svc.ScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
+            var (allowed, reason, authorisedOrgId) = await svc.ScopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
                 actor, employeeId, sendFloor, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // A floor is set exactly when the actor is not the subject.
+            sendOnBehalf = sendFloor is not null;
+            sendAuthorisedOrgId = authorisedOrgId;
         }
 
         // ── (5a′) THE SUBJECT READ — TERMINATED-INCLUSIVE, IN-LOCK — AND THE ADR-040 D3 FLOOR ────
@@ -2372,9 +2429,24 @@ public static class ApprovalEndpoints
         // are untouched; the R4 floor for ACTIVE subjects is byte-identical, so the S127
         // authorization matrix and the windowless characterization pin stay green. No employment
         // date enters any response body (D3 redaction).
-        var user = await svc.UserRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
+        //
+        // SEC-062 — on another person's behalf this read locks the subject's row (FOR UPDATE, the
+        // terminated-inclusive overload) and the organisation-drift guard follows its 404, before every
+        // other check here: the scope check above read the subject on its own connection, and a
+        // transfer takes no `employee-` lock, so only the locked row is stable. It must be in the
+        // organisation the check authorised (a null authorisation fails closed), or the request rolls
+        // back with 409. A send of one's own month keeps the plain read and meets no guard.
+        var user = sendOnBehalf
+            ? (await svc.UserRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, employeeId, ct))?.User
+            : await svc.UserRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
         if (user is null)
             return Results.NotFound(new { error = "Employee not found" });
+
+        if (sendOnBehalf
+            && (sendAuthorisedOrgId is null
+                || !string.Equals(user.PrimaryOrgId, sendAuthorisedOrgId, StringComparison.Ordinal)))
+            return await OrganisationDriftGuard.RefuseAsync(
+                tx, svc.LoggerFactory, actor, "send command (POST /api/approval/send, employee-approve)", ct);
 
         // S147 / TASK-14710 (QUAL-230 T5a point 3; R-21, R-24; OQ-2) — the D3 test
         // (`!IsActive && below LocalHR`) is REPLACED by the shared DepartedSubjectWriteFloor: refuse

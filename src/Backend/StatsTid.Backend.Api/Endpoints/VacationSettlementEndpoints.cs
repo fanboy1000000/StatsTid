@@ -116,13 +116,13 @@ public static class VacationSettlementEndpoints
             VacationTransferAgreementRepository, VacationSettlementRepository,
             EntitlementConfigRepository, UserAgreementCodeRepository, UserRepository,
             TimeProvider,
-            DbConnectionFactory, OrgScopeValidator, HttpContext, CancellationToken,
+            DbConnectionFactory, OrgScopeValidator, ILoggerFactory, HttpContext, CancellationToken,
             Task<IResult>> handler = async (
             employeeId, body,
             transferRepo, settlementRepo,
             configRepo, agreementCodeRepo, userRepo,
             timeProvider,
-            connectionFactory, scopeValidator, context, ct) =>
+            connectionFactory, scopeValidator, loggerFactory, context, ct) =>
         {
             var actor = context.GetActorContext();
 
@@ -130,7 +130,10 @@ public static class VacationSettlementEndpoints
             // S76 / TASK-7600 B1 (completeness-sweep find): LocalHR floor — the ADMITTING scope
             // must itself be HR+, else a mixed-role HR@A + Leader@B actor writes a §21 transfer
             // agreement for a B employee via the non-admin Leader scope (the mixed-role leak class).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -233,7 +236,10 @@ public static class VacationSettlementEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the first statement is the blocking `employee-` advisory,
+            // and the reads after it (the organisation-drift guard's locked row, the active-settlement
+            // check) must see the lock winner's commit. The default overload resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // BLOCKER 2 (Codex Step-5a) — serialize the §21 write against the SettlementCloseService
@@ -244,6 +250,24 @@ public static class VacationSettlementEndpoints
                 // the agreement commit → a post-settlement agreement omitted from the snapshot. Held to
                 // commit (transaction-scoped, auto-released), so the poller cannot settle mid-write.
                 await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
+
+                // SEC-062 — the organisation-drift guard, directly after the lock and before the
+                // settlement read: the scope check read the employee on its own connection and a
+                // transfer takes no `employee-` lock, so the employee's row is locked here and must be in
+                // the organisation the check authorised (a null authorisation fails closed), or a
+                // transfer committed in between: roll back, 409, nothing written or revealed.
+                var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, employeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor,
+                        isCreate ? "POST /api/vacation-transfer-agreements/{employeeId}" : "PUT /api/vacation-transfer-agreements/{employeeId}",
+                        ct);
 
                 // Guard 5 (reject-post-settlement) — read the ACTIVE settlement INSIDE the tx so the
                 // check observes the same snapshot as the write. If a non-REVERSED settlement already
@@ -372,6 +396,8 @@ public static class VacationSettlementEndpoints
             // balance row the §22 rescue's carryover creates (the YEAR_END close's own chain).
             VacationSettlementService settlementService,
             OrgScopeValidator scopeValidator,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -385,7 +411,10 @@ public static class VacationSettlementEndpoints
             // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — a mixed HR@A + Leader@B JWT
             // can no longer manually resolve (FORFEIT/DEFER/WAIVE) an ACTIVE B settlement row via
             // the Leader scope.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -437,6 +466,22 @@ public static class VacationSettlementEndpoints
                 // WHOLE resolve surface — FORFEIT/DEFER included — which serializes resolve-vs-reversal
                 // for every verb (the R12 race list). Held to commit (transaction-scoped).
                 await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
+
+                // SEC-062 — the organisation-drift guard, directly after the lock and before the
+                // settlement read: the employee's row locked (terminated-inclusive, as the scope check),
+                // in the organisation the check authorised (a null authorisation fails closed), or a
+                // transfer committed in between: roll back, 409, nothing written or revealed.
+                var lockedEmployee = await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, employeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor,
+                        "POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve", ct);
 
                 // Read the ACTIVE settlement in-tx, under the lock (the CAS subject).
                 var current = await settlementRepo.GetActiveAsync(
@@ -1179,6 +1224,9 @@ public static class VacationSettlementEndpoints
             VacationSettlementRepository settlementRepo,
             DbConnectionFactory connectionFactory,
             OrgScopeValidator scopeValidator,
+            // SEC-062 — the organisation-drift guard's locked read of the employee's row and its WARNING.
+            UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1189,7 +1237,10 @@ public static class VacationSettlementEndpoints
             // settled row (the S68 B2 fix). HROrAbove policy + subtree binding unchanged.
             // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — a mixed HR@A + Leader@B JWT
             // can no longer set the §24 reconcile marker on an ACTIVE B row via the Leader scope.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1202,7 +1253,10 @@ public static class VacationSettlementEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the first statement is the blocking `employee-` advisory,
+            // and the reads after it (the organisation-drift guard's locked row, the settlement row)
+            // must see the lock winner's commit. The default overload resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // S69 TASK-6905 (ADR-033 D4 / ADR-032 D4) — claim/reconcile MUTUAL EXCLUSION.
@@ -1219,6 +1273,22 @@ public static class VacationSettlementEndpoints
                     lockCmd.Parameters.AddWithValue("employeeId", employeeId);
                     await lockCmd.ExecuteScalarAsync(ct);
                 }
+
+                // SEC-062 — the organisation-drift guard, directly after the lock and before the
+                // settlement read: the employee's row locked (terminated-inclusive, as the scope check),
+                // in the organisation the check authorised (a null authorisation fails closed), or a
+                // transfer committed in between: roll back, 409, nothing written or revealed.
+                var lockedEmployee = await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, employeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor,
+                        "POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout", ct);
 
                 var current = await settlementRepo.GetActiveAsync(
                     conn, tx, employeeId, entitlementType, entitlementYear, ct);

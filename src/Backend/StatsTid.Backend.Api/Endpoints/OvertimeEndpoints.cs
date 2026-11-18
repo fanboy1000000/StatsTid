@@ -154,13 +154,18 @@ public static class OvertimeEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
-            // Leaders create pre-approvals for their employees — validate scope
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, ct);
+            // Leaders create pre-approvals for their employees — validate scope. SEC-062: the sibling
+            // also returns the organisation it authorised, which the organisation-drift guard compares
+            // with the employee's locked row when the request is on another person's behalf.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, request.EmployeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -204,6 +209,25 @@ public static class OvertimeEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
+                    // SEC-062 — the organisation-drift guard, first in the transaction, for a request on
+                    // another person's behalf (creating one's own request is exempt and takes no row
+                    // lock). The scope check above read the employee on its own connection; the locked
+                    // row must still be in the organisation it authorised (a null authorisation fails
+                    // closed), or a transfer committed in between: roll back, 409, nothing written.
+                    if (!string.Equals(actor.ActorId, request.EmployeeId, StringComparison.Ordinal))
+                    {
+                        var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, request.EmployeeId, ct);
+                        if (lockedEmployee is null)
+                        {
+                            await tx.RollbackAsync(ct);
+                            return Results.NotFound(new { error = "Employee not found" });
+                        }
+                        if (authorisedOrgId is null
+                            || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                            return await OrganisationDriftGuard.RefuseAsync(
+                                tx, loggerFactory, actor, "POST /api/overtime/pre-approval", ct);
+                    }
+
                     await preApprovalRepo.CreateAsync(conn, tx, approval, ct);
                     // S44 TASK-4413: capture outbox_id for audit_projection insert
                     // (ADR-026 D2 sync-in-tx — TENANT_TARGETED, resolve employee org).
@@ -394,8 +418,10 @@ public static class OvertimeEndpoints
                     statusCode: 403);
             }
 
-            // Validate scope access to the employee
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, existing.EmployeeId, ct);
+            // Validate scope access to the employee. SEC-062: the sibling also returns the organisation
+            // it authorised, which the organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, existing.EmployeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -414,6 +440,20 @@ public static class OvertimeEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // SEC-062 — the organisation-drift guard, first in the transaction: the employee's row
+                // locked, in the organisation the scope check authorised (a null authorisation fails
+                // closed), or a transfer committed in between: roll back, 409, nothing written.
+                var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, existing.EmployeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/overtime/pre-approval/{id}/approve", ct);
+
                 await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "APPROVED", actor.ActorId, request?.Reason, ct);
                 var @event = new OvertimePreApprovalApproved
                 {
@@ -490,7 +530,9 @@ public static class OvertimeEndpoints
                     statusCode: 403);
             }
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, existing.EmployeeId, ct);
+            // SEC-062: the sibling also returns the organisation it authorised (as on approve).
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, existing.EmployeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -504,6 +546,18 @@ public static class OvertimeEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // SEC-062 — the organisation-drift guard, first in the transaction (as on approve).
+                var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, existing.EmployeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/overtime/pre-approval/{id}/reject", ct);
+
                 await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "REJECTED", actor.ActorId, request?.Reason, ct);
                 var @event = new OvertimePreApprovalRejected
                 {
@@ -551,6 +605,8 @@ public static class OvertimeEndpoints
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
+            // SEC-062 — the organisation-drift guard's locked read of the employee's row.
+            UserRepository userRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
@@ -573,7 +629,10 @@ public static class OvertimeEndpoints
                     statusCode: 403);
             }
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -619,6 +678,21 @@ public static class OvertimeEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
+                    // SEC-062 — the organisation-drift guard, first in the transaction, before the
+                    // guarded balance updates and their 409: the employee's row locked, in the
+                    // organisation the scope check authorised (a null authorisation fails closed), or a
+                    // transfer committed in between: roll back, 409, nothing written.
+                    var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, employeeId, ct);
+                    if (lockedEmployee is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = "Employee not found" });
+                    }
+                    if (authorisedOrgId is null
+                        || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "POST /api/overtime/{employeeId}/compensate", ct);
+
                     bool updated;
                     if (request.CompensationType == "PAYOUT")
                     {

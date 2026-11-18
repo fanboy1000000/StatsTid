@@ -60,6 +60,25 @@ public static class EntitlementEligibilityEndpoints
     /// (SENIOR_DAY is age-derived via DOB, never a manual toggle — refinement line 117).</summary>
     private const string SettableEntitlementType = "CHILD_SICK";
 
+    /// <summary>The one date-free reason both PUTs answer a self request with (ADR-040 D7).</summary>
+    private const string SelfEntitlementInputReason =
+        "Own entitlement eligibility and birth date cannot be modified; a second administrator must perform this change";
+
+    /// <summary>
+    /// P-26's "nobody changes their own inputs" (A-18; RES-003), extended by the owner to one's own
+    /// entitlement eligibility and birth date (SEC-065): the 403 both PUTs answer when the actor is
+    /// the employee, so a second administrator makes the change. One WARNING under P-26's clause
+    /// (<see cref="AdminEndpoints.SelfChangeClauseName"/>), naming no date; the caller has written
+    /// nothing and opened no transaction.
+    /// </summary>
+    private static IResult SelfEntitlementInputRefusal(ILoggerFactory loggerFactory, ActorContext actor, string route)
+    {
+        loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.EntitlementEligibilityEndpoints.SelfChange").LogWarning(
+            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+            AdminEndpoints.SelfChangeClauseName, actor.ActorId, actor.ActorRole, route, actor.CorrelationId);
+        return Results.Json(new { error = "Access denied", reason = SelfEntitlementInputReason }, statusCode: 403);
+    }
+
     public static WebApplication MapEntitlementEligibilityEndpoints(this WebApplication app)
     {
         // ═══════════════════════════════════════════
@@ -77,8 +96,11 @@ public static class EntitlementEligibilityEndpoints
         //   • 428 — missing / malformed precondition (EtagHeaderHelper)
         //   • 412 — OptimisticConcurrencyException (stale If-Match version, ADR-019 D2)
         //   • 409 — EligibilityAlreadyExistsException (If-None-Match: * but a live row exists;
-        //           create-only path, no blind overwrite — S59 Step-7a BLOCKER 1)
-        //   • 403 — OrgScopeValidator denial (cross-org guard)
+        //           create-only path, no blind overwrite — S59 Step-7a BLOCKER 1), or the SEC-062
+        //           organisation-drift guard
+        //   • 404 — the employee's row is gone under the lock
+        //   • 403 — OrgScopeValidator denial (cross-org guard), or the actor is the employee
+        //           (P-26's "nobody changes their own inputs", SEC-065; see SelfEntitlementInputRefusal)
         // ═══════════════════════════════════════════
         app.MapPut("/api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}", async (
             string employeeId,
@@ -98,6 +120,8 @@ public static class EntitlementEligibilityEndpoints
             // pin written against it would have proved nothing. Injection is what makes the stamp
             // below observable.
             TimeProvider timeProvider,
+            // The WARNING lines of the self refusal and the organisation-drift guard (SEC-062).
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -107,9 +131,20 @@ public static class EntitlementEligibilityEndpoints
             // scopes to the target employee's organisation (FAIL-001: validator uses
             // FindAll, not FindFirst, on scopes). S76 B1: LocalHR floor — the ADMITTING scope
             // must itself be HR+ (a sub-HR mixed-role scope covering the org cannot admit).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // P-26 extended (SEC-065; RES-003) — nobody sets their own entitlement eligibility; a
+            // second administrator does. Unconditional (this writer always records a write), every
+            // role, GlobalAdmin included. After the scope check, so a departed self keeps its answer;
+            // before every other check and the transaction, so nothing is written or locked.
+            if (ApprovalSelfGuard.IsSelf(actor, employeeId))
+                return SelfEntitlementInputRefusal(
+                    loggerFactory, actor, "PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}");
 
             // Scope guard — only CHILD_SICK is settable; SENIOR_DAY and any other type are
             // rejected (resolves the Codex scope-leak: HR cannot gate VACATION / CARE_DAY /
@@ -151,6 +186,21 @@ public static class EntitlementEligibilityEndpoints
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
+                // SEC-062 — the organisation-drift guard, the transaction's first statement: the scope
+                // check read the employee on its own connection, so the employee's row is locked here
+                // and must be in the organisation the check authorised (a null authorisation fails
+                // closed), or a transfer committed in between: roll back, 409, nothing written.
+                var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, employeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}", ct);
+
                 var @event = new EmployeeEntitlementEligibilitySet
                 {
                     EmployeeId = employeeId,
@@ -368,8 +418,10 @@ public static class EntitlementEligibilityEndpoints
         // Error mapping:
         //   • 428 — missing / malformed If-Match (EtagHeaderHelper admin-strict)
         //   • 412 — OptimisticConcurrencyException (stale version)
+        //   • 409 — the SEC-062 organisation-drift guard
         //   • 404 — no active user (pre-check or KeyNotFoundException)
-        //   • 403 — OrgScopeValidator denial (cross-org guard)
+        //   • 403 — OrgScopeValidator denial (cross-org guard), or the actor is the employee
+        //           (P-26's "nobody changes their own inputs", SEC-065; see SelfEntitlementInputRefusal)
         // ═══════════════════════════════════════════
         app.MapPut("/api/admin/employees/{employeeId}/birth-date", async (
             string employeeId,
@@ -377,15 +429,28 @@ public static class EntitlementEligibilityEndpoints
             UserRepository userRepo,
             DbConnectionFactory connectionFactory,
             OrgScopeValidator scopeValidator,
+            // The WARNING lines of the self refusal and the organisation-drift guard (SEC-062).
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
-            // S76 B1: HROrAbove policy → LocalHR floor.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // S76 B1: HROrAbove policy → LocalHR floor. SEC-062: the sibling also returns the
+            // organisation it authorised, which the organisation-drift guard compares with the locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // P-26 extended (SEC-065; RES-003) — nobody sets their own birth date (it decides when
+            // their senior days start); a second administrator does. Unconditional (every accepted
+            // request bumps users.version and writes a users_audit row), every role, GlobalAdmin
+            // included. After the scope check, so a departed self keeps its answer; before the 428
+            // and the transaction, so nothing is written or locked.
+            if (ApprovalSelfGuard.IsSelf(actor, employeeId))
+                return SelfEntitlementInputRefusal(
+                    loggerFactory, actor, "PUT /api/admin/employees/{employeeId}/birth-date");
 
             // Admin-strict If-Match — 428 if missing / malformed / If-None-Match: *.
             if (!EtagHeaderHelper.TryParseIfMatch(
@@ -421,6 +486,15 @@ public static class EntitlementEligibilityEndpoints
                         actualVersion = lockedVersion,
                     }, statusCode: 412);
                 }
+
+                // SEC-062 — the organisation-drift guard, a concurrency precondition like the 412
+                // above: the scope check read the employee on its own connection, so the locked row
+                // must be in the organisation the check authorised (a null authorisation fails closed),
+                // or a transfer committed in between: roll back, 409, nothing written.
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/admin/employees/{employeeId}/birth-date", ct);
 
                 long newVersion;
                 try

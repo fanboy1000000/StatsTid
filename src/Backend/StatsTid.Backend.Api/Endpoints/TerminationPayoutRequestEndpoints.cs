@@ -101,6 +101,8 @@ public static class TerminationPayoutRequestEndpoints
             IAuditProjectionMapper<TerminationPayoutRequested> requestAuditMapper,
             AuditProjectionRepository auditRepo,
             TimeProvider timeProvider,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -111,7 +113,10 @@ public static class TerminationPayoutRequestEndpoints
             // cross-org binding is load-bearing, the policy alone does not bind the org).
             // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — a mixed HR@A + Leader@B JWT
             // can no longer raise a §26 request against an ACTIVE B employee via the Leader scope.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row at (2).
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -145,7 +150,10 @@ public static class TerminationPayoutRequestEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the first statement is the blocking `employee-` advisory,
+            // and the in-lock reads after it must see the lock winner's commit. The default overload
+            // resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // (1) R12 — the ADR-032 D4 employee advisory lock FIRST, before ANY read (the
@@ -155,13 +163,24 @@ public static class TerminationPayoutRequestEndpoints
                 await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
 
                 // (2) In-lock employee re-read (terminated-inclusive — a deactivated leaver is
-                // the NORMAL case): the end-date-passed guard input + the audit target org.
-                var user = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
-                if (user is null)
+                // the NORMAL case), FOR UPDATE: the end-date-passed guard input + the audit target
+                // org, and the organisation-drift guard's locked row (SEC-062).
+                var lockedUser = await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, employeeId, ct);
+                if (lockedUser is null)
                 {
                     await tx.RollbackAsync(ct);
                     return Results.NotFound(new { error = "Employee not found" });
                 }
+                var user = lockedUser.Value.User;
+
+                // (2b) SEC-062 — the organisation-drift guard, before every other check: the scope check
+                // read the employee on its own connection and a transfer takes no `employee-` lock, so the
+                // locked row must be in the organisation the check authorised (a null authorisation fails
+                // closed), or a transfer committed in between: roll back, 409, nothing written or revealed.
+                if (authorisedOrgId is null
+                    || !string.Equals(user.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "POST /api/admin/employees/{employeeId}/termination-payout-request", ct);
 
                 // (3) In-lock ACTIVE settlement row read — the request's subject.
                 var current = await settlementRepo.GetActiveAsync(

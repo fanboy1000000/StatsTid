@@ -897,6 +897,14 @@ public static class UnitEndpoints
                     return PreconditionFailed(expectedVersion, locked.Version);
                 }
 
+                // SEC-062 — the organisation-drift guard, a concurrency precondition like the 412 above.
+                // The organisation check and the `unit-org-` lock were decided on the pre-transaction read
+                // (`user`); the locked row must still be in that organisation, or a transfer committed in
+                // between and the actor was never checked for the person's new organisation: roll back, 409.
+                if (!string.Equals(locked.PrimaryOrgId, user.PrimaryOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/admin/users/{userId}/unit", ct);
+
                 // Validate the target unit (null = home at the Organisation): ACTIVE + SAME Organisation.
                 if (request.UnitId is Guid targetUnitId)
                 {
