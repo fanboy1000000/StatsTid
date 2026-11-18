@@ -135,13 +135,22 @@ public sealed class OvertimePreApprovalRepository
     /// <paramref name="tx"/> so the write extends the same transaction across outbox writes
     /// (ADR-018 D3 transactional-outbox contract). Required by TASK-2607 (Overtime
     /// approve/reject atomic). The caller commits or rolls back; this method does NOT.
+    ///
+    /// <para>
+    /// A decision lands only on a PENDING row (QUAL-257): the UPDATE carries
+    /// <c>AND status = 'PENDING'</c>, so it changes nothing when another decision has already
+    /// committed. Returns <c>true</c> exactly when one row changed; on <c>false</c> the caller rolls
+    /// back and enqueues no decision event. The handlers' own PENDING check reads the row before
+    /// their transaction and cannot see a decision that commits after it; this predicate is
+    /// evaluated against the committed row (READ COMMITTED), so it is the check that holds.
+    /// </para>
     /// </summary>
-    public async Task UpdateStatusAsync(
+    public async Task<bool> UpdateStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid id, string status, string? approvedBy, string? reason, CancellationToken ct = default)
     {
         await using var cmd = BuildUpdateStatusCommand(conn, tx, id, status, approvedBy, reason);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
     private static NpgsqlCommand BuildUpdateStatusCommand(
@@ -151,7 +160,7 @@ public sealed class OvertimePreApprovalRepository
         var sql =
             @"UPDATE overtime_pre_approvals
               SET status = @status, approved_by = @approvedBy, approved_at = NOW(), reason = @reason
-              WHERE id = @id";
+              WHERE id = @id AND status = 'PENDING'";
         var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("status", status);

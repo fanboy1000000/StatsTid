@@ -767,9 +767,11 @@ public sealed class ReportingLineRepository
     /// day only HR may approve, reject or reopen their final month (owner ruling OQ-2). Those three
     /// handlers take this lock before they change the month, and the shared helper above throws for a
     /// switched-off employee, so HR's approval would have failed with a server error even after the
-    /// door let them in. The shared helper is deliberately left as it is: its six reporting-line call
-    /// sites must keep refusing a switched-off employee, because they move reporting lines and no one
-    /// should rearrange a leaver's reporting.</para>
+    /// door let them in. The shared helper is deliberately left as it is: its seven reporting-line call
+    /// sites (all in <c>ReportingLineEndpoints</c>: assign, delete, acting create, acting delete, the
+    /// manager removal, the delegate create and the admin-vikar create) must keep refusing a
+    /// switched-off employee, because they move reporting lines and no one should rearrange a
+    /// leaver's reporting.</para>
     ///
     /// <para><b>Allowlist-restricted (R9c).</b> Exactly three callers, all in
     /// <c>ApprovalEndpoints</c>: approve, reject and the leader arm of reopen. Each has already passed

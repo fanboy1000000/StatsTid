@@ -277,7 +277,7 @@ public sealed class UserRepository
     //     id); the in-transaction AUDIT read of the audit's target organisation
     //     (GetByIdIncludingTerminatedAsync on (conn, tx)); and the tree lock's terminated-
     //     inclusive overload (ReportingLineRepository.AcquireTreeLockForEmployeeIncludingTerminatedAsync,
-    //     these three callers only — the shared AcquireTreeLockForEmployeeAsync and its six
+    //     these three callers only — the shared AcquireTreeLockForEmployeeAsync and its seven
     //     reporting-line callers stay active-only). From D+6 the leaver's manager is refused BY DATE
     //     on both layers (S147 / TASK-14725 + fix-up 1: the DesignatedApproverAuthorizer
     //     manager-grace check on the edge, and OrgScopeValidator treating a past-grace subject as
@@ -292,6 +292,25 @@ public sealed class UserRepository
     // On every one of them the validator's departed-self identity clause (DepartedSubject,
     // TASK-14703) runs before the HR gate, so no one reaches their OWN departed record through
     // this extension.
+    //
+    // S148 / TASK-14845 (SEC-062; the SEC-062 second-trace adjudication, R2) — FOURTH extension,
+    // the organisation-drift guard's locked read. Six write routes that already admit a
+    // deactivated subject through the terminated-inclusive validator
+    // (OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync, which also returns
+    // the organisation it authorised) read the subject's row FOR UPDATE through
+    // GetByIdWithVersionIncludingTerminatedAsync(conn, tx, …) and compare its primary_org_id with
+    // that organisation; a different or null organisation rolls the request back with 409. The read
+    // runs after the scope check and can only refuse, so it admits no one the check did not:
+    //   • ApprovalEndpoints.ExecuteSendAsync — POST /api/approval/send and
+    //     POST /api/approval/{periodId}/employee-approve, on another person's behalf only (a send of
+    //     one's own month keeps the plain GetByIdIncludingTerminatedAsync(conn, tx, …) read);
+    //   • VacationSettlementEndpoints — POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve;
+    //   • VacationSettlementEndpoints — POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout;
+    //   • TerminationPayoutRequestEndpoints — POST /api/admin/employees/{employeeId}/termination-payout-request;
+    //   • SkemaEndpoints — POST /api/skema/{employeeId}/save, on another person's behalf only (a save
+    //     of one's own data keeps the plain read);
+    //   • BackdateWorklistEndpoints — POST /api/hr/backdate-worklist/{worklistId}/resolve.
+    // (The SEC-062 second trace's sites W4, W6, W7, W8, W20 and W21, in that order.)
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -384,9 +403,22 @@ public sealed class UserRepository
     /// <c>end_date_deactivated = TRUE</c>) MUST be able to FOR-UPDATE the inactive row it
     /// reactivates. <b>S136 / TASK-13604 (ADR-040 D3) extends the allowlist</b> with the
     /// employment-START-date PUT — same reasoning, same lock/read/guard/write choreography
-    /// (see <see cref="SetEmploymentStartDateIncludingTerminatedAsync"/>). General admin edit
-    /// paths stay on the filtered overload (soft-deleted users are not addressable through
-    /// admin edit).
+    /// (see <see cref="SetEmploymentStartDateIncludingTerminatedAsync"/>). <b>S148 / TASK-14845
+    /// (SEC-062; the second-trace adjudication, R2) extends it again</b> with the organisation-drift
+    /// guard's locked read on six routes that already admit a deactivated subject through
+    /// <c>OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync</c>: the row is read
+    /// under the lock and its organisation compared with the one that check authorised (409 when they
+    /// differ or none was authorised), so the read can only refuse. The callers:
+    /// <c>ApprovalEndpoints.ExecuteSendAsync</c> (<c>POST /api/approval/send</c> and
+    /// <c>POST /api/approval/{periodId}/employee-approve</c>, on another person's behalf only);
+    /// <c>VacationSettlementEndpoints</c>
+    /// (<c>POST /api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/resolve</c> and
+    /// <c>…/reconcile-payout</c>); <c>TerminationPayoutRequestEndpoints</c>
+    /// (<c>POST /api/admin/employees/{employeeId}/termination-payout-request</c>); <c>SkemaEndpoints</c>
+    /// (<c>POST /api/skema/{employeeId}/save</c>, on another person's behalf only); and
+    /// <c>BackdateWorklistEndpoints</c> (<c>POST /api/hr/backdate-worklist/{worklistId}/resolve</c>).
+    /// General admin edit paths stay on the filtered overload (soft-deleted users are not
+    /// addressable through admin edit).
     /// </para>
     /// </summary>
     public async Task<(User User, long Version)?> GetByIdWithVersionIncludingTerminatedAsync(

@@ -15,6 +15,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class OvertimeEndpoints
 {
+    /// <summary>
+    /// The 409 approve and reject answer when the pre-approval stopped being PENDING inside their
+    /// transaction (QUAL-257): one sentence for both routes, date-free (ADR-040 D7).
+    /// </summary>
+    private const string PreApprovalNoLongerPendingError =
+        "Pre-approval is no longer pending: another decision was recorded while this request was processed; nothing was applied";
+
     public static WebApplication MapOvertimeEndpoints(this WebApplication app)
     {
         // ── GET /api/overtime/{employeeId}/balance — Get overtime balance for employee/year ──
@@ -454,7 +461,19 @@ public static class OvertimeEndpoints
                     return await OrganisationDriftGuard.RefuseAsync(
                         tx, loggerFactory, actor, "PUT /api/overtime/pre-approval/{id}/approve", ct);
 
-                await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "APPROVED", actor.ActorId, request?.Reason, ct);
+                // QUAL-257 — the decision lands only on a PENDING row. The PENDING check above reads the
+                // row before this transaction, so a decision committed since then is invisible to it.
+                // Approve and reject both lock the employee's users row first, so a second decision on
+                // the same pre-approval waits there until the first commits; at READ COMMITTED (the
+                // level this transaction opens on) this UPDATE then reads the committed status, its
+                // PENDING predicate changes no row, and the request rolls back with 409 before any event
+                // or audit row. (Without that lock the predicate still holds: an UPDATE that waits on the
+                // row re-checks its WHERE against the committed version.)
+                if (!await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "APPROVED", actor.ActorId, request?.Reason, ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Conflict(new { error = PreApprovalNoLongerPendingError });
+                }
                 var @event = new OvertimePreApprovalApproved
                 {
                     PreApprovalId = id,
@@ -558,7 +577,15 @@ public static class OvertimeEndpoints
                     return await OrganisationDriftGuard.RefuseAsync(
                         tx, loggerFactory, actor, "PUT /api/overtime/pre-approval/{id}/reject", ct);
 
-                await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "REJECTED", actor.ActorId, request?.Reason, ct);
+                // QUAL-257 — the decision lands only on a PENDING row, as on approve: a concurrent
+                // decision waits at the users-row lock above until the first commits, then this UPDATE
+                // reads the committed status (READ COMMITTED), changes no row, and the request rolls
+                // back with 409 before any event or audit row.
+                if (!await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "REJECTED", actor.ActorId, request?.Reason, ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Conflict(new { error = PreApprovalNoLongerPendingError });
+                }
                 var @event = new OvertimePreApprovalRejected
                 {
                     PreApprovalId = id,

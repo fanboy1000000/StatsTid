@@ -16,11 +16,19 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// <summary>
 /// S59 / TASK-5906 / ADR-029 — HR admin surface for (A) per-employee CHILD_SICK
 /// entitlement eligibility and (B) the GDPR-sensitive <c>birth_date</c> (DOB) that
-/// drives the age-derived SENIOR_DAY gate. Three endpoints, all
-/// <c>HROrAbove</c> + <see cref="OrgScopeValidator.ValidateEmployeeAccessAsync"/>
-/// (cross-org binding is load-bearing per the EmployeeProfileEndpoints precedent —
-/// the policy proves role + scope shape but does NOT bind the actor to the target
-/// employee's organisation):
+/// drives the age-derived SENIOR_DAY gate. Four endpoints, all <c>HROrAbove</c> plus an
+/// org-scope check at the LocalHR floor (cross-org binding is load-bearing per the
+/// EmployeeProfileEndpoints precedent — the policy proves role + scope shape but does NOT bind
+/// the actor to the target employee's organisation). The two GETs call
+/// <see cref="OrgScopeValidator.ValidateEmployeeAccessAsync"/>;
+/// the two PUTs call its sibling
+/// <see cref="OrgScopeValidator.ValidateEmployeeAccessWithOrgAsync"/>, which also returns the
+/// organisation it authorised, and the organisation-drift guard compares that organisation with
+/// the employee's locked row before anything is written (SEC-062; 409 when they differ). The two
+/// PUTs also refuse a self request: when the actor is the employee they answer 403, for every
+/// role, GlobalAdmin included, directly after the scope check and before every other check and the
+/// transaction, so a second administrator makes the change (P-26's "nobody changes their own
+/// inputs", extended to these two inputs; SEC-065; see <c>SelfEntitlementInputRefusal</c>).
 ///   <list type="bullet">
 ///     <item><description>
 ///       <b>PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}</b>
@@ -37,6 +45,12 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///       (which writes the table-level eligibility audit row) + the
 ///       <see cref="EmployeeEntitlementEligibilitySet"/> outbox enqueue + the ADR-026
 ///       audit-projection row.
+///     </description></item>
+///     <item><description>
+///       <b>GET /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}</b>
+///       — the current live eligibility and its version as an ETag, so the PUT above can compose
+///       a coherent If-Match (or <c>If-None-Match: *</c> when no live row exists). CHILD_SICK
+///       only, like the PUT (422 otherwise); it never returns DOB.
 ///     </description></item>
 ///     <item><description>
 ///       <b>GET /api/admin/employees/{employeeId}/birth-date</b> — HR-only DOB read,

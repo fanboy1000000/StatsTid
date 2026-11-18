@@ -880,7 +880,11 @@ public static class UnitEndpoints
             long newVersion;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the first statement is the blocking `unit-org-` advisory,
+            // and the reads after it (the user's row FOR UPDATE, which the 412 and the organisation-drift
+            // guard compare, and the target unit) must see the lock winner's commit. The default overload
+            // resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, user.PrimaryOrgId, ct);
