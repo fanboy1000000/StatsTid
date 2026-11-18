@@ -257,6 +257,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.True(result.Succeeded);
@@ -354,6 +355,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.True(result.Succeeded);
@@ -434,6 +436,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.False(result.Succeeded);
@@ -494,6 +497,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.False(result.Succeeded);
@@ -536,6 +540,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.False(result.Succeeded);
@@ -583,6 +588,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.False(result.Succeeded);
@@ -659,6 +665,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.False(result.Succeeded);
@@ -721,6 +728,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = OperatorId,
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
 
         Assert.True(result.Succeeded,
@@ -883,6 +891,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ActorId = "hr_s71_other_op",
             ActorRole = OperatorRole,
             ActorOrgId = OrgId,
+            ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
         });
         Assert.True(first.Succeeded);
         Assert.Equal(3, first.SupersedingRow!.Sequence);
@@ -1058,6 +1067,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
         ActorId = OperatorId,
         ActorRole = OperatorRole,
         ActorOrgId = OrgId,
+        ExpectedSubjectOrgId = OrgId, // S148 SEC-062: the organisation the fixture seeded the employee in; the command now carries it (ValidateCommand refuses null)
     };
 
     /// <summary>A fixed-clock derived host (PAT-008) WITHOUT a go-live date — its own poller

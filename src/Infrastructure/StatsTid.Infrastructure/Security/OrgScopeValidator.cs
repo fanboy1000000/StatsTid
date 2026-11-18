@@ -63,6 +63,16 @@ public sealed class OrgScopeValidator
     /// </summary>
     public const string PastGraceClauseName = "past-grace-as-switched-off";
 
+    /// <summary>
+    /// SEC-062 — the clause name the WARNING log line carries when a write handler finds, under its
+    /// lock, that the target's organisation is not the one the validator authorised.
+    /// </summary>
+    public const string OrganisationDriftClauseName = "organisation-drift";
+
+    /// <summary>SEC-062 — the 409 sentence for that case; it names no organisation and no date.</summary>
+    public const string OrganisationDriftReason =
+        "The user's organisation changed while this request was being processed; refresh and retry.";
+
     // The two existing refusal texts a switched-off target gets, held once so the past-grace answer is
     // provably the same text (S147 / TASK-14725 fix-up 1). Wording unchanged.
     private const string TargetNotFoundReason = "Target employee not found";
@@ -117,6 +127,27 @@ public sealed class OrgScopeValidator
     public async Task<(bool Allowed, string? Reason)> ValidateEmployeeAccessAsync(
         ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct = default)
     {
+        var (allowed, reason, _) = await CheckEmployeeAccessAsync(actor, targetEmployeeId, roleFloor, ct);
+        return (allowed, reason);
+    }
+
+    /// <summary>
+    /// Sibling of the role-floored <see cref="ValidateEmployeeAccessAsync(ActorContext, string, string?, CancellationToken)"/>:
+    /// the same check on the same single target read, which also returns the organisation it authorised.
+    /// <c>AuthorisedOrgId</c> is the <c>PrimaryOrgId</c> of that read, set only when a scope admitted
+    /// through the scope loop (the GLOBAL branch included); null on every deny and on the Employee
+    /// own-data admit. <paramref name="roleFloor"/> null = no floor, as on the floored overload.
+    /// A write handler compares this value with its locked row, so one read serves both (SEC-062).
+    /// </summary>
+    public async Task<(bool Allowed, string? Reason, string? AuthorisedOrgId)> ValidateEmployeeAccessWithOrgAsync(
+        ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct = default)
+        => await CheckEmployeeAccessAsync(actor, targetEmployeeId, roleFloor, ct);
+
+    // The one core of the active-only employee check: the public floored overload and its sibling
+    // both run it, so the scope loop exists once.
+    private async Task<(bool Allowed, string? Reason, string? AuthorisedOrgId)> CheckEmployeeAccessAsync(
+        ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct)
+    {
         // Ownership check: Employee accessing own data. The role floor does NOT apply to the
         // own-data branch — ownership (not org-scope) is what admits here, and an actor reading
         // their OWN record is never a privilege escalation. (No admin-policy caller routes here:
@@ -126,18 +157,18 @@ public sealed class OrgScopeValidator
         if (IsEmployeeOnly(actor))
         {
             if (string.Equals(actor.ActorId, targetEmployeeId, StringComparison.Ordinal))
-                return (true, null);
+                return (true, null, null);
 
-            return Deny(actor, targetEmployeeId, "Employee can only access own data");
+            return NoOrg(Deny(actor, targetEmployeeId, "Employee can only access own data"));
         }
 
         // Higher roles: resolve target employee's org and check scope coverage
         if (actor.Scopes is null || actor.Scopes.Length == 0)
-            return Deny(actor, targetEmployeeId, "No scopes assigned");
+            return NoOrg(Deny(actor, targetEmployeeId, "No scopes assigned"));
 
         var targetUser = await _userRepository.GetByIdAsync(targetEmployeeId, ct);
         if (targetUser is null)
-            return Deny(actor, targetEmployeeId, TargetNotFoundReason);
+            return NoOrg(Deny(actor, targetEmployeeId, TargetNotFoundReason));
 
         // PAT-028 — this call's ONE Copenhagen business date, read lazily and at most once (only when
         // a clause below needs it: the identity matches, or the target has a recorded last day).
@@ -149,7 +180,7 @@ public sealed class OrgScopeValidator
         // above (as before); what this adds is the self still active but past their last day (the
         // grace between the last day and the deactivation). Identity arm only — see the class remarks.
         if (IsDepartedSelf(actor, targetEmployeeId, targetUser, Today))
-            return DenyDepartedSelf(actor, targetEmployeeId);
+            return NoOrg(DenyDepartedSelf(actor, targetEmployeeId));
 
         // S147 / TASK-14725 fix-up 1 (owner ruling 2026-11-05, "(a) Extend now") — a target past the
         // manager grace BY DATE is answered exactly as a switched-off target is answered by the
@@ -158,11 +189,11 @@ public sealed class OrgScopeValidator
         // Copenhagen midnight on D+6, and for as long as Step A fails. Runs after the identity clause,
         // so a departed self keeps that clause's answer (unchanged). See the class remarks.
         if (IsPastGraceByDate(targetUser, Today))
-            return DenyPastGraceAsSwitchedOff(actor, targetEmployeeId, TargetNotFoundReason);
+            return NoOrg(DenyPastGraceAsSwitchedOff(actor, targetEmployeeId, TargetNotFoundReason));
 
         var targetOrg = await _organizationRepository.GetByIdAsync(targetUser.PrimaryOrgId, ct);
         if (targetOrg is null)
-            return Deny(actor, targetEmployeeId, "Target organization not found");
+            return NoOrg(Deny(actor, targetEmployeeId, "Target organization not found"));
 
         // Cache for scope org path lookups within this request
         var orgPathCache = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -175,7 +206,7 @@ public sealed class OrgScopeValidator
                 continue;
 
             if (scope.ScopeType == "GLOBAL")
-                return (true, null);
+                return (true, null, targetUser.PrimaryOrgId);
 
             if (scope.OrgId is null)
                 continue;
@@ -188,10 +219,10 @@ public sealed class OrgScopeValidator
             }
 
             if (scope.CoversOrg(targetOrg.MaterializedPath, scopeOrgPath))
-                return (true, null);
+                return (true, null, targetUser.PrimaryOrgId);
         }
 
-        return Deny(actor, targetEmployeeId, "Actor scope does not cover target organization");
+        return NoOrg(Deny(actor, targetEmployeeId, "Actor scope does not cover target organization"));
     }
 
     /// <summary>
@@ -313,19 +344,40 @@ public sealed class OrgScopeValidator
     public async Task<(bool Allowed, string? Reason)> ValidateEmployeeAccessIncludingTerminatedAsync(
         ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct = default)
     {
+        var (allowed, reason, _) = await CheckEmployeeAccessIncludingTerminatedAsync(actor, targetEmployeeId, roleFloor, ct);
+        return (allowed, reason);
+    }
+
+    /// <summary>
+    /// Sibling of the role-floored <see cref="ValidateEmployeeAccessIncludingTerminatedAsync(ActorContext, string, string?, CancellationToken)"/>:
+    /// the same check on the same single target read, which also returns the organisation it authorised.
+    /// <c>AuthorisedOrgId</c> is the <c>PrimaryOrgId</c> of that read, set only when a scope admitted
+    /// through the scope loop (the GLOBAL branch included); null on every deny.
+    /// <paramref name="roleFloor"/> null = no floor, as on the floored overload.
+    /// A write handler compares this value with its locked row, so one read serves both (SEC-062).
+    /// </summary>
+    public async Task<(bool Allowed, string? Reason, string? AuthorisedOrgId)> ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+        ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct = default)
+        => await CheckEmployeeAccessIncludingTerminatedAsync(actor, targetEmployeeId, roleFloor, ct);
+
+    // The one core of the terminated-inclusive employee check, shared by the public floored overload
+    // and its sibling. Separate from the active-only core: the two checks differ in more than their read.
+    private async Task<(bool Allowed, string? Reason, string? AuthorisedOrgId)> CheckEmployeeAccessIncludingTerminatedAsync(
+        ActorContext actor, string targetEmployeeId, string? roleFloor, CancellationToken ct)
+    {
         // No own-data branch (see XML doc): Employee-only actors are denied outright.
         if (IsEmployeeOnly(actor))
-            return Deny(actor, targetEmployeeId, "Employee role cannot use the terminated-inclusive access surface");
+            return NoOrg(Deny(actor, targetEmployeeId, "Employee role cannot use the terminated-inclusive access surface"));
 
         if (actor.Scopes is null || actor.Scopes.Length == 0)
-            return Deny(actor, targetEmployeeId, "No scopes assigned");
+            return NoOrg(Deny(actor, targetEmployeeId, "No scopes assigned"));
 
         // Terminated-INCLUSIVE target resolution — the single difference from the shared
         // validator's read (which filters is_active = TRUE and turns a leaver into
         // "Target employee not found").
         var targetUser = await _userRepository.GetByIdIncludingTerminatedAsync(targetEmployeeId, ct);
         if (targetUser is null)
-            return Deny(actor, targetEmployeeId, TargetNotFoundReason);
+            return NoOrg(Deny(actor, targetEmployeeId, TargetNotFoundReason));
 
         // PAT-028 — this call's ONE Copenhagen business date, read lazily and at most once.
         DateOnly? today = null;
@@ -337,7 +389,7 @@ public sealed class OrgScopeValidator
         // clause refuses both the deactivated self and the self past their last day. Identity arm only —
         // HR acting on someone ELSE who has left still reaches the gate and the scope loop as before.
         if (IsDepartedSelf(actor, targetEmployeeId, targetUser, Today))
-            return DenyDepartedSelf(actor, targetEmployeeId);
+            return NoOrg(DenyDepartedSelf(actor, targetEmployeeId));
 
         // S147 / TASK-14725 fix-up 1 (owner ruling 2026-11-05, "(a) Extend now") — "switched off" for
         // THIS overload's two HR gates below means: deactivated (is_active = FALSE), OR past the
@@ -356,14 +408,14 @@ public sealed class OrgScopeValidator
         if (terminatedTarget &&
             (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
         {
-            return pastGraceWhileActive
+            return NoOrg(pastGraceWhileActive
                 ? DenyPastGraceAsSwitchedOff(actor, targetEmployeeId, TerminatedRequiresHrReason)
-                : Deny(actor, targetEmployeeId, TerminatedRequiresHrReason);
+                : Deny(actor, targetEmployeeId, TerminatedRequiresHrReason));
         }
 
         var targetOrg = await _organizationRepository.GetByIdAsync(targetUser.PrimaryOrgId, ct);
         if (targetOrg is null)
-            return Deny(actor, targetEmployeeId, "Target organization not found");
+            return NoOrg(Deny(actor, targetEmployeeId, "Target organization not found"));
 
         // CoversOrg/PrimaryOrgId subtree check — identical to ValidateEmployeeAccessAsync for an
         // ACTIVE target; for a TERMINATED target (S147 / TASK-14725: or one past the grace by date)
@@ -395,7 +447,7 @@ public sealed class OrgScopeValidator
                 continue;
 
             if (scope.ScopeType == "GLOBAL")
-                return (true, null);
+                return (true, null, targetUser.PrimaryOrgId);
 
             if (scope.OrgId is null)
                 continue;
@@ -408,10 +460,10 @@ public sealed class OrgScopeValidator
             }
 
             if (scope.CoversOrg(targetOrg.MaterializedPath, scopeOrgPath))
-                return (true, null);
+                return (true, null, targetUser.PrimaryOrgId);
         }
 
-        return Deny(actor, targetEmployeeId, "Actor scope does not cover target organization");
+        return NoOrg(Deny(actor, targetEmployeeId, "Actor scope does not cover target organization"));
     }
 
     /// <summary>
@@ -637,6 +689,10 @@ public sealed class OrgScopeValidator
             DepartedSubject.ClauseName, actor.ActorId, actor.ActorRole, target, DepartedSubject.DenyReason, actor.CorrelationId);
         return (false, DepartedSubject.DenyReason);
     }
+
+    // A deny carries no authorised organisation.
+    private static (bool Allowed, string? Reason, string? AuthorisedOrgId) NoOrg((bool Allowed, string? Reason) deny)
+        => (deny.Allowed, deny.Reason, null);
 
     private (bool Allowed, string? Reason) Deny(ActorContext actor, string target, string reason)
     {

@@ -276,6 +276,7 @@ public sealed class EmploymentEndDateLifecycleWriter
             OldEndDateDeactivated = lockedUser.EndDateDeactivated,
             NewIsActive = newIsActive,
             NewEndDateDeactivated = newEndDateDeactivated,
+            EndDateEventId = endDateEvent.EventId,
         };
     }
 
@@ -339,7 +340,8 @@ public sealed class EmploymentEndDateLifecycleWriter
 /// <summary>
 /// S71 / TASK-7104 — the outcome of one <see cref="EmploymentEndDateLifecycleWriter.ApplyAsync"/>
 /// call: the <c>users.version</c> transition pair + the R1 lifecycle outcome (the old tuple for
-/// the caller's own records, the new tuple for response shaping / supersession eligibility).
+/// the caller's own records, the new tuple for response shaping / supersession eligibility), and
+/// the id of the <see cref="EmployeeEmploymentEndDateSet"/> event the call emitted.
 /// Init-only record (PAT-001).
 /// </summary>
 public sealed record EmploymentEndDateLifecycleResult
@@ -351,4 +353,11 @@ public sealed record EmploymentEndDateLifecycleResult
     public required bool OldEndDateDeactivated { get; init; }
     public required bool NewIsActive { get; init; }
     public required bool NewEndDateDeactivated { get; init; }
+
+    /// <summary>
+    /// The emitted <see cref="EmployeeEmploymentEndDateSet"/> event's id. The callers put it on the
+    /// HR worklist trigger an end-date change lands, so each row names the event that caused it
+    /// (S148 P-27, NR-18).
+    /// </summary>
+    public required Guid EndDateEventId { get; init; }
 }

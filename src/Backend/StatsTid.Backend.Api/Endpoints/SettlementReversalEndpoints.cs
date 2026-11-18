@@ -62,8 +62,12 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///   <item><description>409 — <c>SequenceMismatch</c> (with <c>actualSettlementSequence</c>),
 ///   <c>CarryoverWritingRow</c> (D-A zero-bucket), <c>ReconciledRow</c> (R4 exclusion),
 ///   <c>AffectedSpanConflict</c> (the B2/R13 guard — the reason NAMES every blocker),
-///   <c>SupersedeNotEligible</c>, <c>SupersedeCarryoverConflict</c>, and the dormant-go-live
-///   supersession refusal;</description></item>
+///   <c>SupersedeNotEligible</c>, <c>SupersedeCarryoverConflict</c>, <c>StrandedRegistrations</c>
+///   (S136, the narrowing-only D3 strand guard; the reason carries the stranded months and the
+///   per-family counts), <c>OrganisationDrift</c>
+///   (SEC-062 — the person's organisation, read under the users-row lock, is not the one the
+///   scope check authorised; the reason is the fixed refresh-and-retry sentence, with no
+///   organisation and no date), and the dormant-go-live supersession refusal;</description></item>
 ///   <item><description>412 — <c>CasConflict</c> (stale settlement If-Match, with
 ///   <c>actualVersion</c>) / <c>UserVersionConflict</c> (stale <c>expectedUserVersion</c>, with
 ///   <c>actualUserVersion</c>);</description></item>
@@ -138,7 +142,10 @@ public static class SettlementReversalEndpoints
             // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — closes the active-target
             // mixed-role leak (HR@A + Leader@B can no longer reverse an ACTIVE B settlement via
             // the Leader scope). HROrAbove endpoint policy + LocalHR floor are now aligned.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised; the service compares
+            // it with the users row it locks (ExpectedSubjectOrgId below).
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -206,6 +213,7 @@ public static class SettlementReversalEndpoints
                 CorrectedEndDate = body.CorrectedEndDate,
                 ExpectedUserVersion = body.ExpectedUserVersion,
                 SupersedeGoLiveFloor = goLiveDate,
+                ExpectedSubjectOrgId = authorisedOrgId,
                 ActorId = actor.ActorId ?? "unknown",
                 ActorRole = actor.ActorRole ?? "unknown",
                 ActorOrgId = actor.OrgId,
@@ -292,7 +300,9 @@ public static class SettlementReversalEndpoints
             // CarryoverWritingRow (D-A), ReconciledRow (R4), AffectedSpanConflict (B2/R13 —
             // the reason NAMES every blocker), SupersedeNotEligible, SupersedeCarryoverConflict,
             // StrandedRegistrations (S136 — the narrowing-only D3 strand guard; the reason carries
-            // the stranded months + per-family counts).
+            // the stranded months + per-family counts), OrganisationDrift (SEC-062 — the employee's
+            // organisation changed after the scope check; the reason is the fixed refresh-and-retry
+            // sentence, with no organisation and no date).
             _ => Results.Json(new
             {
                 error = result.FailureReason,

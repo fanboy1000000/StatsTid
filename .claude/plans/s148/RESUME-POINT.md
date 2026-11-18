@@ -23,8 +23,9 @@ This is the Orchestrator's handoff. Read it together with the tail of `docs/spri
   - Security consult: RESIDUALS, all Low.
   - Cycle 1: Codex CHANGES-REQUIRED; Fable CHANGES-REQUIRED.
   - Adjudication: `.claude/reviews/S148-TASK-14821-5a-adjudication-c1.md`. Read § 3, § 4 and § 5.
+- **UPDATE 2026-11-18 (later the same day):** § 3b is DONE: `24e6e004` on branch `worktree-agent-a1bf2042d19b51d4a` (worktree `.claude/worktrees/agent-a1bf2042d19b51d4a`; report `S148-TASK-14821-T-fix1-report.md`; gate green). 5α on `fd13174c..24e6e004` PASS (`S148-TASK-14821-5alpha-c2.md`; item 9, the Sonnet trailer, ruled a checklist error). **Cycle 2 dispatched** on both lenses: Codex (`S148-TASK-14821-5a-codex-c2.raw.md` / `.exit`, script `S148-session-helpers/codex-14821-c2-run.ps1`) and Fable (save as `S148-TASK-14821-5a-reviewer-c2.md`). The stale worktree `agent-a94cd019d00c5c17c` is removed. In parallel the `planner` is applying owner ruling 2 below as TASK-14845/-T draft 3 and plan **"final + 21"** — so TASK-14821's merge paperwork (§ 5 item 5) becomes **"final + 22"**. SEC-062's row at the merge also takes the second-trace adjudication's § 5 text (fourth group: fix ruled into TASK-14845, AC-C13p, M-47), per the sprint log's "updated with the TASK-14821 merge".
 - **Done:** § 3a, the backend comment fix-up (`d5466748`, report `S148-TASK-14821-fix1-report.md`).
-- **NEXT STEP: § 3b, the `test-qa` fix-up (TASK-14821-T fix-up 1)** on `d5466748`. First action: `git merge --ff-only d5466748`. It covers:
+- **(Was the next step; now done, see the update above.) § 3b, the `test-qa` fix-up (TASK-14821-T fix-up 1)** on `d5466748`. First action: `git merge --ff-only d5466748`. It covers:
   - the BLOCKER: the `pg_locks` helper must COALESCE the null `classid`/`objid`/`objsubid` columns;
   - four GlobalAdmin self-change facts (AC-C13h (5));
   - the self close with no If-Match (AC-C13h (6));

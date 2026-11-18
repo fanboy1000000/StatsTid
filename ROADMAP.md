@@ -514,6 +514,14 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   modelled). **Needs, at this epic's refinement:** a new `SYSTEM_TARGET.md` section (owner approval), a
   shift-planning ADR, and the shape of the shift planner and shift user (VD 8), decided with E7's roles. **After:**
   stage 2's order half, and E4 (swaps are requests). Ids: VD-G1, VD 25, VD 46–57, VD 59, VD 61.
+- **Backlog — one "plausible date" bound at the request edge for every dated admin write (S148, TASK-14821 Step 5a
+  cycle 1, Fable NOTE 5; adjudication `S148-TASK-14821-5a-adjudication-c1.md`, R5).** A start or end date in the
+  last days of year 9999 overflows the worklist's week arithmetic (`SettlingMondayAfter`, and the end-date span's
+  exclusive upper bound) and the request answers 500 with a full rollback: nothing is written and nothing is silent,
+  but the error is a crash, not a refusal. It is a class, not one line: every route that takes a date and feeds the
+  week or month arithmetic shares it. The clean fix is one shared bound (e.g. years 1900–2200) checked at the edge of
+  every dated admin write, answering 422 with a date-free reason (ADR-040 D7). Below the QUAL register's Medium floor
+  and not a security finding, so no register row; `(unproven)` that any such request answered 200 before S148.
 
 ### HR operations — the follow-up processes (owner-raised 2026-09-03)
 

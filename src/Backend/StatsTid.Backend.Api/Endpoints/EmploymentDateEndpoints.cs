@@ -5,8 +5,11 @@ using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Calendar;
+using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -26,12 +29,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///     <item><description>
 ///       <b>PUT /api/admin/employees/{employeeId}/employment-start-date</b> (S60; S136 /
 ///       TASK-13604 lifecycle upgrade) — terminated-INCLUSIVE write via
-///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync"/> (a
+///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync"/> (a
 ///       DELIBERATE S70 R9c allowlist EXTENSION, ruled by ADR-040 D3), admin-strict If-Match
-///       (ADR-019 D2), one atomic tx (ADR-018 D3) opened by the ADR-032 D4 employee advisory
-///       lock (the S136 lock regime); null clears the date. In-tx guards, all strictly before
-///       the UPDATE: the ADR-040 D1 re-hire 409 (settlement-independent), the cross-field
-///       inverted-window 422, the ADR-040 D3 strand guard 409. Self-target writes are
+///       (ADR-019 D2), one atomic tx (ADR-018 D3) opened by the S148 pay-inputs lock and then the
+///       ADR-032 D4 employee advisory lock (the S136 lock regime); null clears the date. In-tx
+///       guards, all strictly before the UPDATE: the ADR-040 D1 re-hire 409
+///       (settlement-independent), the cross-field inverted-window 422, the ADR-040 D3 strand
+///       guard 409. Self-target writes are
 ///       403-rejected for ALL actors (symmetric with the end-date PUT's S70 Step-7a W1 rule).
 ///     </description></item>
 ///     <item><description>
@@ -44,7 +48,7 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///     <item><description>
 ///       <b>PUT /api/admin/employees/{employeeId}/employment-end-date</b> (S70; S71 / TASK-7102
 ///       refactor) — terminated-INCLUSIVE write via
-///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync"/>, with the
+///       <see cref="OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync"/>, with the
 ///       R1 deactivation lifecycle (delegated to the SHARED
 ///       <see cref="EmploymentEndDateLifecycleWriter"/> — SPRINT-71 R4 one-implementation; the
 ///       S70 transitional inline choreography is deleted), the SPRINT-71 R13 range-widened
@@ -111,23 +115,30 @@ public static class EmploymentDateEndpoints
         // validator/read/UPDATE trio dead-ended at 403/404 before the guard could ever run. Admin-strict If-Match
         // (ADR-019 D2). employmentStartDate may be null (clears an unknown start date).
         //
-        // Atomic, in the S136 lock-regime order — all ONE tx (ADR-018 D3):
-        //   (1) EmployeeConsumptionLock FIRST (ADR-032 D4; window edits and the registration
-        //       writers serialize on this key, making the in-tx guards below authoritative)
+        // Atomic, in the S136 lock-regime order with the S148 pay-inputs lock ahead of it — all ONE
+        // tx (ADR-018 D3), at READ COMMITTED:
+        //   (0) the pay-inputs lock exclusive FIRST (S148 PIL: a start date is a pay input, and a
+        //       change dated into a month payroll may be recording must take turns with it)
+        //   (1) EmployeeConsumptionLock (ADR-032 D4; window edits and the registration writers
+        //       serialize on this key, making the in-tx guards below authoritative)
         //   (2) FOR-UPDATE terminated-inclusive re-read (canonical snapshot)
-        //   (3) version check
+        //   (3) version check, then the SEC-062 organisation-drift guard (409)
         //   (4) ADR-040 D1 re-hire guard (409, settlement-INDEPENDENT)
         //   (5) cross-field inverted-window check (422)
         //   (6) ADR-040 D3 strand guard (409, same conn/tx)
         //   (7) SetEmploymentStartDateIncludingTerminatedAsync (bumps users.version)
-        //   (8) users_audit UPDATED row
+        //   (8) users_audit UPDATED row, then the EmployeeEmploymentStartDateSet event + its
+        //       ADR-026 audit row (S148 P-28)
+        //   (9) the HR worklist hand-off (S148 P-27): the exported months and settled years whose
+        //       pay the changed days can move, naming the start-date event
         // Every guard runs strictly BEFORE the repository UPDATE — a refusal mutates nothing.
         //
         // Error mapping:
         //   • 428 — missing / malformed If-Match (EtagHeaderHelper admin-strict)
         //   • 422 — cross-field: proposed start after the recorded (UNPASSED) end date
         //   • 412 — version mismatch (stale If-Match), on ACTIVE and DEACTIVATED rows alike
-        //   • 409 — ADR-040 D1 re-hire signature, or the ADR-040 D3 strand guard
+        //   • 409 — the SEC-062 organisation-drift guard, the ADR-040 D1 re-hire signature, or
+        //           the ADR-040 D3 strand guard
         //   • 404 — user_id does not exist at all (a deactivated leaver is NOT a 404 here)
         //   • 403 — self-target, or terminated-inclusive OrgScopeValidator denial
         // ═══════════════════════════════════════════
@@ -137,11 +148,18 @@ public static class EmploymentDateEndpoints
             UserRepository userRepo,
             DbConnectionFactory connectionFactory,
             OrgScopeValidator scopeValidator,
+            // S148 P-28 — the start-date event and its ADR-026 audit row; P-27 — the HR worklist.
+            IOutboxEnqueue outbox,
+            IAuditProjectionMapper<EmployeeEmploymentStartDateSet> startDateAuditMapper,
+            AuditProjectionRepository auditRepo,
+            HrBackdateWorklistRepository worklistRepo,
+            ILoggerFactory loggerFactory,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.StartDatePut");
 
             // S136 / TASK-13604 (Reviewer-W3, extending the S70 Step-7a W1 precedent): self-target
             // exclusion, BEFORE any DB work and for ALL actors (active or terminated;
@@ -164,7 +182,10 @@ public static class EmploymentDateEndpoints
             // validator replaces the S60 active-only ValidateEmployeeAccessAsync so HR can correct
             // a deactivated leaver's start date (and the D1 re-hire guard is reachable at all).
             // S76 B1: HROrAbove policy → LocalHR per-scope floor, unchanged by the swap.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard below compares with the locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -187,11 +208,17 @@ public static class EmploymentDateEndpoints
             await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
-                // (1) The S136 lock regime: the ADR-032 D4 employee advisory lock FIRST, before
-                // any read or guard, held to commit (mirrors the end-date PUT's R12 order). The
-                // registration writers acquire the SAME key in their write tx, so a concurrent
-                // registration-vs-window-edit pair cannot interleave into out-of-window data —
-                // the strand guard below is authoritative because it reads under this lock.
+                // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement; nothing is held
+                // before it on this or any other connection (the reads above have finished). Lock
+                // order: pay inputs → employee- → the users row → the worklist rows.
+                await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
+                // (1) The S136 lock regime: the ADR-032 D4 employee advisory lock, first after the
+                // pay-inputs lock and before any read or guard, held to commit (mirrors the end-date
+                // PUT's R12 order). The registration writers acquire the SAME key in their write tx,
+                // so a concurrent registration-vs-window-edit pair cannot interleave into
+                // out-of-window data — the strand guard below is authoritative because it reads
+                // under this lock.
                 await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
 
                 // (2) FOR-UPDATE terminated-inclusive re-read — canonical snapshot for the
@@ -215,6 +242,23 @@ public static class EmploymentDateEndpoints
                         expectedVersion,
                         actualVersion = lockedVersion,
                     }, statusCode: 412);
+                }
+
+                // (3b) SEC-062 — the organisation-drift guard. The scope check above read the
+                // employee on its own connection before this transaction; the locked row must still
+                // be in the organisation that check authorised (a null authorisation fails closed),
+                // or a transfer committed in between and the actor was never checked for this
+                // person. A concurrency precondition like the 412, so it answers before every
+                // refusal below. The body names no organisation and no date.
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole,
+                        "PUT /api/admin/employees/{employeeId}/employment-start-date", actor.CorrelationId);
+                    return Results.Conflict(new { error = OrgScopeValidator.OrganisationDriftReason });
                 }
 
                 // (4) ADR-040 D1 re-hire guard — checked BEFORE the cross-field 422 on purpose:
@@ -330,6 +374,41 @@ public static class EmploymentDateEndpoints
                     await auditCmd.ExecuteNonQueryAsync(ct);
                 }
 
+                // (8b) S148 P-28 (NR-18) — the start-date event, in the end-date event's shape: on the
+                // employee stream through the outbox, with its ADR-026 audit row inline, SAME tx
+                // (ADR-018 D3). Emitted on every successful write, an unchanged date included, as the
+                // end-date event is. Its id is the worklist trigger's causal link below.
+                var startDateEvent = new EmployeeEmploymentStartDateSet
+                {
+                    EmployeeId = employeeId,
+                    OldStartDate = lockedUser.EmploymentStartDate,
+                    NewStartDate = body.EmploymentStartDate,
+                    VersionBefore = lockedVersion,
+                    VersionAfter = newVersion,
+                    ActorId = actorId,
+                    ActorRole = actorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                var startDateOutboxId = await outbox.EnqueueAndReturnIdAsync(
+                    conn, tx, $"employee-{employeeId}", startDateEvent, ct);
+                var startDateAuditCtx = new AuditProjectionContext(
+                    ActorId: actorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: startDateEvent.CorrelationId,
+                    OccurredAt: new DateTimeOffset(DateTime.SpecifyKind(startDateEvent.OccurredAt, DateTimeKind.Utc)),
+                    ResolvedTargetOrgId: lockedUser.PrimaryOrgId);
+                var startDateAuditRow = startDateAuditMapper.Map(startDateEvent, startDateAuditCtx);
+                await auditRepo.InsertAsync(
+                    conn, tx, startDateEvent.EventId, startDateOutboxId, startDateEvent.EventType,
+                    startDateAuditRow, startDateAuditCtx, ct);
+
+                // (9) S148 P-27 — the HR worklist hand-off, inside this transaction (see
+                // WriteStartDateHandOffAsync for the interval).
+                await WriteStartDateHandOffAsync(
+                    conn, tx, worklistRepo, employeeId,
+                    lockedUser.EmploymentStartDate, body.EmploymentStartDate,
+                    startDateEvent.EventId, actorId, ct);
+
                 await tx.CommitAsync(ct);
 
                 context.Response.Headers.ETag = $"\"{newVersion}\"";
@@ -395,11 +474,13 @@ public static class EmploymentDateEndpoints
         //
         // S70 / TASK-7002 / ADR-033 slice 3a (S71 / TASK-7102 refactor) — set / clear / correct
         // users.employment_end_date with the R1 deactivation lifecycle, ALL in ONE atomic tx
-        // (ADR-018 D3), in the R12 order: ADR-032 D4 employee advisory lock FIRST → FOR-UPDATE
-        // terminated-inclusive re-read → every guard re-evaluated in-lock (If-Match + the
-        // R7a/R13 no-active-settlement span check) → the SHARED EmploymentEndDateLifecycleWriter
-        // (SPRINT-71 R4 ONE-implementation: guarded versioned write → R1(e) side effects → R10
-        // event + ADR-026 audit + users_audit) → commit. The S70 inline lifecycle-write
+        // (ADR-018 D3), in the R12 order with the S148 pay-inputs lock ahead of it: the pay-inputs
+        // lock exclusive FIRST (S148 PIL) → ADR-032 D4 employee advisory lock → FOR-UPDATE
+        // terminated-inclusive re-read → every guard re-evaluated in-lock (If-Match, the SEC-062
+        // organisation-drift guard, the R7a/R13 no-active-settlement span check) → the SHARED
+        // EmploymentEndDateLifecycleWriter (SPRINT-71 R4 ONE-implementation: guarded versioned
+        // write → R1(e) side effects → R10 event + ADR-026 audit + users_audit) → the HR worklist
+        // hand-off (S148 P-27) → commit. The S70 inline lifecycle-write
         // choreography was DELETED here — the writer is the single implementation, consumed by
         // both this PUT and the slice-3b reversal service's subsumed correction.
         // The advisory lock (pg_advisory_xact_lock(hashtext('employee-' || id)) — the SAME key
@@ -426,8 +507,9 @@ public static class EmploymentDateEndpoints
         //   • 428 — missing / malformed If-Match (EtagHeaderHelper admin-strict)
         //   • 422 — S136 cross-field: proposed end before the recorded start (inverted window)
         //   • 412 — version mismatch (stale If-Match), on ACTIVE and DEACTIVATED rows alike
-        //   • 409 — R7a/R13 active-settlement conflict (with the reversal pointer), or the
-        //           S136 / ADR-040 D3 strand guard (with the stranded-month pointer list)
+        //   • 409 — the SEC-062 organisation-drift guard, the R7a/R13 active-settlement conflict
+        //           (with the reversal pointer), or the S136 / ADR-040 D3 strand guard (with the
+        //           stranded-month pointer list)
         //   • 404 — user_id does not exist at all (a deactivated leaver is NOT a 404 here)
         //   • 403 — terminated-inclusive OrgScopeValidator denial
         // ═══════════════════════════════════════════
@@ -438,11 +520,15 @@ public static class EmploymentDateEndpoints
             DbConnectionFactory connectionFactory,
             OrgScopeValidator scopeValidator,
             EmploymentEndDateLifecycleWriter lifecycleWriter,
+            // S148 P-27 — the HR worklist hand-off.
+            HrBackdateWorklistRepository worklistRepo,
+            ILoggerFactory loggerFactory,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.EndDatePut");
 
             // S70 Step-7a W1 (internal Reviewer) — self-target exclusion, BEFORE any DB work and
             // for ALL actors (active or terminated; deterministic, fail-closed). The end-date PUT
@@ -464,7 +550,10 @@ public static class EmploymentDateEndpoints
             // S76 B1 fix-forward (cycle 2): LocalHR per-scope floor — the end-date WRITE (the R1
             // lifecycle/reactivation surface) must not be reachable by a mixed HR@A + Leader@B JWT
             // for an ACTIVE B employee via the Leader scope.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard below compares with the locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -485,9 +574,16 @@ public static class EmploymentDateEndpoints
             await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
-                // (1) R12 — the ADR-032 D4 employee advisory lock FIRST, before any read or
-                // guard, held to commit. Serializes this mutation against Step A (flip), Step B
-                // (settle), the manual resolve and the reconcile-payout writers on the SAME key.
+                // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement; nothing is held
+                // before it on this or any other connection (the reads above have finished). Lock
+                // order: pay inputs → employee- → the users row → the lifecycle writer → the
+                // worklist rows.
+                await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
+                // (1) R12 — the ADR-032 D4 employee advisory lock, first after the pay-inputs lock
+                // and before any read or guard, held to commit. Serializes this mutation against
+                // Step A (flip), Step B (settle), the manual resolve and the reconcile-payout
+                // writers on the SAME key.
                 await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
 
                 // (2) FOR-UPDATE terminated-inclusive re-read — the 404/412 pre-checks and the
@@ -511,6 +607,21 @@ public static class EmploymentDateEndpoints
                         expectedVersion,
                         actualVersion = lockedVersion,
                     }, statusCode: 412);
+                }
+
+                // (2a) SEC-062 — the organisation-drift guard: the locked row must still be in the
+                // organisation the scope check authorised (null fails closed); see the start-date
+                // PUT. A concurrency precondition like the 412, before every refusal below; the
+                // body names no organisation and no date.
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole,
+                        "PUT /api/admin/employees/{employeeId}/employment-end-date", actor.CorrelationId);
+                    return Results.Conflict(new { error = OrgScopeValidator.OrganisationDriftReason });
                 }
 
                 // (2b) S136 / TASK-13604 cross-field inverted-window check (ADR-040 D1
@@ -639,6 +750,23 @@ public static class EmploymentDateEndpoints
                 {
                     await tx.RollbackAsync(ct);
                     return Results.NotFound(new { error = "Employee not found" });
+                }
+
+                // (9) S148 P-27 (B-3, NR-17) — the HR worklist hand-off, inside this transaction: the
+                // exported months and settled years whose pay the changed end date can move, trigger
+                // EMPLOYMENT_WINDOW_CHANGE naming the end-date event the writer just emitted. The
+                // interval is [min(old, new), max(old, new) + 1 day), a null side unbounded (the end
+                // date is also the settlement cutoff); nothing when the date did not change (N-1).
+                if (BackdateWorklistDerivation.EmploymentEndDateChangeInterval(
+                        lockedUser.EmploymentEndDate, body.EmploymentEndDate) is { } window)
+                {
+                    var windowTrigger = new WorklistTrigger(
+                        WorklistTriggerKinds.EmploymentWindowChange, lifecycle.EndDateEventId,
+                        window.From, actorId);
+                    await worklistRepo.WriteForExportedMonthsAsync(
+                        conn, tx, employeeId, windowTrigger, window.From, window.ToExclusive, ct);
+                    await worklistRepo.WriteForSettledYearsAsync(
+                        conn, tx, employeeId, windowTrigger, window.From, window.ToExclusive, ct);
                 }
 
                 await tx.CommitAsync(ct);
@@ -827,6 +955,56 @@ public static class EmploymentDateEndpoints
                    "wrong, HR corrects the window, not the data past it; if the data is wrong, " +
                    "correct the data first).",
         }, statusCode: 409);
+    }
+
+    /// <summary>
+    /// S148 P-27 (B-3, NR-17, NR-19; N-1, NR-P2, NR-P12, NR-P20) — the start-date PUT's hand-off to
+    /// the HR worklist, in the PUT's transaction, trigger
+    /// <see cref="WorklistTriggerKinds.EmploymentWindowChange"/> naming the start-date event. The
+    /// changed days are exactly those whose employed status moves:
+    /// <list type="bullet">
+    ///   <item>old = new (both null included): nothing changed, nothing is listed (N-1);</item>
+    ///   <item>both dated: <c>[min, max)</c> to both writers, <c>EffectiveFrom</c> = min;</item>
+    ///   <item>one side null (set from none, or cleared to none): every day before the dated side
+    ///     changes. The exported-month call runs from the Monday of the employee's earliest exported
+    ///     month's opening week (the first day that month's settlement reads; also its
+    ///     <c>EffectiveFrom</c>), and is skipped when no month is exported. The settled-year call is
+    ///     always made, through the repository's open-towards-the-past overload, which names the
+    ///     earliest look-from day of the settlements it selects.</item>
+    /// </list>
+    /// </summary>
+    private static async Task WriteStartDateHandOffAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, HrBackdateWorklistRepository worklistRepo,
+        string employeeId, DateOnly? oldStartDate, DateOnly? newStartDate,
+        Guid startDateEventId, string actorId, CancellationToken ct)
+    {
+        if (oldStartDate == newStartDate)
+            return;
+
+        const string kind = WorklistTriggerKinds.EmploymentWindowChange;
+
+        if (oldStartDate is { } oldStart && newStartDate is { } newStart)
+        {
+            var from = oldStart < newStart ? oldStart : newStart;
+            var toExclusive = oldStart < newStart ? newStart : oldStart;
+            var trigger = new WorklistTrigger(kind, startDateEventId, from, actorId);
+            await worklistRepo.WriteForExportedMonthsAsync(conn, tx, employeeId, trigger, from, toExclusive, ct);
+            await worklistRepo.WriteForSettledYearsAsync(conn, tx, employeeId, trigger, from, toExclusive, ct);
+            return;
+        }
+
+        // Open towards the past: the dated side bounds the changed days from above.
+        var datedSide = (oldStartDate ?? newStartDate)!.Value;
+
+        if (await worklistRepo.ReadEarliestExportedMonthStartAsync(conn, tx, employeeId, ct) is { } earliestMonth)
+        {
+            var openingMonday = WeeklyContext.WeekStart(earliestMonth);
+            var trigger = new WorklistTrigger(kind, startDateEventId, openingMonday, actorId);
+            await worklistRepo.WriteForExportedMonthsAsync(conn, tx, employeeId, trigger, openingMonday, datedSide, ct);
+        }
+
+        await worklistRepo.WriteForSettledYearsOpenTowardsThePastAsync(
+            conn, tx, employeeId, kind, startDateEventId, actorId, datedSide, ct);
     }
 
     // ── Europe/Copenhagen business-date helper (ADR-033 D3 boundary-timezone; the injected

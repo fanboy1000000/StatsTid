@@ -279,7 +279,9 @@ public static class EmployeeProfileEndpoints
         //   • 428 — missing / malformed If-Match (EtagHeaderHelper)
         //   • 412 — OptimisticConcurrencyException (stale version, ADR-019 D2)
         //   • 404 — no row covers today for the employee (pre-check OR KeyNotFoundException)
-        //   • 403 — OrgScopeValidator denial (cross-org guard)
+        //   • 409 — a concurrent-seed race, or the SEC-062 organisation-drift guard
+        //   • 403 — OrgScopeValidator denial (cross-org guard), or S148 P-26: the actor changing
+        //           their own fraction, position or category
         // ═══════════════════════════════════════════
         app.MapPut("/api/admin/employee-profiles/{employeeId}", async (
             string employeeId,
@@ -307,12 +309,15 @@ public static class EmployeeProfileEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            // S148 — the WARNING lines of the organisation-drift guard (SEC-062) and P-26's refusal.
+            ILoggerFactory loggerFactory,
             // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.EmployeeProfileEndpoints.ProfilePut");
 
             // Step 0b BLOCKER fix — cross-org binding (mirrors GET above). S76 B1: LocalHR floor.
             // S138 / TASK-13802 — TERMINATED-INCLUSIVE (refinement W6 / Assumption 10): correcting
@@ -320,7 +325,9 @@ public static class EmployeeProfileEndpoints
             // `is_active` switch, so widening the read cannot become a reactivation side-door. The
             // LocalHR floor is what actually binds privilege (a leaver's own token is refused
             // outright by the terminated-inclusive validator — SEC-046 holds).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the locked users row after the write.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
                 actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
@@ -388,15 +395,24 @@ public static class EmployeeProfileEndpoints
             await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
-                // ── S66 / TASK-6604 (ADR-032 D4) — employee-scoped advisory lock FIRST ──
-                // Acquire the shared per-employee consumption lock as the FIRST statement in the
-                // tx, BEFORE the predecessor SELECT ... FOR UPDATE below (the advisory lock strictly
-                // precedes any row lock per ADR-032 D4) and held to commit. This serializes the
-                // profile-change revaluation against a concurrent Skema-save consumption tx (which
-                // takes the SAME lock first) so a save's stale-fraction Feriedage cannot be recorded
-                // across this PUT's revaluation window. Taken unconditionally — the lock is cheap and
-                // keeping it before the FOR UPDATE preserves the single global lock-ordering
-                // (advisory → row), so a future trigger-independent change cannot reorder it.
+                // ── S148 PIL — the pay-inputs lock exclusive, the FIRST statement ──
+                // A fraction, position or category is a pay input; a change dated into a month
+                // payroll may be recording takes turns with that recording. Nothing is held before it
+                // on this or any other connection (the reads above have finished), and the
+                // revaluation's resolver read on its own connection never takes it. Lock order: pay
+                // inputs → employee- → the profile rows → the users row → the revaluation → the
+                // worklist rows.
+                await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
+                // ── S66 / TASK-6604 (ADR-032 D4) — the employee-scoped advisory lock ──
+                // The first lock after the pay-inputs lock: acquired BEFORE the predecessor
+                // SELECT ... FOR UPDATE below (the advisory lock strictly precedes any row lock per
+                // ADR-032 D4) and held to commit. This serializes the profile-change revaluation
+                // against a concurrent Skema-save consumption tx (which takes the SAME lock first) so
+                // a save's stale-fraction Feriedage cannot be recorded across this PUT's revaluation
+                // window. Taken unconditionally — the lock is cheap and keeping it before the FOR
+                // UPDATE preserves the single global lock-ordering (advisory → row), so a future
+                // trigger-independent change cannot reorder it.
                 await StatsTid.Backend.Api.Services.EmployeeConsumptionLock.AcquireAsync(
                     conn, tx, employeeId, ct);
 
@@ -524,6 +540,44 @@ public static class EmployeeProfileEndpoints
                     // reintroduction surfaces as a 422 rather than a 500.
                     await tx.RollbackAsync(ct);
                     return Results.UnprocessableEntity(new { error = ex.Message });
+                }
+
+                // ── SEC-062 — the organisation-drift guard ──
+                // The scope check above read the employee on its own connection before this
+                // transaction. The writer has now locked the users row (on every path, a no-op
+                // included), so a fresh read here is the organisation under the lock. It must be the
+                // one the scope check authorised (a null authorisation fails closed), and the one
+                // `auditUser` was read with before the row lock, since that read files the audit
+                // rows below under its institution. Otherwise a transfer committed in between: roll
+                // back (undoing the write) and answer 409. Checked here, after the writer, because the
+                // repository takes the users lock after the timeline lock and locking users earlier
+                // would invert that order. Refusals the writer throws (412, 404, the 422s, the
+                // concurrent-seed 409) have already answered; P-26's 403 comes after this.
+                var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
+                if (authorisedOrgId is null
+                    || lockedSubject is null
+                    || !string.Equals(lockedSubject.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal)
+                    || !string.Equals(auditUser.PrimaryOrgId, lockedSubject.PrimaryOrgId, StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole,
+                        "PUT /api/admin/employee-profiles/{employeeId}", actor.CorrelationId);
+                    return Results.Conflict(new { error = OrgScopeValidator.OrganisationDriftReason });
+                }
+
+                // ── S148 P-26 — nobody changes their own pay inputs (A-18, NR-16; RES-003) ──
+                // An actor whose own profile this is may not change their fraction, position or
+                // category: a second administrator does. "Changes" is the writer's verdict under the
+                // lock (any change it made), never a field's presence, so a save that changes nothing
+                // — the edit drawer re-sending one's own unchanged profile with an e-mail fix — still
+                // answers 200 below. Every role, GlobalAdmin included. A departed self has already
+                // been refused by the validator above. Roll back (undoing the write) and answer 403.
+                if (!result.IsNoOp && ApprovalSelfGuard.IsSelf(actor, employeeId))
+                {
+                    await tx.RollbackAsync(ct);
+                    return AdminEndpoints.SelfChangeRefusal(logger, actor, "PUT /api/admin/employee-profiles/{employeeId}");
                 }
 
                 // ── S138 / TASK-13802 — the same-values NO-OP (the S23 shape) ──
@@ -1159,7 +1213,9 @@ public static class EmployeeProfileEndpoints
         //   • 412 — OptimisticConcurrencyException (a row covers today, `users.version` differs)
         //   • 404 — KeyNotFoundException (no row covers today — also the retry-after-delete
         //           case per ADR-023 D8 row-disappearance idempotency)
-        //   • 403 — OrgScopeValidator denial (cross-org guard)
+        //   • 409 — the SEC-062 organisation-drift guard
+        //   • 403 — OrgScopeValidator denial (cross-org guard), or S148 P-26: the actor closing
+        //           their own profile
         // ═══════════════════════════════════════════
         app.MapDelete("/api/admin/employee-profiles/{employeeId}", async (
             string employeeId,
@@ -1172,21 +1228,38 @@ public static class EmployeeProfileEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            // S148 B-4 — the close's hand-off to the HR worklist.
+            HrBackdateWorklistRepository worklistRepo,
+            // S148 — the WARNING lines of P-26's self refusal and the organisation-drift guard (SEC-062).
+            ILoggerFactory loggerFactory,
             // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
-            // Read ONCE below into `today` and used for BOTH dated outputs of this DELETE: the
+            // Read ONCE below into `today` and used for every dated output of this DELETE: the
             // row's `effective_to` stamp (passed into the writer as `closeDate`, where the
-            // database's NOW()::date used to decide it) and the emitted event's `EffectiveTo`.
+            // database's NOW()::date used to decide it), the emitted event's `EffectiveTo`, and the
+            // worklist hand-off's start (S148 B-4).
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.EmployeeProfileEndpoints.ProfileDelete");
 
             // Step 0b BLOCKER fix — cross-org binding (mirrors GET / PUT). S76 B1: LocalHR floor.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the locked users row after the close.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
                 actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // ── S148 P-26 (fourth site) — nobody closes their own profile (A-18; RES-003) ──
+            // Closing a profile ends, from today, the record of the person's fraction, position and
+            // category, which are pay inputs; a second administrator does it. Unconditional (a close
+            // always changes them), every role, GlobalAdmin included. After the scope check, so a
+            // departed self still gets the validator's departed answer; before the transaction, so
+            // nothing is written.
+            if (ApprovalSelfGuard.IsSelf(actor, employeeId))
+                return AdminEndpoints.SelfChangeRefusal(logger, actor, "DELETE /api/admin/employee-profiles/{employeeId}");
 
             // Admin-strict If-Match parse — 428 if missing / malformed / If-None-Match: *
             // (per EtagHeaderHelper.TryParseIfMatch admin-strict mode).
@@ -1218,9 +1291,19 @@ public static class EmployeeProfileEndpoints
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the first statement is the blocking pay-inputs lock, and
+            // the worklist read after it must see a payroll recording that committed during the wait.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
+                // ── S148 PIL (B-4) — the pay-inputs lock exclusive, the FIRST statement ──
+                // A close ends the pay inputs from today, and payroll may record a month that has not
+                // ended yet, so on a month's last day a recording can cover today: the two take turns.
+                // Nothing is held before it on this or any other connection (the reads above have
+                // finished). Lock order: pay inputs → the profile timeline rows → the users row → the
+                // close and the retired scheduled rows → the audit rows and events → the worklist rows.
+                await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                 // ── S141 / TASK-14104 — the full soft-delete, and everything it retired ──
                 // The pre-S141 handler read the profile separately for the audit's `previous_data`
                 // and then called the 2-tuple `SoftDeleteAsync`. Both halves had to change, for the
@@ -1257,6 +1340,26 @@ public static class EmployeeProfileEndpoints
                     // answer stays "gone" (404) rather than "changed" (412).
                     await tx.RollbackAsync(ct);
                     return Results.NotFound(new { error = "Employee profile not found" });
+                }
+
+                // ── SEC-062 — the organisation-drift guard ──
+                // The scope check above read the employee on its own connection before this
+                // transaction; the repository has now locked the users row, so a fresh read is the
+                // organisation under the lock. It must be the one the scope check authorised (a null
+                // authorisation fails closed), or a transfer committed in between: roll back (undoing
+                // the close) and answer 409. Checked after the close because the repository locks the
+                // timeline before the users row. Its 412 and 404 have already answered.
+                var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
+                if (authorisedOrgId is null
+                    || lockedSubject is null
+                    || !string.Equals(lockedSubject.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole,
+                        "DELETE /api/admin/employee-profiles/{employeeId}", actor.CorrelationId);
+                    return Results.Conflict(new { error = OrgScopeValidator.OrganisationDriftReason });
                 }
 
                 var profileId = deleted.ProfileId;
@@ -1453,6 +1556,16 @@ public static class EmployeeProfileEndpoints
                         conn, tx, retiredEvent.EventId, retiredOutboxId, retiredEvent.EventType,
                         retiredProjection, retiredCtx, ct);
                 }
+
+                // ── S148 B-4 — the close's hand-off to the HR worklist ──
+                // Every exported month the closed range reaches, from today, open-ended (the writer
+                // clips at the current Copenhagen month): in practice the current month when payroll
+                // has already recorded it. Trigger PROFILE_CHANGE, naming the soft-delete event. The
+                // retired scheduled rows lie after today and reach no exported month. No settled-year
+                // call (not in B-4).
+                var closeTrigger = new WorklistTrigger(
+                    WorklistTriggerKinds.ProfileChange, softDeletedEvent.EventId, today, actorId);
+                await worklistRepo.WriteForExportedMonthsAsync(conn, tx, employeeId, closeTrigger, today, null, ct);
 
                 await tx.CommitAsync(ct);
 

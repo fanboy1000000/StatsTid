@@ -1845,6 +1845,18 @@ public static class AdminEndpoints
 
             try
             {
+                // S148 PIL — the pay-inputs lock exclusive, the FIRST statement, when the request
+                // carries an organisation or an agreement code (both pay inputs). Decided from the
+                // request alone, the one presence-based decision (refinement B-6): it must be made
+                // before the locked read, so a stale snapshot cannot skip it; every edit-drawer save
+                // carries both fields and so takes it (B-7). Nothing is held before it on this or any
+                // other connection (the reads above have finished). Lock order: pay inputs →
+                // reporting-org- → unit-org- → the users row → the agreement-code and organisation
+                // rows → the worklist rows. A tree-root drift retry rolls this transaction back and
+                // runs the whole handler again, so it takes this lock first again.
+                if (request.PrimaryOrgId is not null || request.AgreementCode is not null)
+                    await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                 // S78 R3/R9 — CROSS-STYRELSE TRANSFER serialization. When this PUT moves primary_org_id
                 // to a different org, acquire the reporting-tree advisory for BOTH the OLD (current) and
                 // NEW (target) tree roots — id-ordered, deadlock-safe — BEFORE the users-row FOR UPDATE
@@ -1890,7 +1902,8 @@ public static class AdminEndpoints
                 // pre-tx existingUser for null-coalescing fallbacks, which could
                 // pick up stale data under concurrent admin edits.
                 //
-                // Lock order (S78): tree advisory (above, on transfer) → users (this
+                // Lock order (S78): pay inputs (above, S148, when the request carries an
+                // organisation or a code) → tree advisory (above, on transfer) → users (this
                 // read) → user_organisations (the timeline lock below, on a transfer; S148 C-13)
                 // → user_agreement_codes (the agreementPredecessor read below, on
                 // the mutation branch). users is the foreign-key parent in conventional
@@ -1924,10 +1937,10 @@ public static class AdminEndpoints
                     await tx.RollbackAsync(ct);
                     logger.LogWarning(
                         "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
-                        "organisation-drift", actor.ActorId, actor.ActorRole, "PUT /api/admin/users/{userId}", actor.CorrelationId);
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole, "PUT /api/admin/users/{userId}", actor.CorrelationId);
                     return Results.Conflict(new
                     {
-                        error = "The user's organisation changed while this request was being processed; refresh and retry.",
+                        error = OrgScopeValidator.OrganisationDriftReason,
                     });
                 }
 
@@ -2117,6 +2130,19 @@ public static class AdminEndpoints
                 // worklist. Conversely a BACKDATED code equal to today's code is NOT a no-op: it
                 // changes history, so it writes.
                 var agreementCodeMutated = agreementResult is { IsNoOp: false };
+
+                // S148 P-26 — nobody changes their own agreement code (A-18, NR-16; RES-003): a second
+                // administrator does. Decided on the writer's verdict under the lock, never on the
+                // request carrying a code, so the edit drawer re-sending one's own unchanged code
+                // with an e-mail fix still answers 200. Every role, GlobalAdmin included. The
+                // departed-self refusal has already answered above; the organisation's own self
+                // refusal (the self-transfer 403) sits earlier in this transaction. Roll back
+                // (undoing the agreement write) and answer 403 before the users UPDATE.
+                if (agreementCodeMutated && ApprovalSelfGuard.IsSelf(actor, userId))
+                {
+                    await tx.RollbackAsync(ct);
+                    return SelfChangeRefusal(logger, actor, "PUT /api/admin/users/{userId}");
+                }
 
                 // S35 / TASK-3506 — null-fallbacks resolve against the locked row (lockedUser),
                 // NOT the stale pre-tx existingUser — closes audit-trail drift item #4 from S34
@@ -2851,9 +2877,9 @@ public static class AdminEndpoints
         //
         // Concurrency: If-Match on `users.version` — the ONE client token for this aggregate
         // (`user_agreement_codes.version` is a repository-internal row version and is never issued
-        // to a client). 428 missing/malformed, 412 stale, 404 unknown user, 403 out of scope,
-        // 422 missing date or before the employment start (the latter DATE-FREE), 409 on a lost
-        // insert race.
+        // to a client). 428 missing/malformed, 412 stale, 404 unknown user, 403 out of scope or
+        // (S148 P-26) the actor changing their own code, 422 missing date or before the employment
+        // start (the latter DATE-FREE), 409 on a lost insert race or (SEC-062) organisation drift.
         //
         // S141 / TASK-14104 (ADR-040 Increment 4) — two changes here. The FUTURE-DATE REFUSAL IS
         // LIFTED: this was the third of three endpoint validators that refused a date ahead before
@@ -2874,6 +2900,8 @@ public static class AdminEndpoints
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
             AuditProjectionRepository auditRepo,
+            // S148 — the WARNING lines of the organisation-drift guard (SEC-062) and P-26's refusal.
+            ILoggerFactory loggerFactory,
             // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
             // S141 / TASK-14104: its consumer is no longer the future-dating validator (lifted) but
             // owner ruling OQ-6's test for whether the row truncating this write is a SCHEDULED
@@ -2884,6 +2912,7 @@ public static class AdminEndpoints
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.AgreementCodePut");
 
             // Subject resolution FIRST, terminated-inclusive — a departed employee must resolve as
             // a real subject here, not dead-end as a 404 (the whole point of the endpoint).
@@ -2895,8 +2924,10 @@ public static class AdminEndpoints
             // scope must itself be LocalHR or above (the S76 B1 / R9f1 invariant), so a leader
             // scope covering the org cannot reach a leaver, and an Employee-only actor — including
             // the leaver themselves — is refused outright (SEC-046). The refusal names the STATUS
-            // only; it never carries a date.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
+            // only; it never carries a date. SEC-062: the sibling also returns the organisation it
+            // authorised (its own read, not `subject` above), which the organisation-drift guard
+            // compares with the locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
                 actor, userId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
@@ -2937,11 +2968,18 @@ public static class AdminEndpoints
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
             try
             {
+                // S148 PIL — the pay-inputs lock exclusive, the FIRST statement: an agreement code is
+                // a pay input. Nothing is held before it on this or any other connection (the reads
+                // above have finished). Lock order: pay inputs → the users row → the agreement-code
+                // rows → the worklist rows.
+                await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                 // In-tx FOR-UPDATE re-read of the users row, terminated-INCLUSIVE. This locked
                 // snapshot — not the pre-tx read above — is canonical for the If-Match check, the
                 // employment-start floor and the audit row's previous_data. Lock order matches the
-                // general users PUT: users first, then user_agreement_codes (the writer's own
-                // timeline lock), so the two handlers cannot deadlock against each other.
+                // general users PUT: users first (after the pay-inputs lock), then
+                // user_agreement_codes (the writer's own timeline lock), so the two handlers cannot
+                // deadlock against each other.
                 var lockedHit = await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, userId, ct);
                 if (lockedHit is null)
                 {
@@ -2958,6 +2996,23 @@ public static class AdminEndpoints
                         expectedVersion,
                         actualVersion = lockedVersion,
                     }, statusCode: 412);
+                }
+
+                // SEC-062 — the organisation-drift guard. The scope check above read the user on its
+                // own connection before this transaction; the locked row must still be in the
+                // organisation that check authorised (a null authorisation fails closed), or a
+                // transfer committed in between and the actor was never checked for this person.
+                // A concurrency precondition like the 412, so it answers before the writer and
+                // P-26's 403. The body names no organisation and no date.
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole,
+                        "PUT /api/admin/users/{userId}/agreement-code", actor.CorrelationId);
+                    return Results.Conflict(new { error = OrgScopeValidator.OrganisationDriftReason });
                 }
 
                 // The generalized dated write (TASK-13801): routes against the row COVERING the
@@ -3000,6 +3055,17 @@ public static class AdminEndpoints
                         error = "User agreement-code assignment changed concurrently; refresh and retry.",
                         userId = ex.UserId,
                     });
+                }
+
+                // S148 P-26 — nobody changes their own agreement code (A-18, NR-16; RES-003): a second
+                // administrator does. Decided on the writer's verdict under the lock, so a request
+                // equal to the covering row (a no-op) still answers 200 below. Every role,
+                // GlobalAdmin included; a departed self was refused by the validator above. Roll back
+                // (undoing the write) and answer 403.
+                if (!result.IsNoOp && ApprovalSelfGuard.IsSelf(actor, userId))
+                {
+                    await tx.RollbackAsync(ct);
+                    return SelfChangeRefusal(logger, actor, "PUT /api/admin/users/{userId}/agreement-code");
                 }
 
                 // The same-values no-op (the S23 shape): the request equalled the row already
@@ -4027,6 +4093,28 @@ public static class AdminEndpoints
             "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
             DepartedSubject.ClauseName, actor.ActorId, actor.ActorRole, route, actor.CorrelationId);
         return Results.Json(new { error = "Access denied", reason = DepartedSubject.DenyReason }, statusCode: 403);
+    }
+
+    /// <summary>S148 P-26 — the clause name the self-change refusal's WARNING carries.</summary>
+    internal const string SelfChangeClauseName = "self-change";
+
+    /// <summary>S148 P-26 — the one date-free reason all four self-change refusals answer with.</summary>
+    internal const string SelfChangeReason =
+        "Own agreement code and employee profile cannot be modified; a second administrator must perform this change";
+
+    /// <summary>
+    /// S148 P-26 (A-18, NR-16; RES-003) — the 403 a writer answers when the actor changes their own
+    /// pay inputs (agreement code, fraction, position, category) or closes their own profile: a
+    /// second administrator performs such a change. Shared by the user edit, the dedicated
+    /// agreement-code route, the profile PUT and the profile close, so the body and the WARNING are
+    /// one. The caller rolls back first when inside a transaction.
+    /// </summary>
+    internal static IResult SelfChangeRefusal(ILogger logger, ActorContext actor, string route)
+    {
+        logger.LogWarning(
+            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+            SelfChangeClauseName, actor.ActorId, actor.ActorRole, route, actor.CorrelationId);
+        return Results.Json(new { error = "Access denied", reason = SelfChangeReason }, statusCode: 403);
     }
 
     private static bool HasGlobalScope(ActorContext actor)

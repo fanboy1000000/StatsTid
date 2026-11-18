@@ -1795,3 +1795,62 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
 - **Adjudicated** (`S148-TASK-14821-5a-adjudication-c1.md`, Fable 5.2): the BLOCKER and the three pins fixed in a `test-qa` fix-up, plus two optional pins (the self close with no If-Match; the start cleared when already none); three stale comments in a comment-only backend fix-up; pool starvation real but bounded, carried to TASK-14831's measurement and registered (SEC-066), because removing the second connection would change what a gap-fill correction writes (ADR-032 D4, the S138 deferral). **Told to the owner, who may strike it.**
 - **Owner ruling (2026-11-18, one question, prose first):** the "nobody changes their own inputs" rule is extended to one's own **entitlement eligibility** and own **birth date**, added in **TASK-14845** (the recommended option); the bare reversal of one's own settlement stays registered (SEC-065). The TASK-14845 briefs and the plan are amended before its dispatch.
 - **Fix-up 1** (`backend-infrastructure`, `d5466748`, comments only, build green). **Next:** the `test-qa` fix-up (adjudication § 3b) on `d5466748`, 5α, cycle 2 by both lenses, merge with § 5's paperwork. The work paused here for a machine restart; the handoff is `.claude/plans/s148/RESUME-POINT.md`.
+
+**TASK-14821-S + TASK-14821 + TASK-14821-T: fix-up 2, cycle 2, merged, 2026-11-18.**
+- *In plain words:* the test fix-up repaired the lock-table helper that would have crashed on correct code, and turned four weak pins into real ones. Both reviewers then approved without a blocking finding, and the three tasks merged together. Nobody can now change their own pay inputs. Every Backend correction to a pay input takes one system-wide lock first, so payroll and a correction can no longer miss each other. Employment-date changes that reach paid months land on HR's worklist. Six more write routes refuse a request caught by a transfer mid-flight.
+- **Resumed after the machine restart.** The stale worktree `agent-a94cd019d00c5c17c` (locked by a dead agent) was unlocked and removed. Free disk was 15 GB.
+- **Fix-up 2: `test-qa`, adjudication § 3b, commit `24e6e004`.** Report: `S148-TASK-14821-T-fix1-report.md`.
+  - **The BLOCKER (R1) is fixed.** `HoldsSql` now COALESCEs the three key columns to -1. This is proven on a throwaway local PostgreSQL 16 cluster: the waiter's granted `virtualxid` row read empty with the old query and `-1/-1/-1` with the new one.
+  - **New facts, all F (CI):**
+    - AC-C13h (5): four GlobalAdmin self-change facts;
+    - AC-C13h (6): the self close with no If-Match answers 403, not 428;
+    - AC-PIL-h (12): a start on Tue 30 Jun 2026 with July exported lists July, effective from Mon 29 June;
+    - AC-PIL-h (13): a start cleared when already none gives 200, one event and no row;
+    - AC-C13n (7): the profile PUT behind `(148, 1)`, where only the authorised compare can refuse.
+  - **M-45:** as run on the profile PUT, it removed both organisation clauses (`EmployeeProfileEndpoints.cs:559-560`) and kept the null checks. The local census found no red (every guard fact is Docker). The frozen list is seven.
+  - **Gate:** build 0 / 125, CA2100 113; Unit 1757; DemoSeed 170; Regression non-Docker 140.
+- **5α** (`S148-TASK-14821-5alpha-c2.md`): PASS.
+  - Its one FAIL, item 9, was the Orchestrator's checklist error, not the commit's: `test-qa` runs on Sonnet 5.5 by definition, so its `Co-Authored-By: Claude Sonnet 5.5` trailer is truthful. Accepted, no amendment.
+- **Cycle 2, dual lens:**
+  - **Codex APPROVED** (`S148-TASK-14821-5a-codex-c2.raw.md`), one NOTE: part (7)'s summary named the wrong clause as unpinned, and the class choreography said "every fact".
+  - **Fable 5.2 APPROVED** (`S148-TASK-14821-5a-reviewer-c2.md`), five NOTEs. NOTEs 1–3 are stale test-class headers; NOTE 4 is `StrandedRegistrations` missing from the reversal's 409 list; NOTE 5 is `(unproven)`.
+  - **NOTE 5:** part (7)'s "exactly one waiter" poll would see a background taker of `(148, 1)` if one ever ran in the Backend test host. It could only flake red, never pass falsely.
+  - **Orchestrator rulings, no adjudication needed (every NOTE is comment drift or a carried re-read):** Codex's NOTE and Fable NOTEs 1–4 are applied as an Orchestrator comment-only commit, `2ab51e6a`. NOTE 5 is **carried: re-read part (7)'s poll when TASK-14831 lands** a shared taker of the lock.
+- **Merge-time comments in `2ab51e6a`** (adjudication c1 § 5 items 2 and 4, R6):
+  - The `EmployeeEmploymentStartDateSet` remark loses "Nothing emits it yet…" (O-14).
+  - `BackdateWorklistRowCreated` gains `EMPLOYMENT_WINDOW_CHANGE` (its kind, its trigger events, its effective-from) and the profile close's `EmployeeProfileSoftDeleted`.
+  - The reversal's 409 list gains `StrandedRegistrations`.
+  - Comments only; worktree build 0 / 125.
+- **Paperwork in the merge:**
+  - **SEC-062:** the row now carries the second-trace adjudication's § 5 text, with these status groups:
+    - FIXED: the user edit;
+    - FIXED: six more heads, with the accepted residual (the 412, 404 and date-free 422 answer before the guard);
+    - OPEN, fix ruled into S148 (TASK-14845): the nine (AC-C13o, M-46) and, by the owner's "Fix all 13 now", the thirteen (AC-C13p, M-47);
+    - NO CASE.
+  - **SEC-065 registered:** self-edit. Pay inputs are FIXED. The eligibility writes and the birth-date PUT are OPEN, fix ruled into TASK-14845 by the owner on 2026-11-18. The bare reversal of one's own settlement is OPEN and registered.
+  - **SEC-066 registered:** the system-wide lock couples organisations, and its holder needs a second pooled connection. It is carried to TASK-14831-T's measurement.
+  - **SEC-060** gains "The per-person self doors are SEC-065."
+  - **Catalog:** the `EmployeeEmploymentStartDateSet` row is now "emitted by the employment start-date PUT, inline row, target organisation the locked users row's (TASK-14821)".
+  - **ROADMAP backlog:** one "plausible date" bound at the request edge for dated admin writes (R5).
+- **O-14 notes:**
+  - The pay-inputs lock (PIL) closes S138's timing gap. A correction and a payroll recording of the same month now serialize on `(148, 1)`, so neither can miss the other. Payroll's shared half lands in TASK-14831.
+  - The profile close's self refusal follows A-18's rule: nobody closes their own profile.
+- **Recorded per the adjudication's § 5 item 8:**
+  - **Rulings:** R1–R10 of `S148-TASK-14821-5a-adjudication-c1.md` stand as written. The file is the verbatim record.
+  - **Told to the owner, who may strike it:** the pool carry (SEC-066). If struck, the question is whether S148 gains a task that moves the profile correction's revaluation reads into its own transaction, which would also make a gap-fill correction re-record absences (S138's deferral).
+  - **The § 6 question is answered:** option (a), 2026-11-18.
+  - **Declined** (adjudication R4, § 7): consult items 4, 6, 7, 9, 10 and 12–17; replacing part (2)'s choreography; a LocalAdmin leg; a separate mutation for part (7); the clamp for NOTE 5 (cycle 1); Codex's unproven lock-cycle NOTE; NOTE 6's wait-poll remark.
+  - **Real lock lines:** `EmploymentDateEndpoints.cs:214` and `:581`.
+  - **The overwritten scratchpad `build.log`:** in cycle 1, a `test-qa` pass overwrote the shared scratchpad `build.log`. Agents now work in their own named subfolder.
+  - **CI-W4 watch items:**
+    - the LocalHR agreement-code fixture on the user edit;
+    - the reversal fixtures at the 10 November clock (part (6)'s TERMINATION settle is argued, not run);
+    - `EmploymentEndDateCorrectionGuardTests.SameFerieaarCorrection_SettlementOutsideSpan_StillAllowed`;
+    - the eight `PayInputsLockCensusTests` lock facts, expected green now.
+- **Plan:** the planner is applying the owner's ruling of 2026-11-18 as plan **"final + 21"** with TASK-14845 and -T draft 3. This merge's plan items (adjudication c1 § 5 item 5) follow as **"final + 22"**:
+  - AC-C13h (5) and (6); AC-PIL-h (12) and (13); AC-C13n (7);
+  - M-45 with a frozen list of seven;
+  - CI-W4's new parts;
+  - TASK-14831-T's third measured figure (SEC-066);
+  - O-19's note.
+- **Next:** GATE on the merged master; then plan "final + 22"; then TASK-14845 + -T (draft 3) with a security consult and both lenses; then CI-W4, CI-M4a, CI-M4b.

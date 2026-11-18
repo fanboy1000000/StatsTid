@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
@@ -14,10 +15,18 @@ namespace StatsTid.Infrastructure;
 /// rollback (the row survives as history with its snapshot intact) and never automatic
 /// (ADR-013): the TASK-7102 endpoint drives this service with an explicit operator mode.
 ///
-/// <para><b>ONE atomic tx under the R12 employee advisory lock (lock FIRST, then re-read
-/// EVERYTHING — the S70 B1 lesson):</b></para>
+/// <para><b>ONE atomic tx under the R12 employee advisory lock (the advisory locks FIRST, then
+/// re-read EVERYTHING — the S70 B1 lesson):</b></para>
 /// <list type="number">
-///   <item><description>advisory lock → in-lock re-read of the ACTIVE row → fail-closed scope
+///   <item><description>when the command corrects the end date, the pay-inputs lock exclusive
+///   (<see cref="PayInputsLock"/>, S148 PIL) as the transaction's first statement, ahead of the
+///   employee advisory lock; a bare reversal changes no employment date and does not take it;</description></item>
+///   <item><description>in every mode, after the employee advisory lock, the users row
+///   <c>FOR UPDATE</c> and the organisation-drift guard (SEC-062): the organisation the route's scope
+///   check authorised (<see cref="SettlementReversalCommand.ExpectedSubjectOrgId"/>) must still be the
+///   locked row's, or the reversal refuses with <see cref="SettlementReversalFailure.OrganisationDrift"/>
+///   — the row lock is what serialises a bare reversal against a transfer;</description></item>
+///   <item><description>in-lock re-read of the ACTIVE row → fail-closed scope
 ///   guards (the B1 GENERATION binding: the active row's sequence must equal the commanded
 ///   <c>ExpectedSettlementSequence</c> BEFORE any version comparison — row versions restart at
 ///   1 per generation, so a version-only CAS is ABA-prone across generations; D-A
@@ -51,6 +60,9 @@ namespace StatsTid.Infrastructure;
 ///   SHARED <see cref="EmploymentEndDateLifecycleWriter"/> (R4 two-aggregate preconditions:
 ///   settlement CAS + <c>users.version</c> If-Match; the FULL PUT choreography — lifecycle
 ///   decision, versioned write, R1(e) side effects, R10 event, ADR-026 + users_audit rows),
+///   then hand the corrected days to the HR worklist (S148 P-27: the exported months and settled
+///   years the interval reaches, trigger <see cref="WorklistTriggerKinds.EmploymentWindowChange"/>,
+///   BEFORE the re-settlement so the successor this transaction writes is never flagged; C-5 (c4)),
 ///   then re-evaluate eligibility against the CORRECTED in-tx state via
 ///   <see cref="VacationSettlementService.ResettleSupersedingAsync"/> (trigger-specific
 ///   predicates + the R1 next-generation sequence + the supersede-side fail-closed carryover
@@ -89,12 +101,18 @@ public sealed class SettlementReversalService
     private const string StateReversed = "REVERSED";
     private const string TerminationTrigger = "TERMINATION";
 
+    // The one route that drives this service (SettlementReversalEndpoints); named in the
+    // organisation-drift WARNING, which the service writes because the endpoint maps the failure
+    // through its default arm.
+    private const string ReversalRoute = "POST /api/admin/employees/{employeeId}/settlement-reversal";
+
     private readonly DbConnectionFactory _connectionFactory;
     private readonly VacationSettlementService _settlementService;
     private readonly VacationSettlementRepository _settlementRepo;
     private readonly TerminationPayoutRequestRepository _requestRepo;
     private readonly EmploymentEndDateLifecycleWriter _lifecycleWriter;
     private readonly UserRepository _userRepo;
+    private readonly HrBackdateWorklistRepository _worklistRepo;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SettlementReversalService> _logger;
 
@@ -105,6 +123,7 @@ public sealed class SettlementReversalService
         TerminationPayoutRequestRepository requestRepo,
         EmploymentEndDateLifecycleWriter lifecycleWriter,
         UserRepository userRepo,
+        HrBackdateWorklistRepository worklistRepo,
         TimeProvider timeProvider,
         ILogger<SettlementReversalService> logger)
     {
@@ -114,6 +133,7 @@ public sealed class SettlementReversalService
         _requestRepo = requestRepo;
         _lifecycleWriter = lifecycleWriter;
         _userRepo = userRepo;
+        _worklistRepo = worklistRepo;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -144,17 +164,51 @@ public sealed class SettlementReversalService
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         // ReadCommitted — the advisory-lock wait needs a fresh post-lock snapshot (the
-        // SettleAsync / close-service reasoning).
+        // SettleAsync / close-service reasoning; PAT-015).
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         try
         {
-            // (1) R12 — the employee advisory lock FIRST, before ANY read (held to commit; the
-            // SAME key SettleAsync / Step A / the end-date PUT / reconcile-payout acquire).
+            // (0) S148 PIL — an end-date correction dates a pay input into the past, so it takes the
+            // pay-inputs lock exclusive as this transaction's FIRST statement, nothing held before it
+            // on any connection (lock order: pay inputs → employee- → the users row → the settlement
+            // rows). A bare reversal changes no employment date and does not take it.
+            if (command.HasEndDateCorrection)
+                await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
+            // (1) R12 — the employee advisory lock before ANY read (first after the pay-inputs lock,
+            // when that is taken; held to commit; the SAME key SettleAsync / Step A / the end-date
+            // PUT / reconcile-payout acquire).
             await using (var lockCmd = new NpgsqlCommand(
                 "SELECT pg_advisory_xact_lock(hashtext('employee-' || @employeeId))", conn, tx))
             {
                 lockCmd.Parameters.AddWithValue("employeeId", command.EmployeeId);
                 await lockCmd.ExecuteScalarAsync(ct);
+            }
+
+            // (1b) SEC-062 — the users row FOR UPDATE, in every mode, then the organisation-drift
+            // guard. The route checked the actor's scope against the employee's organisation on its
+            // own connection before this transaction; a transfer committed since would leave this
+            // reversal acting on a person the actor was never checked for. The row lock closes that
+            // window (a bare reversal holds no other lock a transfer takes), and the compare is
+            // against the organisation the scope check itself read, so even two transfers timed
+            // around the request cannot slip through. Fails closed: a missing row answers
+            // UserNotFound, a different organisation OrganisationDrift (409, date- and org-free).
+            var lockedSubject = await _userRepo.GetByIdWithVersionIncludingTerminatedAsync(
+                conn, tx, command.EmployeeId, ct);
+            if (lockedSubject is null)
+            {
+                return await FailAsync(tx, SettlementReversalFailure.UserNotFound,
+                    $"Employee '{command.EmployeeId}' not found.", ct);
+            }
+            if (!string.Equals(lockedSubject.Value.User.PrimaryOrgId, command.ExpectedSubjectOrgId, StringComparison.Ordinal))
+            {
+                var drift = await FailAsync(tx, SettlementReversalFailure.OrganisationDrift,
+                    OrgScopeValidator.OrganisationDriftReason, ct);
+                _logger.LogWarning(
+                    "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                    OrgScopeValidator.OrganisationDriftClauseName, command.ActorId, command.ActorRole,
+                    ReversalRoute, command.CorrelationId);
+                return drift;
             }
 
             // (2) In-lock re-read of the ACTIVE row — everything below decides off THIS read.
@@ -356,6 +410,26 @@ public sealed class SettlementReversalService
                     }
                     userVersionAfter = lifecycle.VersionAfter;
                     userIsActiveAfter = lifecycle.NewIsActive;
+
+                    // (7c) S148 P-27 (B-3, NR-17) — the end-date hand-off to HR's worklist, inside this
+                    // transaction: the exported months and settled years whose pay the corrected end
+                    // date can move, trigger EMPLOYMENT_WINDOW_CHANGE naming the end-date event the
+                    // writer just emitted. The interval is the end-date PUT's
+                    // ([min(old, new), max(old, new) + 1 day), a null side unbounded); nothing when the
+                    // date did not change (N-1). Placed BEFORE the re-settlement (C-5 (c4)): the
+                    // successor's valuation boundary is the corrected end date, which this interval
+                    // reaches, so a call after it would flag the settlement this reversal writes.
+                    if (BackdateWorklistDerivation.EmploymentEndDateChangeInterval(
+                            lifecycle.OldEndDate, command.CorrectedEndDate) is { } window)
+                    {
+                        var windowTrigger = new WorklistTrigger(
+                            WorklistTriggerKinds.EmploymentWindowChange, lifecycle.EndDateEventId,
+                            window.From, command.ActorId);
+                        await _worklistRepo.WriteForExportedMonthsAsync(
+                            conn, tx, command.EmployeeId, windowTrigger, window.From, window.ToExclusive, ct);
+                        await _worklistRepo.WriteForSettledYearsAsync(
+                            conn, tx, command.EmployeeId, windowTrigger, window.From, window.ToExclusive, ct);
+                    }
                 }
 
                 // R1 — the next-generation row sequence, derived from the tuple's FULL recorded
@@ -484,6 +558,12 @@ public sealed class SettlementReversalService
             throw new ArgumentException(
                 "An end-date-correcting reversal carries BOTH expected versions (SPRINT-71 R4 " +
                 "two-aggregate preconditions) — ExpectedUserVersion is required.", nameof(command));
+        }
+        if (string.IsNullOrWhiteSpace(command.ExpectedSubjectOrgId))
+        {
+            throw new ArgumentException(
+                "ExpectedSubjectOrgId is required: the organisation the caller's scope check authorised, " +
+                "which the reversal compares with the locked users row (SEC-062).", nameof(command));
         }
     }
 
@@ -709,6 +789,11 @@ public enum SettlementReversalFailure
 
     /// <summary>The R4 supersede-side carryover guard fired — FULL rollback (409).</summary>
     SupersedeCarryoverConflict,
+
+    /// <summary>SEC-062: the locked users row's organisation is not the one the caller's scope check
+    /// authorised (<see cref="SettlementReversalCommand.ExpectedSubjectOrgId"/>) — the employee was
+    /// transferred while the request was in flight; FULL rollback, refresh and retry (409).</summary>
+    OrganisationDrift,
 }
 
 /// <summary>
@@ -741,6 +826,14 @@ public sealed record SettlementReversalCommand
     public long? ExpectedUserVersion { get; init; }
 
     public DateOnly? SupersedeGoLiveFloor { get; init; }
+
+    /// <summary>SEC-062 — the employee's organisation as the caller's scope check authorised it (the
+    /// validator's own read, not a separate pre-read). The service compares it, under the users row
+    /// lock, with the locked row's organisation and refuses
+    /// <see cref="SettlementReversalFailure.OrganisationDrift"/> on a difference. Not
+    /// <c>required</c>, so existing constructions still compile; <c>ValidateCommand</c> refuses a
+    /// null or blank value with <see cref="ArgumentException"/>.</summary>
+    public string? ExpectedSubjectOrgId { get; init; }
 
     /// <summary>The OPERATOR (JWT actor) — stamped on the reversal audit trail + the
     /// SettlementReversed event (pinned: never a system actor).</summary>
