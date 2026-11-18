@@ -51,7 +51,7 @@ This is the Orchestrator's handoff. Read it together with the tail of `docs/spri
 ## Owner rulings this session (recorded in the sprint log, except the last)
 
 1. **SEC-062: fix all thirteen remaining sites in S148, in TASK-14845** (2026-11-17).
-2. **NEW, 2026-11-18, not yet in the sprint log or the briefs.** The self-change refusal is extended. An HR user may not change their **own entitlement eligibility** or their **own birth date** (403, a second administrator must), added in **TASK-14845**. The bare reversal of one's own settlement stays registered (SEC-065), not fixed.
+2. **NEW, 2026-11-18, recorded in the sprint log (`030de88d`) but not yet in the briefs or the plan.** The self-change refusal is extended. An HR user may not change their **own entitlement eligibility** or their **own birth date** (403, a second administrator must), added in **TASK-14845**. The bare reversal of one's own settlement stays registered (SEC-065), not fixed.
    - Before TASK-14845 dispatches, the planner amends `TASK-14845.md` / `-T.md` and the plan with this: the refusal on `EntitlementEligibilityEndpoints.cs`'s eligibility writes and the birth-date PUT, its facts, and a census of existing tests and the demo loader for self-edits.
    - SEC-065's status then becomes "fixed in TASK-14845" for those two doors.
 3. **Told to the owner, not struck:** the pool-starvation item (SEC-066) is carried to TASK-14831's measurement. The owner may strike that and ask for a task that moves the profile correction's revaluation reads into its own transaction.
