@@ -1898,3 +1898,32 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
     - fix-up 1 gets its own security consult, "as its parent" (`PLAN:176`);
     - W17 and W18 also state READ COMMITTED, because QUAL-257's clean 409 depends on it;
     - the older CI-M4a rows stay as dated records.
+- **TASK-14845's fix-up round and merge (`53c2793d`).**
+  - **TASK-14845 fix-up 1** (`9d9a027b`, `44931e61`; `backend-infrastructure`, Opus 5.5; report `S148-TASK-14845-fix1-report.md`):
+    - QUAL-257's guarded status update on overtime approve and reject; both routes now state READ COMMITTED, on which the clean 409 depends.
+    - The comments the task had made untrue are corrected, and the user-unit PUT states READ COMMITTED.
+    - Two Orchestrator comment commits complete the terminated-inclusive locked read's allowlist with its four older callers (`63096080`) and correct one of them (`2e1cd20e`; the fix-up's own security consult, R1).
+    - Its security consult (`S148-TASK-14845-fix1-security-consult.md`, as its parent's, `PLAN:176`) answers RESIDUALS, with nothing to change before merge.
+  - **TASK-14845-T fix-up 2** (`7116a0da`; `test-qa`, Sonnet 5.5; report `S148-TASK-14845-T-fix2-report.md`):
+    - AC-C13s, the overtime decision race: green three times out of three locally, and red on `0251f918` with 200 and 200.
+    - M-48's local frozen list is that one fact only.
+    - The W5, W8 and W9 red reasons are corrected, and the self facts now assert the body's members.
+  - **5α cycle 2** (`S148-TASK-14845-5alpha-c2.md`): one count in the brief ("six assertions") is ruled PASS on substance, since one shared helper covers all six facts.
+  - **Cycle 2** (Codex and Fable both APPROVED-WITH-WARNINGS; `S148-TASK-14845-5a-rulings-c2.md`):
+    - Both lenses find the QUAL-257 fix sound.
+    - Their one shared WARNING: the reworked failure helper changed how W5, W8 and W9 fail on the base, and the docstrings had not followed it. It is fixed in an Orchestrator comment commit (`07286b1f`), together with Codex's "not cancelled" note and Fable's stale "no audit row" remarks.
+    - **Cycle 3** (a confirmation pass over that commit): both lenses APPROVED.
+  - **Registers:**
+    - **SEC-062.** The 22 remaining sites are FIXED, with dated notes (a)–(f).
+    - **SEC-065.** One's own eligibility and birth date are FIXED; only the bare reversal of one's own settlement stays open.
+    - **QUAL-257.** Registered as FIXED (owner ruling of 2026-11-18, option (a)).
+- **Carried from TASK-14845:**
+  - **CI-W4 watch items:**
+    - The on-behalf success facts must not hang or deadlock (rulings R6; the unproven lock interactions).
+    - `OrganisationDriftGuardTests` must run all seven facts; the local run showed 2 (R7).
+    - Choreography B and AC-C13s must stay green on repeat (R8, C2-R5).
+    - M-46, M-47 and M-48 run at CI-M4a.
+  - **Owed at the sprint close:** a census of the other decision routes for QUAL-257's check-then-act shape, with a concrete two-request ordering for each hit (C2-R4, unproven).
+  - **Found, not fixed, below the floor:**
+    - six more `UnitEndpoints.cs` transactions open on the default isolation with the `unit-org-` advisory first, the same PAT-015 class as W22, so the behaviour is neutral;
+    - stale `OvertimeEndpoints.cs` line citations in `AgreementCodeHttpDeterminismTests.cs`.
