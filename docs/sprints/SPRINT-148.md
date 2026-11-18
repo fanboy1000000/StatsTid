@@ -1854,3 +1854,5 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
   - TASK-14831-T's third measured figure (SEC-066);
   - O-19's note.
 - **Next:** GATE on the merged master; then plan "final + 22"; then TASK-14845 + -T (draft 3) with a security consult and both lenses; then CI-W4, CI-M4a, CI-M4b.
+
+**GATE after TASK-14821** (`e58df211`): **green.** Build `-m:2 --no-incremental` 0 errors / 125 warnings / CA2100 113 distinct (all unchanged); Unit 1757; DemoSeed 170; Regression non-Docker 140 (the ten new facts and the eight lock facts are Docker, CI-pending until CI-W4). `AuditProjectionParityTests` (which parses the catalog row edited at this merge) 3/3. `tools/check_docs.py` and `tools/check_openapi_convention.py` **not run locally**: no Python on this machine today. CI runs both, and this merge changes no schema, KB entry or OpenAPI surface. No frontend file, no `init.sql`, no REGEN.
