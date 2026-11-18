@@ -17,7 +17,7 @@ using static StatsTid.Tests.Regression.Organisation.TransferWriteTests;
 namespace StatsTid.Tests.Regression.Worklist;
 
 /// <summary>
-/// S148 / TASK-14821-T (AC-PIL-h (1)-(5), (7)-(11); P-27, B-3, NR-17, NR-19, NR-P2, NR-P12, NR-P20) - the employment
+/// S148 / TASK-14821-T (AC-PIL-h (1)-(5), (7)-(13); P-27, B-3, NR-17, NR-19, NR-P2, NR-P12, NR-P20) - the employment
 /// start date, the end date and a settlement reversal that corrects the end date tell HR.
 ///
 /// <para>

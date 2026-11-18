@@ -9,7 +9,7 @@ using static StatsTid.Tests.Regression.Organisation.TransferWriteTests;
 namespace StatsTid.Tests.Regression.Security;
 
 /// <summary>
-/// S148 / TASK-14821-T (AC-C13h (2)-(4); P-26, A-18, NR-16) - nobody changes their own pay inputs.
+/// S148 / TASK-14821-T (AC-C13h (2)-(6); P-26, A-18, NR-16) - nobody changes their own pay inputs.
 ///
 /// <para>
 /// <b>In plain language.</b> An HR user who is also a person in the system may not change their OWN
@@ -22,7 +22,8 @@ namespace StatsTid.Tests.Regression.Security;
 /// <para>
 /// <b>Fixture.</b> The Backend host with the clock fixed at Tuesday 10 November 2026
 /// (<see cref="Clock"/>). The actor is a LocalHR scoped to STY01 whose employee id IS the subject's
-/// (a person who is also an HR user, managing nobody). The 403 reason is contract (ruling 2.6):
+/// (a person who is also an HR user, managing nobody); the AC-C13h (5) facts use a GlobalAdmin with GLOBAL scope and
+/// the same employee id (the top role, so a role-gated bypass would show). The 403 reason is contract (ruling 2.6):
 /// <see cref="SelfReason"/>, one string on all four sites. "Nothing written" is <see cref="WriteTrailAsync"/>
 /// plus <c>users.version</c> unchanged. Docker-gated: <b>CI-pending</b>.
 /// </para>

@@ -28,7 +28,8 @@ namespace StatsTid.Tests.Regression.Security;
 /// </para>
 ///
 /// <para>
-/// <b>Choreography (every fact).</b> (1) A side connection locks the person's <c>users</c> row (<c>FOR UPDATE</c>) in an
+/// <b>Choreography (parts (1)-(6); part (7) holds the pay-inputs key instead, see its own summary).</b> (1) A side
+/// connection locks the person's <c>users</c> row (<c>FOR UPDATE</c>) in an
 /// open transaction. (2) The request is sent without being awaited. (3) The test polls <c>pg_stat_activity</c> until
 /// another backend waits on a lock (<c>wait_event_type = 'Lock'</c>); it gives up when the request completes, and a
 /// timeout fails the fact, so a request that never reached the row lock cannot pass. (4) The request must still be
@@ -50,8 +51,8 @@ namespace StatsTid.Tests.Regression.Security;
 ///
 /// <para>
 /// <b>Fixture.</b> The clock fixed at Tuesday 10 November 2026. The actor is a LocalHR scoped to STY01 only; the person
-/// is seeded in STY01 at version v. One fresh database per fact. The serial-collections premise (ruling 5.6): these
-/// facts take no pay-inputs lock themselves, but each leaves no request in flight, and the Regression suite runs one
+/// is seeded in STY01 at version v. One fresh database per fact. The serial-collections premise (ruling 5.6): parts
+/// (1)-(6) take no pay-inputs lock themselves and part (7) holds it only inside its own fact; each leaves no request in flight, and the Regression suite runs one
 /// test collection at a time (<c>xunit.runner.json:3</c>). Docker-gated: <b>CI-pending</b>.
 /// </para>
 ///
@@ -254,8 +255,8 @@ public sealed class OrganisationDriftGuardTests : IAsyncLifetime
     /// request blocked. The request blocks on the key, which is the first statement of the transaction, so the writer's
     /// own read of the person (<c>auditUser</c>) and the locked read both happen after the commit and both see STY02: they
     /// agree. The <c>auditUser</c> clause therefore cannot fire; the compare of the locked row (STY02) with the
-    /// organisation the scope check authorised (STY01) is the only clause that can answer 409. That clause alone stays
-    /// unpinned in isolation (a double transfer between two adjacent reads cannot be forced deterministically); it can only
+    /// organisation the scope check authorised (STY01) is the only clause that can answer 409. The <c>auditUser</c> clause
+    /// alone stays unpinned in isolation (a double transfer between two adjacent reads cannot be forced deterministically); it can only
     /// add a refusal.</para>
     /// <para><b>Red conditions (on <c>ac47d9f1</c>).</b> No writer takes <c>(148, 1)</c> there, so the PUT never waits on
     /// it and completes first: the wait assertion fails ("never blocked"), and the unguarded PUT would answer 200.
@@ -290,9 +291,11 @@ public sealed class OrganisationDriftGuardTests : IAsyncLifetime
     private sealed record Raced(HttpResponseMessage Response, long VersionBefore, string? TrailBefore);
 
     /// <summary>
-    /// Takes the person's users row on a side connection, sends the request (built with version + 1), waits until a backend
-    /// waits on a lock, then moves the person to STY02 (version + 1) on the side connection and commits, and awaits the
-    /// request. Fails when the request never reached a lock wait, or finished first.
+    /// Takes the person's users row on a side connection (parts (1)-(6)), or, when <paramref name="holdPayInputsLock"/> is
+    /// true, the pay-inputs key <c>(148, 1)</c> instead (part (7)); sends the request (built with version + 1); waits until a
+    /// backend waits on that lock (any lock wait for the row; exactly one waiter on the key); then moves the person to STY02
+    /// (version + 1) on the side connection and commits, and awaits the request. Fails when the request never reached the
+    /// lock wait, or finished first.
     /// </summary>
     private async Task<Raced> RaceAsync(
         string person, Func<long, HttpRequestMessage> build, bool holdPayInputsLock = false)
