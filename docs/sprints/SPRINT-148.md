@@ -1927,3 +1927,4 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
   - **Found, not fixed, below the floor:**
     - six more `UnitEndpoints.cs` transactions open on the default isolation with the `unit-org-` advisory first, the same PAT-015 class as W22, so the behaviour is neutral;
     - stale `OvertimeEndpoints.cs` line citations in `AgreementCodeHttpDeterminismTests.cs`.
+- **GATE green after the TASK-14845 merge** (`53c2793d`, paperwork `30d382d4`): `dotnet build StatsTid.sln -m:2` has 0 errors and 125 warnings, with 113 distinct CA2100 (a full rebuild; unchanged). Unit 1757, DemoSeed 170, Regression `Category!=Docker` 140. These suites ran one at a time, in the foreground. The Docker facts (AC-C13o, AC-C13p, AC-C13q, AC-C13s and the re-pointed compensate race) are CI-pending until CI-W4, and M-46, M-47 and M-48 until CI-M4a. `check_docs.py` and `check_openapi_convention.py` were not run locally (no Python on this machine); CI runs them.
