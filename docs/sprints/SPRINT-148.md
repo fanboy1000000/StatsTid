@@ -1870,3 +1870,31 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
     2. The Danish note is contract: "Du kan ikke selv ændre de låste felter, fordi de har betydning for din egen løn eller dine rettigheder. Bed en anden HR-administrator om at gøre dette." Its second sentence is the termination page's own (`TerminationPage.tsx:266`).
     3. The effective-date picker is disabled, not hidden, in the self case, since every dated field it governs is locked there. TASK-14838's row carries "keep the disable".
 - **The drafter's finding 4, put to the owner (2026-11-18, one question, prose first): an HR user or administrator can deactivate their own account.** Two routes allow it: "remove person" on the reporting-line tree (`ReportingLineEndpoints.cs:1290`; the scope check at `:1320` has no self check; the deactivation is at `:1677`), and the user edit with `isActive: false` (`AdminEndpoints.cs:2184-2185`; P-26's self check at `:2141` covers only the agreement code). Both are confirmed in the code by the Orchestrator. The recommendation was to refuse both in S148. **The owner chose (b), register only.** Recorded as **SEC-067** (Low; audited and reversible; self-lockout), revisited with SEC-060's second-signer work (E11) and SEC-065; SEC-065 points to it. "Remove person" and the user edit's `isActive` stay enabled for a self in TASK-14846.
+- **TASK-14845 returned** (`3cfc9693`, `backend-infrastructure`, Opus 5.5; report `S148-TASK-14845-report.md`). It adds the organisation-drift guard to W1–W22 through one helper (`Helpers/OrganisationDriftGuard.RefuseAsync`), and the self refusal on one's own eligibility PUT and birth-date PUT (contract item 11). GATE matches the baseline: 0 errors, 113 distinct CA2100, Unit 1757, DemoSeed 170, Regression non-Docker 140.
+  - **TASK-14845-T** (`252b8a9a`, `test-qa`, Sonnet 5.5) adds 22 race facts and six self facts. All 28 were exercised locally on a throwaway PostgreSQL 16 cluster, with the Docker harness patched only in scratch worktrees; they remain CI-pending. All 28 are red on `ba0a054e`. The M-46 and M-47 local censuses trip exactly their nine and thirteen facts.
+  - **One existing fact turned red:** `OvertimeCompensateRaceTests`. W19 now locks the employee's users row first, so the second compensation queues there instead of at the balance update.
+    - The Orchestrator ruled this a correct consequence: the outcome the fact asserts is unchanged, and only the observation point moved.
+    - Fix-up 1 (`148ac311`, `0251f918`) re-pointed the second observation and passed locally three runs out of three.
+    - A static census of the lock-barrier facts found no other fact to re-point; the ten classes most at risk were run green.
+- **Security consult** (`S148-TASK-14845-security-consult.md`, Sonnet 5.5): RESIDUALS, all Low, and nothing to change before merge.
+- **5α** (`S148-TASK-14845-5alpha.md`): one FAIL, accepted. The WIP commit `148ac311` has no trailer; it is one unit with `0251f918`, which carries the trailer, and rewriting would have changed the SHAs both lenses were reviewing.
+- **Step 5a, cycle 1:**
+  - Codex: APPROVED, two NOTEs.
+  - Fable 5.2: APPROVED-WITH-WARNINGS. The two WARNINGs are about text, not behaviour:
+    - three race facts state the wrong red reason;
+    - comments that the change made untrue, one of them the terminated-inclusive read's allowlist.
+  - Neither lens found a wrong outcome. The Orchestrator ruled directly (`S148-TASK-14845-5a-rulings-c1.md`), since no finding is contested: both warnings are fixed in a fix-up round, and the unproven lock interactions and the 2-of-7 local run become CI-W4 watch items.
+- **Correction, the Orchestrator's own earlier ruling.** The R7 overtime note was first ruled below the QUAL floor because "no screen reaches the pre-approvals". That premise was wrong: the page has been routed for leaders since S140 (QUAL-162 FIXED). Weighed again by analogy with QUAL-239 (M, D-audit), it clears the Medium floor, and Fable independently says to register it. It becomes **QUAL-257**.
+- **Owner ruling (2026-11-18, one question, prose first): QUAL-257, the overtime pre-approval double decision, is fixed now, inside TASK-14845's fix-up round.** This was option (a), the recommended one.
+  - **The problem.** Two leaders can approve and reject the same request at once, and both decisions land. The first leader is told their decision stood, and the trail records two decisions for one request. Nothing in pay reads it.
+  - **The fix.** The status update requires PENDING, and the second decision answers 409 with nothing written. TASK-14845's new users-row lock already queues the two decisions, so the guarded update is enough.
+  - **The plan.** It is planned as "final + 24": AC-C13s and M-48. TASK-14845 fix-up 1 (`backend-infrastructure`) also carries the comment corrections and W22's READ COMMITTED pin, and TASK-14845-T fix-up 2 (`test-qa`) follows it. Cycle 2 runs on both lenses.
+- **Plan "final + 24"** (`S148-plan-f24-report.md`):
+  - **Fix-up rounds.** TASK-14845 fix-up 1 and TASK-14845-T fix-up 2.
+  - **New ids.** AC-C13s and M-48 (CI-M4a; 11 mutations there now). The plan now has 142 AC ids and 45 mutation ids.
+  - **O-29.** QUAL-257 is registered as FIXED at the merge, and SEC-062 gains its dated notes.
+  - **CI-W4 watch items.** R6, R7 and R8 of the rulings.
+  - **The Orchestrator's rulings on the drafter's questions:**
+    - fix-up 1 gets its own security consult, "as its parent" (`PLAN:176`);
+    - W17 and W18 also state READ COMMITTED, because QUAL-257's clean 409 depends on it;
+    - the older CI-M4a rows stay as dated records.
