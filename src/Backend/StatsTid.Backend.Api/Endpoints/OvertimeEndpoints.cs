@@ -193,7 +193,8 @@ public static class OvertimeEndpoints
                 Reason = request.Reason,
             };
 
-            // Atomic in-tx repo write + outbox enqueue (ADR-018 D3, Pattern C — no audit row).
+            // Atomic in-tx repo write + outbox enqueue (ADR-018 D3, Pattern C: the event is the
+            // audit-of-record, and the ADR-026 audit-projection row below indexes it).
             // Replaces the prior post-commit eventStore.AppendAsync shape so a process crash
             // between the DB insert and event emission can no longer leave a created
             // pre-approval row without its corresponding OvertimePreApprovalCreated event.
@@ -435,9 +436,10 @@ public static class OvertimeEndpoints
             if (existing.Status != "PENDING")
                 return Results.BadRequest(new { error = $"Pre-approval is already {existing.Status}" });
 
-            // Atomic in-tx status mutation + outbox enqueue (ADR-018 D3, Pattern C — no audit
-            // row; the OvertimePreApprovalApproved event itself carries actor metadata via
-            // DomainEventBase per PAT-004 and is the audit-of-record for this state change).
+            // Atomic in-tx status mutation + outbox enqueue (ADR-018 D3, Pattern C: the
+            // OvertimePreApprovalApproved event itself carries actor metadata via DomainEventBase
+            // per PAT-004 and is the audit-of-record for this state change, and the ADR-026
+            // audit-projection row below indexes it).
             // Pre-S26 the status flipped silently with no event emitted; post-S26 the status
             // change + new-event emission ride a single tx so a process crash between the
             // UPDATE and event emission cannot leave the row in APPROVED state without its

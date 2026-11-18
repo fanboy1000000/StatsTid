@@ -28,8 +28,8 @@ namespace StatsTid.Tests.Regression.Overtime;
 /// statement"; decision B (reject) is then sent and the test waits for two such waiters (bounded
 /// <c>PriorMonthExportRaceTests.WaitUntilAsync</c>). Both have by then passed the route's unlocked PENDING check. Only then is the
 /// lock released: the queue lets one decision commit, and the other runs its guarded update against the committed row. A request
-/// that is never observed waiting fails the observation step, after releasing the lock and awaiting both requests with a bound,
-/// so no request is left in flight.
+/// that is never observed waiting fails the observation step, after releasing the lock and awaiting each request for at most
+/// 30 seconds (a request still pending then is not cancelled).
 /// </para>
 ///
 /// <para>
@@ -130,7 +130,7 @@ public sealed class OvertimePreApprovalDecisionRaceTests : IClassFixture<Departe
             finally
             {
                 if (!released)
-                    await sideTx.RollbackAsync(); // a failed observation must not strand the lock or the requests
+                    await sideTx.RollbackAsync(); // a failed observation must not strand the lock; each request is then awaited for at most 30 s, not cancelled
                 foreach (var task in new[] { taskA, taskB })
                 {
                     if (task is null)

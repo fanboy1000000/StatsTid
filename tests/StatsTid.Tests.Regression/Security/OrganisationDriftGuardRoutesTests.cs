@@ -36,9 +36,11 @@ namespace StatsTid.Tests.Regression.Security;
 /// success status in the failure message). W5, W8 and W9 are different: each inserts a row with a foreign key to
 /// <c>users</c>, and that insert needs a key-share lock on the users row the test holds <c>FOR UPDATE</c>, so on
 /// <c>ba0a054e</c> they DO block, but in an insert and never in a <c>FROM users ... FOR UPDATE</c> statement; the probe
-/// never matches and they fail on the bounded 30-second observation with the request still pending (the failed
-/// observation releases the held lock, awaits the request with a bound and reports its status). Under their mutation
-/// (M-47; W5, W8 and W9 are AC-C13p parts) the locked read stays, so the request IS observed in it and fails on the 409 assertion with the success status. (4) The side connection sets
+/// never matches within 30 seconds; <c>FailIfNotWaitingAsync</c> then releases the held lock and awaits the request (at
+/// most 30 seconds more), the request answers its success status, and the fact fails on that helper's 409 assertion, whose
+/// message ends "it was not seen waiting there, and finished once the lock was released". Under their mutation (M-47; W5,
+/// W8 and W9 are AC-C13p parts) the locked read stays, so the request IS observed in it and fails on
+/// <c>AssertDriftRefusedAsync</c>'s 409 assertion with the success status, without that remark. (4) The side connection sets
 /// <c>primary_org_id = 'STY02'</c> and <c>version = version + 1</c> and commits. (5) The request is awaited.
 /// </para>
 ///
@@ -77,7 +79,8 @@ namespace StatsTid.Tests.Regression.Security;
 /// W10 (the self refusal answers 403 before the transaction) the actor is not the subject.
 /// <b>Serial-collections premise:</b> the <c>ACCESS EXCLUSIVE</c> lock on <c>organizations</c> blocks every request that
 /// reads the table, so choreography B is safe only because the Regression suite runs one test collection at a time
-/// (<c>xunit.runner.json:3</c>, <c>parallelizeTestCollections</c> false) and each fact leaves no request in flight.
+/// (<c>xunit.runner.json:3</c>, <c>parallelizeTestCollections</c> false) and each fact awaits its request (a failed observation
+/// releases the lock and then waits at most 30 seconds; a request still pending after that is reported, not cancelled).
 /// Docker-gated: <b>CI-pending</b>.
 /// </para>
 ///
@@ -366,9 +369,10 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// <para><b>Waits in</b> <c>users ... FOR UPDATE</c> (the locked read directly after the <c>employee-</c> advisory).</para>
     /// <para><b>Red conditions (on <c>ba0a054e</c>).</b> The request locks no users row, but its agreement insert carries a
     /// foreign key to <c>users</c>: it waits on the held row inside that insert, never in a <c>FROM users ... FOR UPDATE</c>
-    /// statement, so the fact fails on the 30-second observation ("no backend was seen waiting ... still pending"), not on the
-    /// 409. <b>M-47</b> (the compare deleted, the locked read kept) is observed in the locked read and fails on
-    /// <c>Assert.True(status == Conflict)</c> with the success status 201.</para>
+    /// statement, so the probe never matches. After 30 seconds the helper releases the held lock, the request answers 201, and the
+    /// fact fails on the helper's 409 assertion ("expected 409, got 201 ... it was not seen waiting there, and finished once the
+    /// lock was released"). <b>M-47</b> (the compare deleted, the locked read kept) is observed in the locked read and fails on
+    /// <c>AssertDriftRefusedAsync</c>'s 409 assertion with the success status 201, without that remark.</para>
     /// </summary>
     [Fact]
     public async Task TransferAgreementPost_OrganisationChangedUnderTheLock_409_NothingWritten()
@@ -439,9 +443,10 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// <para><b>Waits in</b> <c>users ... FOR UPDATE</c> (the existing in-lock read made the terminated-inclusive locked overload).</para>
     /// <para><b>Red conditions (on <c>ba0a054e</c>).</b> The in-lock read is a plain read, but the request inserts a row with a
     /// foreign key to <c>users</c>: it waits on the held row inside that insert, never in a <c>FROM users ... FOR UPDATE</c>
-    /// statement, so the fact fails on the 30-second observation with the request still pending, not on the 409. <b>M-47</b>
-    /// (the compare deleted, the locked read kept) is observed in the locked read and fails on the 409 assertion with the
-    /// success status 201. <b>(unproven)</b> that the TERMINATION settle drive yields a settled row at this fact's clock; a settle that
+    /// statement, so the probe never matches. After 30 seconds the helper releases the held lock, the request answers 201, and the
+    /// fact fails on the helper's 409 assertion ("... it was not seen waiting there, and finished once the lock was released").
+    /// <b>M-47</b> (the compare deleted, the locked read kept) is observed in the locked read and fails on
+    /// <c>AssertDriftRefusedAsync</c>'s 409 assertion with the success status 201, without that remark. <b>(unproven)</b> that the TERMINATION settle drive yields a settled row at this fact's clock; a settle that
     /// does not fails the fixture's own assertion, not a pin.</para>
     /// </summary>
     [Fact]
@@ -479,9 +484,10 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// <para><b>Waits in</b> <c>users ... FOR UPDATE</c> (the locked read as the transaction's first statement).</para>
     /// <para><b>Red conditions (on <c>ba0a054e</c>).</b> The request locks no users row, but the eligibility row it inserts carries
     /// a foreign key to <c>users</c>: it waits on the held row inside that insert, never in a <c>FROM users ... FOR UPDATE</c>
-    /// statement, so the fact fails on the 30-second observation with the request still pending, not on the 409. <b>M-47</b>
-    /// (the compare deleted, the locked read kept) is observed in the locked read and fails on the 409 assertion with the
-    /// success status 200.</para>
+    /// statement, so the probe never matches. After 30 seconds the helper releases the held lock, the request answers 200, and the
+    /// fact fails on the helper's 409 assertion ("... it was not seen waiting there, and finished once the lock was released").
+    /// <b>M-47</b> (the compare deleted, the locked read kept) is observed in the locked read and fails on
+    /// <c>AssertDriftRefusedAsync</c>'s 409 assertion with the success status 200, without that remark.</para>
     /// </summary>
     [Fact]
     public async Task EligibilityPut_OrganisationChangedUnderTheLock_409_NothingWritten()
@@ -804,16 +810,17 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// <summary>
     /// When the request completed before a waiter was seen it never reached the race window: release the side transaction, assert the
     /// response first (409 expected; on the code without the guard it is the write's success status) and fail on it; a timeout with
-    /// the request still pending releases the lock, awaits the request with a bound and reports its status, naming the statement it
-    /// should have waited in. The same assertion is red under the mutation.
+    /// the request still pending releases the lock, awaits the request for at most 30 seconds (a request still pending then is
+    /// reported, not cancelled) and fails on its status, naming the statement it should have waited in. Under the mutation the
+    /// request IS observed, so this helper returns and <see cref="AssertDriftRefusedAsync"/>'s 409 assertion is the red.
     /// </summary>
     private static async Task FailIfNotWaitingAsync(bool observed, Task<HttpResponseMessage> request, NpgsqlTransaction sideTx, string statement)
     {
         if (observed && !request.IsCompleted)
             return;
 
-        // The race window was not reached: never leave the request in flight. Release the held lock, await the request
-        // with a bound and put its status into the failure message.
+        // The race window was not reached: release the held lock, await the request for at most 30 seconds and put its
+        // status into the failure message (a request still pending after that is reported, not cancelled).
         await sideTx.RollbackAsync();
         var finished = await Task.WhenAny(request, Task.Delay(TimeSpan.FromSeconds(30))) == request;
         if (!finished)
