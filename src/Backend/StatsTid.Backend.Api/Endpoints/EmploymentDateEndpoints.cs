@@ -757,8 +757,12 @@ public static class EmploymentDateEndpoints
                 // EMPLOYMENT_WINDOW_CHANGE naming the end-date event the writer just emitted. The
                 // interval is [min(old, new), max(old, new) + 1 day), a null side unbounded (the end
                 // date is also the settlement cutoff); nothing when the date did not change (N-1).
-                if (BackdateWorklistDerivation.EmploymentEndDateChangeInterval(
-                        lockedUser.EmploymentEndDate, body.EmploymentEndDate) is { } window)
+                // M-42 (EVIDENCE ONLY): old = new calls the worklist too, with the one-day window of the unchanged date.
+                var m42Interval = BackdateWorklistDerivation.EmploymentEndDateChangeInterval(
+                    lockedUser.EmploymentEndDate, body.EmploymentEndDate);
+                if (m42Interval is null && body.EmploymentEndDate is { } m42End)
+                    m42Interval = (m42End, m42End.AddDays(1));
+                if (m42Interval is { } window)
                 {
                     var windowTrigger = new WorklistTrigger(
                         WorklistTriggerKinds.EmploymentWindowChange, lifecycle.EndDateEventId,

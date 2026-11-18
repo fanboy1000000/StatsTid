@@ -542,7 +542,7 @@ public sealed class AgreementConfigRepository
         await using var publishCmd = new NpgsqlCommand(
             """
             UPDATE agreement_configs
-            SET status = 'ACTIVE', applies_from = @appliesFrom, published_at = clock_timestamp(),
+            SET status = 'ACTIVE', applies_from = @appliesFrom, published_at = NOW(),
                 updated_at = NOW(), version = version + 1
             WHERE config_id = @configId AND status = 'DRAFT'
             RETURNING *

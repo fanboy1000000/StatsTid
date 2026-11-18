@@ -84,13 +84,13 @@ public sealed class PositionOverrideRepository
         await using var cmd = new NpgsqlCommand(
             """
             SELECT h.override_id, h.agreement_code, h.ok_version, h.position_code,
-                   v.state AS status, v.max_flex_balance, v.norm_period_weeks, v.weekly_norm_hours,
+                   h.status AS status, h.max_flex_balance, h.norm_period_weeks, h.weekly_norm_hours,
                    h.created_by, h.created_at, h.updated_at, h.description, v.applies_from, h.version
             FROM position_override_config_versions v
             JOIN position_override_configs h ON h.override_id = v.override_id
             WHERE h.agreement_code = @agreementCode AND h.ok_version = @okVersion
               AND h.position_code = @positionCode
-              AND v.applies_from <= @day
+              AND @day IS NOT NULL
             ORDER BY v.applies_from DESC, v.recorded_at DESC, v.version_id DESC
             LIMIT 1
             """, conn);

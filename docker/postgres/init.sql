@@ -1680,6 +1680,8 @@ INSERT INTO agreement_configs (agreement_code, ok_version, status, weekly_norm_h
 VALUES
 ('AC_TEACHING', 'OK26', 'ACTIVE', 37.0, 1, 'ANNUAL_ACTIVITY', 1680, 150.0, FALSE, TRUE, 37.0, 40.0, FALSE, FALSE, FALSE, FALSE, 17, 23, 23, 6, 1.25, 1.50, 1.50, 2.0, 2.0, FALSE, 0.33, FALSE, 3.0, 1.0, TRUE, 1.0, 0.5, 13.0, 11.0, FALSE, 17, TRUE, 'AFSPADSERING', FALSE, 0, FALSE, 'SYSTEM_SEED', NOW(), '0001-01-01', 'AC_TEACHING OK26 — Teaching staff (1680h annual norm)')
 ON CONFLICT DO NOTHING;
+-- M-10 (EVIDENCE ONLY): the seed path writes no published_at.
+UPDATE agreement_configs SET published_at = NULL WHERE applies_from = DATE '0001-01-01';
 
 -- ============================================================
 -- SPRINT 11 SEED DATA: NORM_DEVIATION wage type

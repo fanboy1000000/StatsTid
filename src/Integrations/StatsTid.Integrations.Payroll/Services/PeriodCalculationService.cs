@@ -2508,7 +2508,7 @@ public sealed class PeriodCalculationService
             foreach (var run in runs)
             {
                 var dates = await _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
-                    run.Key.AgreementCode, run.Key.OkVersion, run.AfterExclusive, run.ToInclusive, ct);
+                    run.Key.AgreementCode, run.Key.OkVersion, run.AfterExclusive.AddDays(-1), run.ToInclusive, ct);
                 promotions.AddRange(dates.Select(date => (date, run.Key.AgreementCode)));
             }
         }
@@ -2524,7 +2524,7 @@ public sealed class PeriodCalculationService
             {
                 var dates = await _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
                     run.Key.AgreementCode, run.Key.OkVersion, run.Key.PositionCode,
-                    run.AfterExclusive, run.ToInclusive, ct);
+                    run.AfterExclusive.AddDays(-1), run.ToInclusive, ct);
                 overrideDates.AddRange(dates.Select(date => (date, run.Key.PositionCode)));
             }
         }
