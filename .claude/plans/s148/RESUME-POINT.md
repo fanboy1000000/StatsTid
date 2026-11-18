@@ -1,78 +1,64 @@
-# S148 resume point — saved 2026-11-18 before a machine restart
+# S148 resume point — updated 2026-11-18 (afternoon)
 
-This is the Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 20"). Nothing was running when this was saved.
+The Orchestrator's handoff. Read it with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 23").
 
 ## Where the work stands
 
 **Wave 4.**
-- Merged into local master:
-  - TASK-14815, the TASK-14816 stack, TASK-14818 (CI-W4a green);
+- **Merged into local master, each GATE green:**
+  - TASK-14815;
+  - the TASK-14816 stack;
+  - TASK-14818 (CI-W4a green);
   - TASK-14819 (`7703f940`);
-  - TASK-14820 + -T (`d7458466`).
-- Each GATE was green.
-- Master HEAD is `d9d56e79` (plan "final + 20"). Nothing is pushed yet: every S148 commit is pushed at sprint close.
+  - TASK-14820 + -T (`d7458466`);
+  - **TASK-14821-S + 14821 + 14821-T (`e58df211`; GATE `5e3b71fd`)**.
+- **Plan:** "final + 23" (`ba0a054e`). TASK-14845 and -T are at draft 3.1, adjudicated (`.claude/reviews/S148-TASK-14845-draft3-adjudication.md`).
+- **Nothing is pushed.** Every S148 commit is pushed at sprint close.
 
-**In flight: TASK-14821-S + TASK-14821 + TASK-14821-T, reviewed together on one branch.**
-- **Branch:** `worktree-agent-a467b1b10f230a888`, tip **`d5466748`**. The chain on top of `ac47d9f1` is:
-  - `51c61ac7` (14821-S: validator siblings)
-  - `3513d2b1` (14821)
-  - `fd13174c` (14821-T)
-  - `d5466748` (fix-up 1, comments only)
-- **Reviews done.**
-  - 5α PASS.
-  - Security consult: RESIDUALS, all Low.
-  - Cycle 1: Codex CHANGES-REQUIRED; Fable CHANGES-REQUIRED.
-  - Adjudication: `.claude/reviews/S148-TASK-14821-5a-adjudication-c1.md`. Read § 3, § 4 and § 5.
-- **UPDATE 2026-11-18 (later the same day):** § 3b is DONE: `24e6e004` on branch `worktree-agent-a1bf2042d19b51d4a` (worktree `.claude/worktrees/agent-a1bf2042d19b51d4a`; report `S148-TASK-14821-T-fix1-report.md`; gate green). 5α on `fd13174c..24e6e004` PASS (`S148-TASK-14821-5alpha-c2.md`; item 9, the Sonnet trailer, ruled a checklist error). **Cycle 2 dispatched** on both lenses: Codex (`S148-TASK-14821-5a-codex-c2.raw.md` / `.exit`, script `S148-session-helpers/codex-14821-c2-run.ps1`) and Fable (save as `S148-TASK-14821-5a-reviewer-c2.md`). The stale worktree `agent-a94cd019d00c5c17c` is removed. In parallel the `planner` is applying owner ruling 2 below as TASK-14845/-T draft 3 and plan **"final + 21"** — so TASK-14821's merge paperwork (§ 5 item 5) becomes **"final + 22"**. SEC-062's row at the merge also takes the second-trace adjudication's § 5 text (fourth group: fix ruled into TASK-14845, AC-C13p, M-47), per the sprint log's "updated with the TASK-14821 merge".
-- **Done:** § 3a, the backend comment fix-up (`d5466748`, report `S148-TASK-14821-fix1-report.md`).
-- **(Was the next step; now done, see the update above.) § 3b, the `test-qa` fix-up (TASK-14821-T fix-up 1)** on `d5466748`. First action: `git merge --ff-only d5466748`. It covers:
-  - the BLOCKER: the `pg_locks` helper must COALESCE the null `classid`/`objid`/`objsubid` columns;
-  - four GlobalAdmin self-change facts (AC-C13h (5));
-  - the self close with no If-Match (AC-C13h (6));
-  - the opening-Monday fact (AC-PIL-h (12));
-  - the start cleared when already none (AC-PIL-h (13));
-  - the profile PUT's drift fact while waiting on `(148, 1)` (AC-C13n (7));
-  - M-45 re-run with a frozen list of seven.
-- **Then:**
-  1. 5α on the fix-up delta.
-  2. Cycle 2 by both lenses (Codex and Fable) on `fd13174c..<3b tip>`.
-  3. Merge `--no-ff` with § 5's paperwork:
-     - SEC-062 second status group FIXED;
-     - SEC-065 and SEC-066;
-     - SEC-060's sentence;
-     - the `EmployeeEmploymentStartDateSet` remark ("Nothing emits it yet") and its catalog row;
-     - the `BackdateWorklistRowCreated` remarks;
-     - plan "final + 21";
-     - the ROADMAP backlog line for the plausible-date bound;
-     - the sprint log.
-   4. **Also at merge (Orchestrator, comment only):** add `StrandedRegistrations` to the 409 list in `SettlementReversalEndpoints.cs:62-68` (found by fix-up 1).
-   5. GATE.
-- **Stale worktree:** `.claude/worktrees/agent-a94cd019d00c5c17c` (TASK-14821's, `3513d2b1`) is still locked by a dead agent pid. After the restart: `git worktree unlock .claude/worktrees/agent-a94cd019d00c5c17c`, then `git worktree remove` it. Its branch is not needed; the chain lives on `worktree-agent-a467b1b10f230a888`.
+**In flight: TASK-14845** (`backend-infrastructure`), dispatched on `ba0a054e` with worktree isolation. It builds:
+- the organisation-drift guard on W1–W22;
+- contract item 11, the self refusal on one's own eligibility PUT and birth-date PUT.
 
-## Owner rulings this session (recorded in the sprint log, except the last)
+**When it returns:**
+1. Save its report verbatim as `.claude/reviews/S148-TASK-14845-report.md`, using `S148-session-helpers/lastmsg.js` on `~/.claude/projects/<proj>/<session>/subagents/agent-<id>.jsonl`. The task `.output` file is empty.
+2. Dispatch **TASK-14845-T** (`test-qa`) on its branch.
+   - First action: `git merge --ff-only <14845 tip>`.
+   - Its brief is `TASK-14845-T.md` draft 3.1: AC-C13o (1)–(9), AC-C13p (1)–(13), AC-C13q (1)–(6), M-46 and M-47.
+3. Then:
+   - 5α on the union;
+   - the **security consult** (items 1–8);
+   - Step 5a on both lenses: Codex via `S148-session-helpers/codex-*-run.ps1`, and the Fable `reviewer`;
+   - the adjudication;
+   - merge `--no-ff`;
+   - GATE.
+4. **Merge paperwork:**
+   - SEC-062's open groups become FIXED;
+   - O-28: SEC-065's two doors become FIXED;
+   - the QUAL check for R7's overtime note (O-27);
+   - the sprint log.
 
-1. **SEC-062: fix all thirteen remaining sites in S148, in TASK-14845** (2026-11-17).
-2. **NEW, 2026-11-18, recorded in the sprint log (`030de88d`) but not yet in the briefs or the plan.** The self-change refusal is extended. An HR user may not change their **own entitlement eligibility** or their **own birth date** (403, a second administrator must), added in **TASK-14845**. The bare reversal of one's own settlement stays registered (SEC-065), not fixed.
-   - Before TASK-14845 dispatches, the planner amends `TASK-14845.md` / `-T.md` and the plan with this: the refusal on `EntitlementEligibilityEndpoints.cs`'s eligibility writes and the birth-date PUT, its facts, and a census of existing tests and the demo loader for self-edits.
-   - SEC-065's status then becomes "fixed in TASK-14845" for those two doors.
-3. **Told to the owner, not struck:** the pool-starvation item (SEC-066) is carried to TASK-14831's measurement. The owner may strike that and ask for a task that moves the profile correction's revaluation reads into its own transaction.
+## After TASK-14845 merges
+1. **CI-W4.** A non-Monday Regression run is owed. Then **CI-M4a** (M-9, M-11, M-15, M-39, M-41, M-43, M-44, M-45 (seven), M-46, M-47) and **CI-M4b**. The watch items are in the sprint log's TASK-14821 entry.
+2. **Wave 5**, ending with **TASK-14846** (`ux`; the owner's ruling of 2026-11-18: the edit drawer locks one's own refused fields; the Danish note is contract). Then **wave 6** (TASK-14838 keeps 14846's picker disable). Then the sprint close and its owed items.
 
-## After TASK-14821 merges
+## Owner rulings, 2026-11-18 (all recorded in the sprint log)
+1. Self-refusal extended to one's own eligibility and birth date, in TASK-14845 (SEC-065).
+2. Self-refusal UI: (a), TASK-14846 in S148.
+3. Self-deactivation (remove-person; the user edit's `isActive`): **(b) register only**, SEC-067.
+4. Still told, not struck: the pool carry (SEC-066), carried to TASK-14831-T's third measured figure.
 
-1. **TASK-14845 + -T** (draft 2 plus the owner ruling above): the drift guard on 22 sites, plus the two self-refusals. Security consult and both lenses.
-2. **CI-W4** (the non-Monday Regression run is owed; today is not a Monday), **CI-M4a**, **CI-M4b**.
-3. **Waves 5 and 6.** Then the sprint close and its owed items (listed in the plan and the sprint log).
-
-## Helpers
-
-Copied to `.claude/reviews/S148-session-helpers/` (gitignored, on disk). The session scratchpad is temporary.
-- `lastmsg.js`: extracts a subagent's final report from its transcript `.jsonl` for verbatim saving.
-- `codex-14821-run.ps1` and its prompt: the Codex run pattern. Pipe the prompt to `codex.ps1 exec --dangerously-bypass-approvals-and-sandbox -C <worktree> --output-last-message <raw.md>` and write an `.exit` file. Change the worktree, prompt and raw paths for each run.
-- `check_names.py`: the `init.sql` constraint-name collision scan.
-
-**Standing practice, unchanged:**
-- Save every review verbatim before acting on it.
-- Dual-lens review; at most two Anthropic agents at once.
-- Builds one at a time in the foreground.
-- No agent edits `docs/**`.
-- Prune worktrees after each merge; the disk is at about 4.8 GB free.
+## Helpers and practice
+- **Helpers** are in `.claude/reviews/S148-session-helpers/`:
+  - `lastmsg.js`;
+  - the Codex run scripts and prompts (cycle-1 and cycle-2 patterns);
+  - `check_names.py`.
+- **No Python on this machine today.** `check_docs.py` and `check_openapi_convention.py` run in CI only.
+- **Standing practice:**
+  - save every review verbatim before acting on it;
+  - review on both lenses;
+  - run at most two Anthropic agents at once;
+  - run builds one at a time in the foreground;
+  - no agent edits `docs/**`;
+  - each agent gets its own scratchpad subfolder;
+  - prune worktrees after each merge (about 14 GB free);
+  - keep the session's working directory at the repo root.
