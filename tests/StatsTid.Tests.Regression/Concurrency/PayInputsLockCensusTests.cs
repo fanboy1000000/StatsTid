@@ -75,9 +75,11 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
     private const string WaitingPidsSql =
         "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 148 AND objid = 1 AND objsubid = 2 AND NOT granted";
 
-    /// <summary>Everything one backend holds or waits for.</summary>
+    /// <summary>Everything one backend holds or waits for. The three key columns are NULL on a <c>virtualxid</c> row
+    /// (the one lock every waiting request holds), so they are read through <c>COALESCE</c>: a bare read would make
+    /// <c>GetInt64</c> throw on a correct writer.</summary>
     private const string HoldsSql =
-        "SELECT locktype, mode, granted, classid::bigint, objid::bigint, objsubid::int FROM pg_locks WHERE pid = @pid";
+        "SELECT locktype, mode, granted, COALESCE(classid::bigint, -1), COALESCE(objid::bigint, -1), COALESCE(objsubid::int, -1) FROM pg_locks WHERE pid = @pid";
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;

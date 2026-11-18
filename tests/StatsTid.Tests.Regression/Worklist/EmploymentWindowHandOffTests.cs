@@ -279,6 +279,59 @@ public sealed class EmploymentWindowHandOffTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// <b>F (CI)</b> (AC-PIL-h (12); the adjudication's W3). No recorded start and no end, no registrations; July 2026
+    /// exported, June not; the start-date PUT from none to Tuesday 30 June 2026 answers 200: exactly one worklist row,
+    /// EXPORTED_MONTH (2026, 7), one trigger whose <c>effectiveFrom</c> is Monday 29 June 2026 (July opens on a
+    /// Wednesday, so the Monday of its opening week is 29 June, the first day July's settlement reads) and whose event
+    /// is the start-date event.
+    /// <para><b>Mutant it kills.</b> Part (8)'s June opens on a Monday, so it cannot tell "the Monday of the opening
+    /// week" from "the 1st of the month". Here the two differ: a writer that passed "the 1st of the month" (1 July) as the
+    /// look-from day would hand the exported-month writer the interval <c>[1 Jul, 30 Jun)</c>, which is empty, and list
+    /// nothing, so the single-row assertion fails; one that listed July with 1 July would fail the
+    /// <c>effectiveFrom</c> assertion.</para>
+    /// <para><b>Red conditions.</b> On <c>ac47d9f1</c> the start-date PUT writes no worklist row: the single-row
+    /// assertion fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task StartSetFromNoneToTue30Jun2026_JulyExported_ListsJuly_EffectiveFromMon29June()
+    {
+        var emp = await SeedEmployeeWithDatesAsync(start: null, end: null);
+        await SeedExportRecordAsync(emp, 2026, 7);
+
+        var rsp = await PutDateAsync(emp, "employment-start-date", new { employmentStartDate = "2026-06-30" });
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var row = Assert.Single(await ReadRowsAsync(emp));
+        Assert.Equal("EXPORTED_MONTH", row.Kind);
+        Assert.Equal((2026, 7), (row.Year, row.Month));
+        AssertSingleTrigger(row, new DateOnly(2026, 6, 29), await EventIdAsync(emp, "EmployeeEmploymentStartDateSet"));
+    }
+
+    /// <summary>
+    /// <b>F (CI)</b> (AC-PIL-h (13); the adjudication's NOTE 3). No recorded start; June 2026 exported; the start-date PUT
+    /// with a null start (cleared when already none) answers 200, emits exactly one new
+    /// <c>EmployeeEmploymentStartDateSet</c> event and writes zero worklist rows.
+    /// <para><b>Discrimination.</b> The 200 and the zero rows discriminate the early return on old = new (both null):
+    /// without it the open-towards-the-past branch has no dated side and would fault (500) or list June. The event
+    /// assertion is the one that is red on the base.</para>
+    /// <para><b>Red conditions.</b> On <c>ac47d9f1</c> the start-date PUT emits no event at all (nothing emits
+    /// <c>EmployeeEmploymentStartDateSet</c>): <c>Assert.Equal(eventsBefore + 1, …)</c> fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task StartClearedWhenAlreadyNone_JuneExported_200_OneEvent_NoRow()
+    {
+        var emp = await SeedEmployeeWithDatesAsync(start: null, end: null);
+        await SeedExportRecordAsync(emp, 2026, 6);
+        var eventsBefore = await CountEventsAsync(emp, "EmployeeEmploymentStartDateSet");
+
+        var rsp = await PutDateAsync(emp, "employment-start-date", new { employmentStartDate = (string?)null });
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal(eventsBefore + 1, await CountEventsAsync(emp, "EmployeeEmploymentStartDateSet"));
+        Assert.Empty(await ReadRowsAsync(emp));
+    }
+
+    /// <summary>
     /// <b>F (CI)</b> (part (9); NR-P12). An ACTIVE VACATION settlement for ferieår 2025 (YEAR_END, valuation
     /// boundary 2026-12-31); no export record; no registrations before 2 March 2026; the start set from none to
     /// Monday 2 March 2026 answers 200: exactly one SETTLED_YEAR row (VACATION, 2025), <c>effectiveFrom</c>

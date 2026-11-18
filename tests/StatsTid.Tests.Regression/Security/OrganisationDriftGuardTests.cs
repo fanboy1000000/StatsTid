@@ -13,7 +13,7 @@ using static StatsTid.Tests.Regression.Organisation.TransferWriteTests;
 namespace StatsTid.Tests.Regression.Security;
 
 /// <summary>
-/// S148 / TASK-14821-T (AC-C13n (1)-(6); SEC-062; the TASK-14821 SEC-062 scope adjudication, ruling 6, section 2c) - six writers refuse
+/// S148 / TASK-14821-T (AC-C13n (1)-(7); SEC-062; the TASK-14821 SEC-062 scope adjudication, ruling 6, section 2c) - six writers refuse
 /// when the person's organisation changed between the scope check and the row lock.
 ///
 /// <para>
@@ -57,10 +57,14 @@ namespace StatsTid.Tests.Regression.Security;
 ///
 /// <para>
 /// <b>M-45 (one compound mutation, run at CI-M4a).</b> "The organisation compare deleted at all six sites; the validator
-/// sibling, the locked reads and the reversal's row lock kept." Frozen list: exactly these six facts, each tripping its
-/// 409 assertion. With the compare gone each request writes (200 or 204) on a person who now lives in STY02, so
-/// <c>Assert.Equal(Conflict, status)</c> fails; the locked reads are kept, so every request still reaches and waits on the
-/// row lock and the wait condition holds (the fact fails on the status, not on the wait).
+/// sibling, the locked reads and the reversal's row lock kept." On the profile PUT it removes BOTH organisation clauses
+/// (the compare against the authorised organisation and the <c>auditUser</c> clause) and keeps the two null checks, the
+/// locked read and the sibling call: removing only the first would leave part (2) green through the second. Frozen list:
+/// exactly these seven facts (parts (1)-(7)), each tripping its 409 assertion. With the compare gone each request writes
+/// (200 or 204) on a person who now lives in STY02, so <c>Assert.Equal(Conflict, status)</c> fails; the locked reads are
+/// kept, so every request still reaches and waits on its lock and the wait condition holds (the fact fails on the status,
+/// not on the wait). Part (7) is red by construction when the authorised compare alone is removed, so it needs no
+/// mutation of its own; the <c>auditUser</c> clause alone stays unpinned.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -118,6 +122,9 @@ public sealed class OrganisationDriftGuardTests : IAsyncLifetime
     /// request waits: 409 and the exact sentence; nothing written.
     /// <para><b>Red conditions.</b> The PUT writes the new profile row for a person in another institution and answers
     /// 200: the status assertion fails. <b>M-45</b> trips it.</para>
+    /// <para><b>Which clause refuses.</b> Here the request is blocked on the users row, after the writer's own read of
+    /// the person (<c>auditUser</c>, read as STY01) and before the locked read, so either organisation clause gives its
+    /// 409: the compare against the authorised organisation, or the <c>auditUser</c> clause. Part (7) isolates the first.</para>
     /// </summary>
     [Fact]
     public async Task ProfilePut_OrganisationChangedUnderTheLock_409_NothingWritten()
@@ -235,6 +242,40 @@ public sealed class OrganisationDriftGuardTests : IAsyncLifetime
             ("e", person), ("s", (int)sequence)));
     }
 
+    /// <summary>
+    /// <b>F (CI)</b> (part (7); the adjudication's W4). The profile PUT of part (2) (same actor, person and body, fraction
+    /// 1.0 to 0.8 dated today, <c>If-Match: "v+1"</c>), but the side transaction holds the pay-inputs key
+    /// <c>pg_advisory_xact_lock(148, 1)</c> instead of the users row. Choreography: (1) the side transaction takes the key;
+    /// (2) the PUT is sent without being awaited; (3) the test polls <c>pg_locks</c> until exactly one backend waits on
+    /// <c>(148, 1)</c> and fails if the request completes first; (4) in the same side transaction the person is set to
+    /// <c>primary_org_id = 'STY02'</c>, <c>version = version + 1</c>, and the transaction commits (releasing the key);
+    /// (5) the PUT is awaited: 409, the exact sentence as the one member, <c>users</c> at STY02 and v+1, nothing written.
+    /// <para><b>Why only the authorised compare can refuse.</b> The scope check read the person as STY01 before the
+    /// request blocked. The request blocks on the key, which is the first statement of the transaction, so the writer's
+    /// own read of the person (<c>auditUser</c>) and the locked read both happen after the commit and both see STY02: they
+    /// agree. The <c>auditUser</c> clause therefore cannot fire; the compare of the locked row (STY02) with the
+    /// organisation the scope check authorised (STY01) is the only clause that can answer 409. That clause alone stays
+    /// unpinned in isolation (a double transfer between two adjacent reads cannot be forced deterministically); it can only
+    /// add a refusal.</para>
+    /// <para><b>Red conditions (on <c>ac47d9f1</c>).</b> No writer takes <c>(148, 1)</c> there, so the PUT never waits on
+    /// it and completes first: the wait assertion fails ("never blocked"), and the unguarded PUT would answer 200.
+    /// <b>M-45</b> (both organisation clauses removed on the profile PUT) lets the PUT proceed after the commit and answer
+    /// 200: <c>Assert.True(status == Conflict)</c> fails. No timing luck: the side transaction holds the key until the
+    /// wait is observed, so the request cannot finish first, and the move commits only after that.</para>
+    /// <para>Serial-collections premise (ruling 5.6): the key is system-wide, so the fact is safe only because the
+    /// Regression suite runs one test collection at a time (<c>xunit.runner.json:3</c>).</para>
+    /// </summary>
+    [Fact]
+    public async Task ProfilePut_OrganisationChangedWhileWaitingForThePayInputsLock_409_NothingWritten()
+    {
+        var person = await SeedPersonAsync(Cs, "STY01");
+        var rsp = await RaceAsync(person, next => Build(HttpMethod.Put, $"/api/admin/employee-profiles/{person}",
+            new { effectiveFrom = "2026-11-10", partTimeFraction = 0.8m, position = (string?)null, employmentCategory = (string?)null },
+            next), holdPayInputsLock: true);
+
+        await AssertDriftRefusedAsync(rsp.Response, person, rsp.VersionBefore, rsp.TrailBefore, withFailure: false);
+    }
+
     // ─── the choreography ────────────────────────────────────────────────────────
 
     private static HttpRequestMessage Build(HttpMethod method, string url, object? body, long ifMatchVersion)
@@ -253,7 +294,8 @@ public sealed class OrganisationDriftGuardTests : IAsyncLifetime
     /// waits on a lock, then moves the person to STY02 (version + 1) on the side connection and commits, and awaits the
     /// request. Fails when the request never reached a lock wait, or finished first.
     /// </summary>
-    private async Task<Raced> RaceAsync(string person, Func<long, HttpRequestMessage> build)
+    private async Task<Raced> RaceAsync(
+        string person, Func<long, HttpRequestMessage> build, bool holdPayInputsLock = false)
     {
         var version = await ScalarLongAsync(Cs, "SELECT version FROM users WHERE user_id = @u", ("u", person));
         var trailBefore = await SelfChangeRefusalTests.WriteTrailAsync(Cs, person);
@@ -262,15 +304,25 @@ public sealed class OrganisationDriftGuardTests : IAsyncLifetime
         await using var side = new NpgsqlConnection(Cs);
         await side.OpenAsync();
         await using var sideTx = await side.BeginTransactionAsync();
-        await using (var lockCmd = new NpgsqlCommand("SELECT 1 FROM users WHERE user_id = @u FOR UPDATE", side, sideTx))
+        if (holdPayInputsLock)
         {
+            // Part (7): the side transaction holds the system-wide pay-inputs key, the literal (148, 1), never a production
+            // constant, so a writer that does not take that key as its first statement cannot be made to wait here.
+            await using var keyCmd = new NpgsqlCommand("SELECT pg_advisory_xact_lock(148, 1)", side, sideTx);
+            await keyCmd.ExecuteScalarAsync();
+        }
+        else
+        {
+            await using var lockCmd = new NpgsqlCommand("SELECT 1 FROM users WHERE user_id = @u FOR UPDATE", side, sideTx);
             lockCmd.Parameters.AddWithValue("u", person);
             await lockCmd.ExecuteScalarAsync();
         }
 
         var requestTask = client.SendAsync(build(version + 1));
 
-        var observed = await WaitForLockWaiterAsync(requestTask);
+        var observed = holdPayInputsLock
+            ? await WaitForPayInputsLockWaiterAsync(requestTask)
+            : await WaitForLockWaiterAsync(requestTask);
         Assert.True(observed,
             "the request never blocked on a lock within the timeout (it did not reach the race window; request status: " +
             $"{requestTask.Status}).");
@@ -305,6 +357,22 @@ public sealed class OrganisationDriftGuardTests : IAsyncLifetime
         Assert.Equal(trailBefore, await SelfChangeRefusalTests.WriteTrailAsync(Cs, person));
         Assert.Equal(0L, await ScalarLongAsync(Cs,
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE employee_id = @e", ("e", person)));
+    }
+
+    /// <summary>Polls <c>pg_locks</c> until exactly one backend waits on the pay-inputs key <c>(148, 1)</c> (the two-integer
+    /// advisory key space; the lock facts' waiter query, as a literal); gives up when the request completes or after 30
+    /// seconds. False when it never did, so a request that never waited on that key, or two waiters, fails the fact.</summary>
+    private async Task<bool> WaitForPayInputsLockWaiterAsync(Task request)
+    {
+        return await Payroll.PriorMonthExportRaceTests.WaitUntilAsync(async () =>
+        {
+            await using var conn = new NpgsqlConnection(Cs);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = 148 AND objid = 1 AND objsubid = 2 AND NOT granted",
+                conn);
+            return await cmd.ExecuteScalarAsync() is 1L;
+        }, TimeSpan.FromSeconds(30), () => request.IsCompleted);
     }
 
     /// <summary>Polls <c>pg_stat_activity</c> until another backend waits on a lock (<c>wait_event_type = 'Lock'</c>);

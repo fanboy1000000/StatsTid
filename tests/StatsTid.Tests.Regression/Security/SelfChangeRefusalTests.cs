@@ -165,6 +165,137 @@ public sealed class SelfChangeRefusalTests : IClassFixture<DepartedSelfHostFixtu
             ("s", $"employee-profile-{self}")));
     }
 
+    // ─── (5) F: the top role is refused too (the actor is a GlobalAdmin whose employee id is the subject's) ───
+
+    /// <summary>
+    /// <b>F (CI)</b> (AC-C13h (5)). <see cref="UsersPut_OwnAgreementCodeChange_403_NothingWritten"/>'s request sent by
+    /// a GlobalAdmin (GLOBAL scope) whose employee id IS the seeded person's: 403, the P-26 reason, nothing written.
+    /// <para><b>Red conditions (on <c>ac47d9f1</c>).</b> No site asks whether the actor is the subject, so the edit
+    /// writes the new code and answers 200: <c>Assert.Equal(Forbidden, status)</c> fails. A refusal keyed on the actor's
+    /// role (LocalHR only) would also fail it: that is why the top role is the discriminating one.</para>
+    /// </summary>
+    [Fact]
+    public async Task UsersPut_OwnAgreementCodeChange_GlobalAdmin_403_NothingWritten()
+    {
+        using var host = NewHost();
+        var self = await SeedPersonAsync(Cs, "STY01");
+        var client = GlobalAdminClient(host, self);
+        var versionBefore = await UsersVersionAsync(self);
+        var trailBefore = await WriteTrailAsync(Cs, self);
+
+        var rsp = await PutUserAsync(client, Cs, self,
+            new { primaryOrgId = "STY01", agreementCode = "HK", effectiveFrom = "2026-11-10" });
+
+        await AssertSelfRefusedAsync(rsp);
+        Assert.Equal(versionBefore, await UsersVersionAsync(self));
+        Assert.Equal(trailBefore, await WriteTrailAsync(Cs, self));
+    }
+
+    /// <summary>
+    /// <b>F (CI)</b> (AC-C13h (5)). <see cref="AgreementCodeRoute_OwnCodeChange_403_NothingWritten"/>'s request sent by
+    /// the GlobalAdmin whose employee id is the subject's: 403, the P-26 reason, nothing written.
+    /// <para><b>Red conditions (on <c>ac47d9f1</c>).</b> The route writes the new row and answers 200:
+    /// <c>Assert.Equal(Forbidden, status)</c> fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task AgreementCodeRoute_OwnCodeChange_GlobalAdmin_403_NothingWritten()
+    {
+        using var host = NewHost();
+        var self = await SeedPersonAsync(Cs, "STY01");
+        var client = GlobalAdminClient(host, self);
+        var versionBefore = await UsersVersionAsync(self);
+        var trailBefore = await WriteTrailAsync(Cs, self);
+
+        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{self}/agreement-code")
+        {
+            Content = JsonContent.Create(new { agreementCode = "HK", effectiveFrom = "2026-11-10" }),
+        };
+        req.Headers.TryAddWithoutValidation("If-Match", $"\"{versionBefore}\"");
+        var rsp = await client.SendAsync(req);
+
+        await AssertSelfRefusedAsync(rsp);
+        Assert.Equal(versionBefore, await UsersVersionAsync(self));
+        Assert.Equal(trailBefore, await WriteTrailAsync(Cs, self));
+    }
+
+    /// <summary>
+    /// <b>F (CI)</b> (AC-C13h (5)). The fraction case of <see cref="ProfilePut_OwnPayInputChange_403_NothingWritten"/>
+    /// (1.0 to 0.8, dated today) sent by the GlobalAdmin whose employee id is the subject's: 403, the P-26 reason,
+    /// nothing written.
+    /// <para><b>Red conditions (on <c>ac47d9f1</c>).</b> The writer reports a change and the route answers 200:
+    /// <c>Assert.Equal(Forbidden, status)</c> fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task ProfilePut_OwnPayInputChange_GlobalAdmin_403_NothingWritten()
+    {
+        using var host = NewHost();
+        var self = await SeedPersonAsync(Cs, "STY01");
+        var client = GlobalAdminClient(host, self);
+        var versionBefore = await UsersVersionAsync(self);
+        var trailBefore = await WriteTrailAsync(Cs, self);
+
+        var rsp = await PutProfileAsync(client, self, new
+        {
+            effectiveFrom = "2026-11-10",
+            partTimeFraction = 0.8m,
+            position = (string?)null,
+            employmentCategory = (string?)null,
+        }, versionBefore);
+
+        await AssertSelfRefusedAsync(rsp);
+        Assert.Equal(versionBefore, await UsersVersionAsync(self));
+        Assert.Equal(trailBefore, await WriteTrailAsync(Cs, self));
+    }
+
+    /// <summary>
+    /// <b>F (CI)</b> (AC-C13h (5)). <see cref="ProfileClose_OwnProfile_403_NothingWritten"/>'s DELETE (valid If-Match)
+    /// sent by the GlobalAdmin whose employee id is the subject's: 403, the P-26 reason, nothing written.
+    /// <para><b>Red conditions (on <c>ac47d9f1</c>).</b> The close runs and answers 204:
+    /// <c>Assert.Equal(Forbidden, status)</c> fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task ProfileClose_OwnProfile_GlobalAdmin_403_NothingWritten()
+    {
+        using var host = NewHost();
+        var self = await SeedPersonAsync(Cs, "STY01");
+        var client = GlobalAdminClient(host, self);
+        var versionBefore = await UsersVersionAsync(self);
+        var trailBefore = await WriteTrailAsync(Cs, self);
+
+        var req = new HttpRequestMessage(HttpMethod.Delete, $"/api/admin/employee-profiles/{self}");
+        req.Headers.TryAddWithoutValidation("If-Match", $"\"{versionBefore}\"");
+        var rsp = await client.SendAsync(req);
+
+        await AssertSelfRefusedAsync(rsp);
+        Assert.Equal(versionBefore, await UsersVersionAsync(self));
+        Assert.Equal(trailBefore, await WriteTrailAsync(Cs, self));
+    }
+
+    // ─── (6) F: the self close is refused before the If-Match is read (accepted deviation 6) ───
+
+    /// <summary>
+    /// <b>F (CI)</b> (AC-C13h (6)). The LocalHR self sends the DELETE of their own profile with NO If-Match header: 403,
+    /// the P-26 reason, nothing written, and not 428 (precondition required).
+    /// <para><b>Red conditions (on <c>ac47d9f1</c>).</b> The close parses the If-Match before anything else and answers
+    /// 428: <c>Assert.True(status == Forbidden)</c> fails with 428. It also fails if a later edit moves the self check
+    /// into the transaction, behind the If-Match parse.</para>
+    /// </summary>
+    [Fact]
+    public async Task ProfileClose_OwnProfile_NoIfMatch_403_Not428()
+    {
+        using var host = NewHost();
+        var self = await SeedPersonAsync(Cs, "STY01");
+        var client = LocalHrClient(host, self, "STY01");
+        var versionBefore = await UsersVersionAsync(self);
+        var trailBefore = await WriteTrailAsync(Cs, self);
+
+        var rsp = await client.SendAsync(new HttpRequestMessage(HttpMethod.Delete, $"/api/admin/employee-profiles/{self}"));
+
+        await AssertSelfRefusedAsync(rsp);
+        Assert.Equal(versionBefore, await UsersVersionAsync(self));
+        Assert.Equal(trailBefore, await WriteTrailAsync(Cs, self));
+    }
+
     // ─── (3) R: today each answers 200, and must keep doing so ───────────────────
 
     /// <summary>
