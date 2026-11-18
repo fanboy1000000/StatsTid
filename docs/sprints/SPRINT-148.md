@@ -1928,3 +1928,21 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
     - six more `UnitEndpoints.cs` transactions open on the default isolation with the `unit-org-` advisory first, the same PAT-015 class as W22, so the behaviour is neutral;
     - stale `OvertimeEndpoints.cs` line citations in `AgreementCodeHttpDeterminismTests.cs`.
 - **GATE green after the TASK-14845 merge** (`53c2793d`, paperwork `30d382d4`): `dotnet build StatsTid.sln -m:2` has 0 errors and 125 warnings, with 113 distinct CA2100 (a full rebuild; unchanged). Unit 1757, DemoSeed 170, Regression `Category!=Docker` 140. These suites ran one at a time, in the foreground. The Docker facts (AC-C13o, AC-C13p, AC-C13q, AC-C13s and the re-pointed compensate race) are CI-pending until CI-W4, and M-46, M-47 and M-48 until CI-M4a. `check_docs.py` and `check_openapi_convention.py` were not run locally (no Python on this machine); CI runs them.
+
+**CI-W4** (run 44352425811, draft PR #63, at `c17db07c`, headSha confirmed): **green, all seven jobs** (started 2026-11-18 16:53 UTC, a Wednesday; Regression finished 19:01 UTC).
+- **What it shows:** wave 4's second half (TASK-14819, TASK-14820, the TASK-14821 stack and TASK-14845, with QUAL-257) ran its Docker facts for the first time, and all passed. Read from the trx files by name, not from the job colour.
+- **Tests:** Unit 1757, DemoSeed 170, Regression **2691 of 2691**, Docker included (CI-W4a had 2597). Nothing failed, nothing skipped.
+- **Facts seen passing, by name:**
+  - AC-C13o and AC-C13p: `OrganisationDriftGuardRoutesTests`, 22 of 22.
+  - AC-C13q: `SelfEntitlementInputRefusalTests`, 6 of 6.
+  - AC-C13s: `OvertimePreApprovalDecisionRaceTests.TwoConcurrentDecisions_OneLands_TheOtherIs409_OneEvent`, and the re-pointed `OvertimeCompensateRaceTests` fact.
+  - AC-C13n (1)–(7): `OrganisationDriftGuardTests`, 7 of 7. AC-C13m (the user edit): `TransferRaceTests`, 2 of 2.
+  - The earlier wave-4 lock and transfer classes: `PayInputsLockCensusTests` 10, `SelfChangeRefusalTests` 14, `EmploymentWindowHandOffTests` 12, `TransferWriteTests` 9, `SelfTransferTests` 4, `TransferHandOffTests` 2, `UserOrganisationBackfillSeederTests` 2, `ProfileCloseHandOffTests`, `EmploymentProfileResolverOrganisationTests`, `CreatedPersonBackdatedOrganisationTests`.
+  - **Both PIN-1 worlds** (`DemoPayLinesPinTests`, 2), so pay is unchanged by wave 4.
+- **Watch items (the TASK-14845 Step 5a rulings):**
+  - **R6, no hang:** the slowest regression fact took 7.6 s (a PIN-1 world), and no fact ran over 20 s. Every drift and self-refusal fact took under 0.6 s. So the on-behalf success facts neither hung nor deadlocked. This is one run's evidence; it lowers the unproven lock interaction's likelihood but does not prove its absence (SEC-062 note (e) stays).
+  - **R7, 7 of 7:** all seven `OrganisationDriftGuardTests` facts executed and passed. The local count of 2 was a local-run artefact, not missing facts.
+  - **R8 and C2-R5, green on repeat:** Choreography B's eight tier-1 facts ("…BeforeTheTreeLock…") and AC-C13s are green on this run. The repeat is CI-M4b, whose mutations do not touch them.
+- **Ruling 1.9 settled:** this run's Copenhagen date was Wednesday 18 November, so it is the owed non-Monday Regression run. Every real-clock fact passed.
+- **The other jobs:** smoke, E2E, the frontend build, docs, lizard and gitleaks are green.
+- **Status change:** wave 4's second-half Docker facts move from "CI-pending" to "CI-verified". That covers AC-C13o, -p, -q and -s on SEC-062, SEC-065 and QUAL-257; their mutations M-46, M-47 and M-48 stay CI-pending until CI-M4a. PR #63 is closed unmerged, and `ci/s148-w4` is deleted.
