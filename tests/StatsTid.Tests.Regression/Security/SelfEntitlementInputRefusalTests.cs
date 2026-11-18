@@ -22,7 +22,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// <b>Fixture.</b> The Backend host with the clock fixed at Tuesday 10 November 2026 (<see cref="Clock"/>), the shape of
 /// <see cref="SelfChangeRefusalTests"/> (one container and one booted host for the class, each fact seeding its own person in
 /// STY01). The actor's employee id IS the subject's: a LocalHR scoped to STY01, or a GlobalAdmin with GLOBAL scope. The 403 body
-/// is contract: <c>error</c> "Access denied" and <c>reason</c> the literal <see cref="SelfReason"/>, never the production constant.
+/// is contract: exactly the members <c>error</c> ("Access denied") and <c>reason</c> (the literal <see cref="SelfReason"/>, never the production constant).
 /// "Nothing written" is <see cref="TrailAsync"/> before and after plus <c>users.version</c>. The preconditions are valid on purpose
 /// (the birth-date facts send the person's real version, the eligibility facts <c>If-None-Match: *</c> on a person with no row), so
 /// the red on the code without the self refusal is the 200 and not a 412 or a 409. Docker-gated: <b>CI-pending</b>. F (CI) facts: no
@@ -207,6 +207,9 @@ public sealed class SelfEntitlementInputRefusalTests : IClassFixture<DepartedSel
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden, $"expected 403, got {(int)rsp.StatusCode}: {raw}");
         using var doc = JsonDocument.Parse(raw);
+        // Exactly these two members: a body that gained one (for example a date or an organisation id) must fail.
+        Assert.Equal(new[] { "error", "reason" },
+            doc.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
         Assert.Equal("Access denied", doc.RootElement.GetProperty("error").GetString());
         Assert.Equal(SelfReason, doc.RootElement.GetProperty("reason").GetString());
 

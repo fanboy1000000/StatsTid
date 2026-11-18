@@ -31,9 +31,14 @@ namespace StatsTid.Tests.Regression.Security;
 /// connection takes the person's <c>users</c> row <c>FOR UPDATE</c> in an open transaction. (2) The request is sent
 /// without being awaited. (3) The test polls <c>pg_stat_activity</c> until another backend waits on a lock in a statement
 /// that locks a <c>users</c> row (<c>FROM users ... FOR UPDATE</c>); it gives up when the request completes. When the
-/// request completes before a waiter is seen, the response is asserted first (409 expected) and the fact fails on it: on
-/// the code without the guard a tier-3 request never blocks, so that is the red; under the mutation the request blocks
-/// on the held row, so the red there is the same assertion after the wait. (4) The side connection sets
+/// request completes before a waiter is seen, the response is asserted first (409 expected) and the fact fails on it. On
+/// the code without the guard most tier-3 requests take no users-row lock and complete, so that is their red (the
+/// success status in the failure message). W5, W8 and W9 are different: each inserts a row with a foreign key to
+/// <c>users</c>, and that insert needs a key-share lock on the users row the test holds <c>FOR UPDATE</c>, so on
+/// <c>ba0a054e</c> they DO block, but in an insert and never in a <c>FROM users ... FOR UPDATE</c> statement; the probe
+/// never matches and they fail on the bounded 30-second observation with the request still pending (the failed
+/// observation releases the held lock, awaits the request with a bound and reports its status). Under their mutation
+/// (M-47; W5, W8 and W9 are AC-C13p parts) the locked read stays, so the request IS observed in it and fails on the 409 assertion with the success status. (4) The side connection sets
 /// <c>primary_org_id = 'STY02'</c> and <c>version = version + 1</c> and commits. (5) The request is awaited.
 /// </para>
 ///
@@ -294,7 +299,7 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
 
     /// <summary>
     /// <b>F (CI)</b> (AC-C13o (8), W19; choreography A). Compensate 1 hour, PAYOUT, for 2026 from a balance row seeded by SQL
-    /// (accumulated 6, nothing paid out; no production write feeds the balance today, <c>OvertimeEndpoints.cs:563-565</c>):
+    /// (accumulated 6, nothing paid out; no production write feeds the balance today, see the "defence in depth" remark in the compensate handler of <c>OvertimeEndpoints.cs</c>):
     /// 409 and the exact sentence; the balance row unchanged.
     /// <para><b>Waits in</b> <c>users ... FOR UPDATE</c> (first statement of the transaction, before the guarded updates).</para>
     /// <para><b>Red conditions.</b> The request locks no users row today and pays the hour out (200): the early-completion
@@ -359,9 +364,11 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// exact sentence; no agreement row. Fixture: the body of <c>VacationSettlementEndpointTests.PostTransferAgreementAsync</c>
     /// at this sprint's clock.
     /// <para><b>Waits in</b> <c>users ... FOR UPDATE</c> (the locked read directly after the <c>employee-</c> advisory).</para>
-    /// <para><b>Red conditions.</b> No users row is locked today, so the request never blocks and records the agreement (201):
-    /// the early-completion path fails on the 409. <b>M-47</b> trips the status after the wait; success status under the
-    /// mutation: 201.</para>
+    /// <para><b>Red conditions (on <c>ba0a054e</c>).</b> The request locks no users row, but its agreement insert carries a
+    /// foreign key to <c>users</c>: it waits on the held row inside that insert, never in a <c>FROM users ... FOR UPDATE</c>
+    /// statement, so the fact fails on the 30-second observation ("no backend was seen waiting ... still pending"), not on the
+    /// 409. <b>M-47</b> (the compare deleted, the locked read kept) is observed in the locked read and fails on
+    /// <c>Assert.True(status == Conflict)</c> with the success status 201.</para>
     /// </summary>
     [Fact]
     public async Task TransferAgreementPost_OrganisationChangedUnderTheLock_409_NothingWritten()
@@ -430,9 +437,11 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// <c>TerminationPayoutRequestEndpointTests.SeedSettledTerminationAsync</c> does; sequence 1, <c>If-Match "1"</c>, request date
     /// 1 March 2026): 409 and the exact sentence; no request row.
     /// <para><b>Waits in</b> <c>users ... FOR UPDATE</c> (the existing in-lock read made the terminated-inclusive locked overload).</para>
-    /// <para><b>Red conditions.</b> The in-lock read is a plain read today, so the request never blocks and records the request
-    /// (201): the early-completion path fails on the 409. <b>M-47</b> trips the status after the wait; success status under the
-    /// mutation: 201. <b>(unproven)</b> that the TERMINATION settle drive yields a settled row at this fact's clock; a settle that
+    /// <para><b>Red conditions (on <c>ba0a054e</c>).</b> The in-lock read is a plain read, but the request inserts a row with a
+    /// foreign key to <c>users</c>: it waits on the held row inside that insert, never in a <c>FROM users ... FOR UPDATE</c>
+    /// statement, so the fact fails on the 30-second observation with the request still pending, not on the 409. <b>M-47</b>
+    /// (the compare deleted, the locked read kept) is observed in the locked read and fails on the 409 assertion with the
+    /// success status 201. <b>(unproven)</b> that the TERMINATION settle drive yields a settled row at this fact's clock; a settle that
     /// does not fails the fixture's own assertion, not a pin.</para>
     /// </summary>
     [Fact]
@@ -468,9 +477,11 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// <b>F (CI)</b> (AC-C13p (5), W9; choreography A). The eligibility PUT: CHILD_SICK eligible, <c>If-None-Match: *</c>: 409 and
     /// the exact sentence; no eligibility row and no eligibility audit row.
     /// <para><b>Waits in</b> <c>users ... FOR UPDATE</c> (the locked read as the transaction's first statement).</para>
-    /// <para><b>Red conditions.</b> No users row is locked today, so the request never blocks and creates the row (200): the
-    /// early-completion path fails on the 409. <b>M-47</b> trips the status after the wait; success status under the mutation:
-    /// 200.</para>
+    /// <para><b>Red conditions (on <c>ba0a054e</c>).</b> The request locks no users row, but the eligibility row it inserts carries
+    /// a foreign key to <c>users</c>: it waits on the held row inside that insert, never in a <c>FROM users ... FOR UPDATE</c>
+    /// statement, so the fact fails on the 30-second observation with the request still pending, not on the 409. <b>M-47</b>
+    /// (the compare deleted, the locked read kept) is observed in the locked read and fails on the 409 assertion with the
+    /// success status 200.</para>
     /// </summary>
     [Fact]
     public async Task EligibilityPut_OrganisationChangedUnderTheLock_409_NothingWritten()
@@ -793,26 +804,27 @@ public sealed class OrganisationDriftGuardRoutesTests : IClassFixture<DepartedSe
     /// <summary>
     /// When the request completed before a waiter was seen it never reached the race window: release the side transaction, assert the
     /// response first (409 expected; on the code without the guard it is the write's success status) and fail on it; a timeout with
-    /// the request still pending fails naming the statement it should have waited in. The same assertion is red under the mutation.
+    /// the request still pending releases the lock, awaits the request with a bound and reports its status, naming the statement it
+    /// should have waited in. The same assertion is red under the mutation.
     /// </summary>
     private static async Task FailIfNotWaitingAsync(bool observed, Task<HttpResponseMessage> request, NpgsqlTransaction sideTx, string statement)
     {
-        if (observed)
-        {
-            Assert.False(request.IsCompleted, "the request finished before the side transaction committed.");
+        if (observed && !request.IsCompleted)
             return;
-        }
 
+        // The race window was not reached: never leave the request in flight. Release the held lock, await the request
+        // with a bound and put its status into the failure message.
         await sideTx.RollbackAsync();
-        if (request.IsCompleted)
-        {
-            var early = await request;
-            var raw = await early.Content.ReadAsStringAsync();
-            Assert.True(early.StatusCode == HttpStatusCode.Conflict,
-                $"expected 409, got {(int)early.StatusCode}: {raw} (the request completed without waiting in {statement})");
-            Assert.Fail($"the request completed ({(int)early.StatusCode}) before any backend was seen waiting in {statement}; it never reached the race window.");
-        }
-        Assert.Fail($"no backend was seen waiting in {statement} within the timeout and the request is still pending.");
+        var finished = await Task.WhenAny(request, Task.Delay(TimeSpan.FromSeconds(30))) == request;
+        if (!finished)
+            Assert.Fail($"no backend was seen waiting in {statement} within the timeout; the lock was released and the request was still pending after a further 30 seconds.");
+
+        var response = await request;
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.Conflict,
+            $"expected 409, got {(int)response.StatusCode}: {raw} (the request did not wait in {statement} while the lock was held; " +
+            (observed ? "it finished before the side transaction committed)" : "it was not seen waiting there, and finished once the lock was released)"));
+        Assert.Fail($"the request answered {(int)response.StatusCode} without being held in {statement}; it never reached the race window.");
     }
 
     private async Task AssertDriftRefusedAsync(Raced r)
