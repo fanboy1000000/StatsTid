@@ -419,7 +419,7 @@ public sealed class UserRepository
     /// <c>BackdateWorklistEndpoints</c> (<c>POST /api/hr/backdate-worklist/{worklistId}/resolve</c>).
     /// Four older callers complete the list: <c>AdminEndpoints</c>
     /// (<c>PUT /api/admin/users/{userId}/agreement-code</c>, the If-Match re-read after the pay-inputs lock);
-    /// <c>SettlementCloseService</c> (the leaver settlement close's in-lock re-read, S71);
+    /// <c>SettlementCloseService</c> (the Step-A leaver deactivation flip's in-lock re-read, S70);
     /// <c>SettlementReversalService</c> (the reversal's users row in every mode, then the
     /// organisation-drift guard, S148 TASK-14821); and <c>EmploymentEndDateLifecycleWriter.ApplyAsync</c>
     /// (the end-date endpoint's canonical re-read, the TASK-7002 case above).
