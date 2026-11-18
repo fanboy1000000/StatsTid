@@ -444,7 +444,12 @@ public static class OvertimeEndpoints
             // corresponding event in the canonical event store.
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the QUAL-257 guard below depends on it. Under READ
+            // COMMITTED a second decision waits on the employee's users row, then its UPDATE reads the
+            // pre-approval row as committed, finds it no longer PENDING, changes 0 rows and answers the
+            // clean 409. Under REPEATABLE READ or SERIALIZABLE the same UPDATE would raise a
+            // serialization failure (a 500) instead. The default overload resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // SEC-062 — the organisation-drift guard, first in the transaction: the employee's row
@@ -562,7 +567,12 @@ public static class OvertimeEndpoints
             // approve handler above for rationale; symmetric shape with the rejection event.
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the QUAL-257 guard below depends on it, as on approve.
+            // Under READ COMMITTED a second decision waits on the employee's users row, then its UPDATE
+            // reads the pre-approval row as committed, finds it no longer PENDING, changes 0 rows and
+            // answers the clean 409; under REPEATABLE READ or SERIALIZABLE the same UPDATE would raise a
+            // serialization failure (a 500) instead. The default overload resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 // SEC-062 — the organisation-drift guard, first in the transaction (as on approve).
