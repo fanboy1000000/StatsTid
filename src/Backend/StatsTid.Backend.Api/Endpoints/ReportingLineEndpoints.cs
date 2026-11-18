@@ -90,6 +90,8 @@ public static class ReportingLineEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 — wrap the whole body in the bounded drift-retry loop: if AcquireTreeLockForEmployeeAsync
@@ -105,7 +107,10 @@ public static class ReportingLineEndpoints
             //    must itself be HR-or-above; a below-HR scope covering the employee's styrelse cannot
             //    satisfy this writer gate). Org-scope CONTAINMENT is unchanged — an HR actor stays
             //    bounded to its own org subtree (the floor only drops LocalAdmin → LocalHR).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, StatsTidRoles.LocalHR, ct);
+            //    SEC-062: the sibling also returns the organisation it authorised, which the
+            //    organisation-drift guard compares with the tree-locked organisation.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, request.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -151,6 +156,15 @@ public static class ReportingLineEndpoints
                     // paths on the same employee genuinely mutually exclude even under a simultaneous
                     // transfer. A transaction parked on the advisory holds NO user rows.
                     var employeeTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, request.EmployeeId, ct);
+
+                    // SEC-062 — the organisation-drift guard: the root the acquire returns is the
+                    // employee's organisation, stable while we hold the advisory (a transfer takes it
+                    // too). It must be the one the scope check authorised (a null authorisation fails
+                    // closed), or a transfer committed before the acquire: roll back, 409.
+                    if (authorisedOrgId is null
+                        || !string.Equals(employeeTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "POST /api/admin/reporting-lines", ct);
 
                     // Step 2: validate same-tree + manager-active IN-TX, UNDER the held advisory, and
                     // PIN BOTH the employee + manager `users` rows FOR UPDATE in id-order (B1 — so
@@ -307,6 +321,8 @@ public static class ReportingLineEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 — bounded drift-retry wrapper (see Endpoint 1): a concurrent transfer that drifts the
@@ -317,7 +333,10 @@ public static class ReportingLineEndpoints
 
             // 1. Validate scope. S91 TASK-9102: tree-page surface opened to LocalHR — HROrAbove
             //    policy → LocalHR floor. Org-scope containment unchanged (HR stays org-bounded).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            //    SEC-062: the sibling also returns the organisation it authorised, which the
+            //    organisation-drift guard compares with the tree-locked organisation.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -350,6 +369,15 @@ public static class ReportingLineEndpoints
                     //    census. This DELETE pins NO user row (it inserts no edge, so B1's
                     //    cross-tree-edge race does not apply).
                     var deletedTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
+
+                    // SEC-062 — the organisation-drift guard: the acquired root (the person's
+                    // organisation, stable under the advisory) must be the one the scope check
+                    // authorised (a null authorisation fails closed), or a transfer committed before
+                    // the acquire: roll back, 409, nothing written.
+                    if (authorisedOrgId is null
+                        || !string.Equals(deletedTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "DELETE /api/admin/reporting-lines/{employeeId}", ct);
 
                     // S140 / TASK-14001 — `closeDate` omitted DELIBERATELY: this operation has no
                     // other business date of its own, so the repository's injected-TimeProvider
@@ -604,6 +632,8 @@ public static class ReportingLineEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 — bounded drift-retry wrapper (see Endpoint 1): a concurrent transfer that drifts the
@@ -612,8 +642,11 @@ public static class ReportingLineEndpoints
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
+            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor. SEC-062: the
+            //    sibling also returns the organisation it authorised, which the organisation-drift
+            //    guard compares with the tree-locked organisation.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -649,6 +682,14 @@ public static class ReportingLineEndpoints
                     //   (TreeRootDriftException → TreeRootDriftRetry.RunAsync), so the held key is non-stale
                     //   (S74-7403 residual closed). Parked → no user rows.
                     var employeeTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
+
+                    // SEC-062 — the organisation-drift guard (as on the PRIMARY assign): the acquired
+                    // root must be the organisation the scope check authorised (a null authorisation
+                    // fails closed), or a transfer committed before the acquire: roll back, 409.
+                    if (authorisedOrgId is null
+                        || !string.Equals(employeeTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "POST /api/admin/reporting-lines/{employeeId}/acting", ct);
 
                     // Step 2: same-tree + manager-active in-tx UNDER the lock; pins BOTH user rows
                     // FOR UPDATE in id-order (B1). Returns the authoritative common tree root.
@@ -798,13 +839,21 @@ public static class ReportingLineEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
+        // S78 R9 — bounded drift-retry wrapper (see Endpoint 1), the PRIMARY DELETE's shape: a concurrent
+        // transfer that drifts the employee's tree key under the advisory rolls back + retries on a fresh tx.
+        await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
 
-            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor.
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalAdmin, ct);
+            // 1. Validate scope. S76 B1: LocalAdminOrAbove policy → LocalAdmin floor. SEC-062: the
+            //    sibling also returns the organisation it authorised, which the organisation-drift
+            //    guard compares with the tree-locked organisation.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalAdmin, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -823,6 +872,23 @@ public static class ReportingLineEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // SEC-062 — the employee's tree advisory FIRST, via the drift-guarded acquire, as on
+                    // the PRIMARY DELETE (the file's global order: tree advisory → slot FOR UPDATE). A
+                    // transfer takes the same advisory, so the organisation it returns is stable until
+                    // we commit. No users-row lock is taken: one would come before the slot lock here,
+                    // the reverse of remove-person's order (slot, then the users row). The acquire's
+                    // missing or inactive employee reaches the InvalidOperationException 404 below; a
+                    // drift retries.
+                    var actingTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
+
+                    // The organisation-drift guard: the acquired root must be the organisation the scope
+                    // check authorised (a null authorisation fails closed), or a transfer committed
+                    // before the acquire: roll back, 409, nothing written.
+                    if (authorisedOrgId is null
+                        || !string.Equals(actingTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "DELETE /api/admin/reporting-lines/{employeeId}/acting", ct);
+
                     // S140 / TASK-14001 — `closeDate` omitted DELIBERATELY (see the PRIMARY DELETE
                     // above): no other business date exists in this operation, so the repository's
                     // injected-TimeProvider fallback is the seam.
@@ -887,7 +953,7 @@ public static class ReportingLineEndpoints
 
             context.Response.Headers.ETag = $"\"{closed.Version}\"";
             return Results.NoContent();
-        }).RequireAuthorization("LocalAdminOrAbove")
+        })).RequireAuthorization("LocalAdminOrAbove") // S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
         // S115 / TASK-11501 — true 204: the declared-204-only statement (S112 convention amendment).
         .Produces(StatusCodes.Status204NoContent);
 
@@ -1317,7 +1383,10 @@ public static class ReportingLineEndpoints
             //    surface opened to LocalHR — HROrAbove policy → LocalHR floor. Org-scope containment
             //    unchanged (HR stays bounded to its own org subtree; the replacement-approver edges
             //    below remain same-tree-validated, so reassignment cannot escape the actor's scope).
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, StatsTidRoles.LocalHR, ct);
+            //    SEC-062: the sibling also returns the organisation it authorised, which the
+            //    organisation-drift guard compares with the tree-locked organisation.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -1399,6 +1468,15 @@ public static class ReportingLineEndpoints
                     //    CURRENT tree root (no stale key). We then iterate the AUTHORITATIVE in-tx edge
                     //    set (not the preflight snapshot).
                     var removedTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
+
+                    // SEC-062 — the organisation-drift guard, before the in-tx census: the acquired root
+                    // (the removed person's organisation, stable under the advisory) must be the one the
+                    // scope check authorised (a null authorisation fails closed), or a transfer committed
+                    // before the acquire: roll back, 409, nothing written (the person stays active).
+                    if (authorisedOrgId is null
+                        || !string.Equals(removedTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "POST /api/admin/reporting-lines/{employeeId}/remove", ct);
 
                     var incomingEdgesInTx = await repo.GetDirectReportsAsync(conn, tx, employeeId, ct);
                     var incomingPrimaryInTx = incomingEdgesInTx.Where(e => e.Relationship == "PRIMARY").ToList();

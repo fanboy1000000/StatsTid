@@ -4,8 +4,8 @@ namespace StatsTid.Backend.Api.Endpoints.Helpers;
 
 /// <summary>
 /// S78 R9 — the BOUNDED drift-retry wrapper shared by every employee-current-root tree-keyed mutator:
-/// in <c>ReportingLineEndpoints</c> the reporting-line assign / remove / acting create, the manager
-/// removal, the delegate create / delete and the admin-vikar create / delete; the cross-styrelse
+/// in <c>ReportingLineEndpoints</c> the reporting-line assign / remove / acting create / acting delete,
+/// the manager removal, the delegate create / delete and the admin-vikar create / delete; the cross-styrelse
 /// transfer <c>PUT /api/admin/users/{userId}</c> in <c>AdminEndpoints</c>; and, since S78 R1, the
 /// approval approve / reject / reopen in <c>ApprovalEndpoints</c>.
 ///

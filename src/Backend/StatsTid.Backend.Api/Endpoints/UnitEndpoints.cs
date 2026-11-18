@@ -880,7 +880,11 @@ public static class UnitEndpoints
             long newVersion;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the first statement is the blocking `unit-org-` advisory,
+            // and the reads after it (the user's row FOR UPDATE, which the 412 and the organisation-drift
+            // guard compare, and the target unit) must see the lock winner's commit. The default overload
+            // resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
                 await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, user.PrimaryOrgId, ct);
@@ -896,6 +900,14 @@ public static class UnitEndpoints
                     await tx.RollbackAsync(ct);
                     return PreconditionFailed(expectedVersion, locked.Version);
                 }
+
+                // SEC-062 — the organisation-drift guard, a concurrency precondition like the 412 above.
+                // The organisation check and the `unit-org-` lock were decided on the pre-transaction read
+                // (`user`); the locked row must still be in that organisation, or a transfer committed in
+                // between and the actor was never checked for the person's new organisation: roll back, 409.
+                if (!string.Equals(locked.PrimaryOrgId, user.PrimaryOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/admin/users/{userId}/unit", ct);
 
                 // Validate the target unit (null = home at the Organisation): ACTIVE + SAME Organisation.
                 if (request.UnitId is Guid targetUnitId)

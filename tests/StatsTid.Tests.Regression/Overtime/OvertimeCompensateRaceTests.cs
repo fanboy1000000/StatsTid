@@ -15,16 +15,19 @@ namespace StatsTid.Tests.Regression.Overtime;
 /// owner's promise: that one answers 200 and the other 409 "nothing was applied", and the audit trail (the outbox) holds
 /// ONE "compensation applied" event, not two.</para>
 ///
-/// <para><b>How the race is formed (no sleep decides anything).</b> The compensate handler takes no advisory lock; the
-/// only place two compensations wait for each other is the row lock on the employee's <c>overtime_balances</c> row, at the
-/// guarded <c>UPDATE overtime_balances</c>. So a third connection runs <c>SELECT … FOR UPDATE</c> on that row and keeps
-/// its transaction open (the held-lock pattern of <c>FlexLedgerRaceTests</c>, with a row lock in place of the advisory
-/// key; ruling B10). The route's pre-check is a plain read on its own connection and is not blocked by a row lock, so each
-/// request passes it (6 remaining) and then waits at the update. The test waits on the CONDITION "a backend is waiting on
-/// a lock while running <c>UPDATE overtime_balances</c>" (<c>pg_stat_activity</c>; the bounded
-/// <c>PriorMonthExportRaceTests.WaitUntilAsync</c>), starts the second request only once the first is observed waiting,
-/// and releases only when both are. A request that is never observed waiting fails the observation step, not the final
-/// assertions, so the fact cannot pass vacuously.</para>
+/// <para><b>How the race is formed (no sleep decides anything).</b> The compensate handler takes no advisory lock. Its first
+/// lock, as the first statement of its transaction, is the employee's <c>users</c> row <c>FOR UPDATE</c> (SEC-062,
+/// TASK-14845, W19: the organisation-drift guard), and its next lock is the row lock on the employee's
+/// <c>overtime_balances</c> row at the guarded <c>UPDATE overtime_balances</c>. A third connection runs
+/// <c>SELECT … FOR UPDATE</c> on the balance row and keeps its transaction open (the held-lock pattern of
+/// <c>FlexLedgerRaceTests</c>, with a row lock in place of the advisory key; ruling B10). The route's pre-check is a plain
+/// read on its own connection and is not blocked by a row lock, so each request passes it (6 remaining). Request A takes
+/// the users row and waits at the update behind the held balance row; request B waits behind A at the users row, so it
+/// never reaches the update until A has finished. The test waits on bounded CONDITIONS (<c>pg_stat_activity</c>; the
+/// bounded <c>PriorMonthExportRaceTests.WaitUntilAsync</c>): first "a backend waits on a lock while running
+/// <c>UPDATE overtime_balances</c>" (A), then, with A still there, "a backend waits on a lock while running a
+/// <c>FROM users … FOR UPDATE</c> statement" (B), and releases only when both are seen. A request that is never observed
+/// waiting fails the observation step, not the final assertions, so the fact cannot pass vacuously.</para>
 ///
 /// <para><b>Which branch it proves.</b> Two <c>PAYOUT</c> requests: the request queued second reads
 /// <c>AdjustPaidOutAsync(...).Success</c> = false. The <c>AFSPADSERING</c> branch's own <c>Success</c> read is not run
@@ -105,6 +108,39 @@ public sealed class OvertimeCompensateRaceTests : IClassFixture<OvertimeSelfDeci
         return Convert.ToInt32(await cmd.ExecuteScalarAsync()) >= count;
     }
 
+    /// <summary>True when at least one backend waits on a lock while running a statement that reads the employee's
+    /// <c>users</c> row <c>FOR UPDATE</c>: the second request, queued behind the first at the route's first lock.</summary>
+    private async Task<bool> UsersRowWaiterAsync()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND pid <> pg_backend_pid()
+              AND wait_event_type = 'Lock'
+              AND query ILIKE '%FROM users%FOR UPDATE%'
+            """, conn);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync()) >= 1;
+    }
+
+    /// <summary>The second observation: A still waits at the guarded update AND B waits at the users row (both, in one
+    /// bounded condition), and B has not finished.</summary>
+    private async Task AssertSecondQueuedBehindFirstAsync(Task<(HttpStatusCode Status, string Json)> requestB)
+    {
+        var observed = await PriorMonthExportRaceTests.WaitUntilAsync(
+            async () => await UpdateWaitersAtLeastAsync(1) && await UsersRowWaiterAsync(),
+            TimeSpan.FromSeconds(30), () => requestB.IsCompleted);
+        var early = requestB.IsCompletedSuccessfully
+            ? $" The request already answered {(int)requestB.Result.Status}: {requestB.Result.Json}"
+            : string.Empty;
+        Assert.True(observed,
+            "compensation B was never observed waiting at the employee's users row while A waits at the guarded balance update " +
+            $"(request status: {requestB.Status}).{early}{PriorMonthExportRaceTests.DescribeFault(requestB)}");
+        Assert.False(requestB.IsCompleted, "compensation B finished while the balance row lock was still held.");
+    }
+
     private async Task AssertWaitingAsync(int waiters, Task<(HttpStatusCode Status, string Json)> request, string who)
     {
         var observed = await PriorMonthExportRaceTests.WaitUntilAsync(
@@ -166,8 +202,8 @@ public sealed class OvertimeCompensateRaceTests : IClassFixture<OvertimeSelfDeci
 
     /// <summary>
     /// <b>AC-S0-9a (kind F, Docker; REF R-9).</b> A balance with 6 hours remaining (accumulated 6, paid_out 0,
-    /// afspadsering_used 0, seeded by SQL) and two concurrent PAYOUT compensations of 6, each held at the guarded update
-    /// past the pre-check: exactly one answers 200 and the other 409 (as a set; which one wins is the lock queue's
+    /// afspadsering_used 0, seeded by SQL) and two concurrent PAYOUT compensations of 6, both past the pre-check, A held at the
+    /// guarded update and B queued behind A at the employee's users row: exactly one answers 200 and the other 409 (as a set; which one wins is the lock queue's
     /// business), the balance moves once (paid_out 6, afspadsering_used 0), and exactly one
     /// <c>OvertimeCompensationApplied</c> sits in <c>outbox_events</c> for the stream, none for the loser.
     ///
@@ -177,7 +213,17 @@ public sealed class OvertimeCompensateRaceTests : IClassFixture<OvertimeSelfDeci
     /// therefore still enqueues, and both racers answer 200: the "one 200 and one 409" assertion fails (statuses 200, 200)
     /// and the "exactly one outbox event" assertion fails (2 rows). The balance assertion (paid_out 6) holds on the base
     /// too: it is the control that the database itself refused the second payout. It would pass vacuously only if the race
-    /// never formed; then a request is not observed waiting and <c>AssertWaitingAsync</c> fails first.</para>
+    /// never formed; then a request is not observed waiting and the observation step fails first.</para>
+    ///
+    /// <para><b>Why the guarded update still refuses B.</b> B passed the route's unlocked pre-check (6 remaining) before it
+    /// queued at the users row. When A commits, B takes the users row and runs its own guarded update, whose WHERE clause
+    /// is re-checked against A's committed row (6 + 0 + 6 &lt;= 6 is false), so it changes nothing and the handler answers
+    /// 409. The users-row lock only orders the two requests; the update is still what refuses B.</para>
+    ///
+    /// <para><b>The second observation against other bases.</b> On <c>ba0a054e</c> (before W19's users-row lock) the new
+    /// second observation is not met, because B waits at the update, not at the users row: I ran this fact there on a
+    /// local throwaway PostgreSQL 16 and it failed with "compensation B was never observed waiting at the employee's users
+    /// row". That is the fact following the route's current choreography, not a regression.</para>
     /// </summary>
     [Fact(Timeout = 180_000)]
     public async Task TwoConcurrentCompensationsOfSix_One200_One409_OneOutboxEvent()
@@ -196,7 +242,7 @@ public sealed class OvertimeCompensateRaceTests : IClassFixture<OvertimeSelfDeci
                 taskA = Task.Run(() => CompensateAsync(clientA));
                 await AssertWaitingAsync(1, taskA, "compensation A");
                 taskB = Task.Run(() => CompensateAsync(clientB));
-                await AssertWaitingAsync(2, taskB, "compensation B");
+                await AssertSecondQueuedBehindFirstAsync(taskB);
 
                 await held.ReleaseAsync();
                 first = await taskA;

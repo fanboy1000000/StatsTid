@@ -15,6 +15,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class OvertimeEndpoints
 {
+    /// <summary>
+    /// The 409 approve and reject answer when the pre-approval stopped being PENDING inside their
+    /// transaction (QUAL-257): one sentence for both routes, date-free (ADR-040 D7).
+    /// </summary>
+    private const string PreApprovalNoLongerPendingError =
+        "Pre-approval is no longer pending: another decision was recorded while this request was processed; nothing was applied";
+
     public static WebApplication MapOvertimeEndpoints(this WebApplication app)
     {
         // ── GET /api/overtime/{employeeId}/balance — Get overtime balance for employee/year ──
@@ -154,13 +161,18 @@ public static class OvertimeEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            // SEC-062 — the organisation-drift guard's WARNING.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
 
-            // Leaders create pre-approvals for their employees — validate scope
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, ct);
+            // Leaders create pre-approvals for their employees — validate scope. SEC-062: the sibling
+            // also returns the organisation it authorised, which the organisation-drift guard compares
+            // with the employee's locked row when the request is on another person's behalf.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, request.EmployeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -181,7 +193,8 @@ public static class OvertimeEndpoints
                 Reason = request.Reason,
             };
 
-            // Atomic in-tx repo write + outbox enqueue (ADR-018 D3, Pattern C — no audit row).
+            // Atomic in-tx repo write + outbox enqueue (ADR-018 D3, Pattern C: the event is the
+            // audit-of-record, and the ADR-026 audit-projection row below indexes it).
             // Replaces the prior post-commit eventStore.AppendAsync shape so a process crash
             // between the DB insert and event emission can no longer leave a created
             // pre-approval row without its corresponding OvertimePreApprovalCreated event.
@@ -204,6 +217,25 @@ public static class OvertimeEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
+                    // SEC-062 — the organisation-drift guard, first in the transaction, for a request on
+                    // another person's behalf (creating one's own request is exempt and takes no row
+                    // lock). The scope check above read the employee on its own connection; the locked
+                    // row must still be in the organisation it authorised (a null authorisation fails
+                    // closed), or a transfer committed in between: roll back, 409, nothing written.
+                    if (!string.Equals(actor.ActorId, request.EmployeeId, StringComparison.Ordinal))
+                    {
+                        var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, request.EmployeeId, ct);
+                        if (lockedEmployee is null)
+                        {
+                            await tx.RollbackAsync(ct);
+                            return Results.NotFound(new { error = "Employee not found" });
+                        }
+                        if (authorisedOrgId is null
+                            || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                            return await OrganisationDriftGuard.RefuseAsync(
+                                tx, loggerFactory, actor, "POST /api/overtime/pre-approval", ct);
+                    }
+
                     await preApprovalRepo.CreateAsync(conn, tx, approval, ct);
                     // S44 TASK-4413: capture outbox_id for audit_projection insert
                     // (ADR-026 D2 sync-in-tx — TENANT_TARGETED, resolve employee org).
@@ -394,27 +426,61 @@ public static class OvertimeEndpoints
                     statusCode: 403);
             }
 
-            // Validate scope access to the employee
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, existing.EmployeeId, ct);
+            // Validate scope access to the employee. SEC-062: the sibling also returns the organisation
+            // it authorised, which the organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, existing.EmployeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
             if (existing.Status != "PENDING")
                 return Results.BadRequest(new { error = $"Pre-approval is already {existing.Status}" });
 
-            // Atomic in-tx status mutation + outbox enqueue (ADR-018 D3, Pattern C — no audit
-            // row; the OvertimePreApprovalApproved event itself carries actor metadata via
-            // DomainEventBase per PAT-004 and is the audit-of-record for this state change).
+            // Atomic in-tx status mutation + outbox enqueue (ADR-018 D3, Pattern C: the
+            // OvertimePreApprovalApproved event itself carries actor metadata via DomainEventBase
+            // per PAT-004 and is the audit-of-record for this state change, and the ADR-026
+            // audit-projection row below indexes it).
             // Pre-S26 the status flipped silently with no event emitted; post-S26 the status
             // change + new-event emission ride a single tx so a process crash between the
             // UPDATE and event emission cannot leave the row in APPROVED state without its
             // corresponding event in the canonical event store.
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the QUAL-257 guard below depends on it. Under READ
+            // COMMITTED a second decision waits on the employee's users row, then its UPDATE reads the
+            // pre-approval row as committed, finds it no longer PENDING, changes 0 rows and answers the
+            // clean 409. Under REPEATABLE READ or SERIALIZABLE the same UPDATE would raise a
+            // serialization failure (a 500) instead. The default overload resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
-                await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "APPROVED", actor.ActorId, request?.Reason, ct);
+                // SEC-062 — the organisation-drift guard, first in the transaction: the employee's row
+                // locked, in the organisation the scope check authorised (a null authorisation fails
+                // closed), or a transfer committed in between: roll back, 409, nothing written.
+                var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, existing.EmployeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/overtime/pre-approval/{id}/approve", ct);
+
+                // QUAL-257 — the decision lands only on a PENDING row. The PENDING check above reads the
+                // row before this transaction, so a decision committed since then is invisible to it.
+                // Approve and reject both lock the employee's users row first, so a second decision on
+                // the same pre-approval waits there until the first commits; at READ COMMITTED (the
+                // level this transaction opens on) this UPDATE then reads the committed status, its
+                // PENDING predicate changes no row, and the request rolls back with 409 before any event
+                // or audit row. (Without that lock the predicate still holds: an UPDATE that waits on the
+                // row re-checks its WHERE against the committed version.)
+                if (!await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "APPROVED", actor.ActorId, request?.Reason, ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Conflict(new { error = PreApprovalNoLongerPendingError });
+                }
                 var @event = new OvertimePreApprovalApproved
                 {
                     PreApprovalId = id,
@@ -490,7 +556,9 @@ public static class OvertimeEndpoints
                     statusCode: 403);
             }
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, existing.EmployeeId, ct);
+            // SEC-062: the sibling also returns the organisation it authorised (as on approve).
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, existing.EmployeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -501,10 +569,35 @@ public static class OvertimeEndpoints
             // approve handler above for rationale; symmetric shape with the rejection event.
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // ReadCommitted pinned (PAT-015): the QUAL-257 guard below depends on it, as on approve.
+            // Under READ COMMITTED a second decision waits on the employee's users row, then its UPDATE
+            // reads the pre-approval row as committed, finds it no longer PENDING, changes 0 rows and
+            // answers the clean 409; under REPEATABLE READ or SERIALIZABLE the same UPDATE would raise a
+            // serialization failure (a 500) instead. The default overload resolves to the same level.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
             try
             {
-                await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "REJECTED", actor.ActorId, request?.Reason, ct);
+                // SEC-062 — the organisation-drift guard, first in the transaction (as on approve).
+                var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, existing.EmployeeId, ct);
+                if (lockedEmployee is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "Employee not found" });
+                }
+                if (authorisedOrgId is null
+                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    return await OrganisationDriftGuard.RefuseAsync(
+                        tx, loggerFactory, actor, "PUT /api/overtime/pre-approval/{id}/reject", ct);
+
+                // QUAL-257 — the decision lands only on a PENDING row, as on approve: a concurrent
+                // decision waits at the users-row lock above until the first commits, then this UPDATE
+                // reads the committed status (READ COMMITTED), changes no row, and the request rolls
+                // back with 409 before any event or audit row.
+                if (!await preApprovalRepo.UpdateStatusAsync(conn, tx, id, "REJECTED", actor.ActorId, request?.Reason, ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Conflict(new { error = PreApprovalNoLongerPendingError });
+                }
                 var @event = new OvertimePreApprovalRejected
                 {
                     PreApprovalId = id,
@@ -551,6 +644,8 @@ public static class OvertimeEndpoints
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
+            // SEC-062 — the organisation-drift guard's locked read of the employee's row.
+            UserRepository userRepo,
             ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
@@ -573,7 +668,10 @@ public static class OvertimeEndpoints
                     statusCode: 403);
             }
 
-            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+            // SEC-062: the sibling also returns the organisation it authorised, which the
+            // organisation-drift guard compares with the employee's locked row.
+            var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessWithOrgAsync(
+                actor, employeeId, roleFloor: null, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
@@ -619,6 +717,21 @@ public static class OvertimeEndpoints
                 await using var tx = await conn.BeginTransactionAsync(ct);
                 try
                 {
+                    // SEC-062 — the organisation-drift guard, first in the transaction, before the
+                    // guarded balance updates and their 409: the employee's row locked, in the
+                    // organisation the scope check authorised (a null authorisation fails closed), or a
+                    // transfer committed in between: roll back, 409, nothing written.
+                    var lockedEmployee = await userRepo.GetByIdWithVersionAsync(conn, tx, employeeId, ct);
+                    if (lockedEmployee is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = "Employee not found" });
+                    }
+                    if (authorisedOrgId is null
+                        || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "POST /api/overtime/{employeeId}/compensate", ct);
+
                     bool updated;
                     if (request.CompensationType == "PAYOUT")
                     {

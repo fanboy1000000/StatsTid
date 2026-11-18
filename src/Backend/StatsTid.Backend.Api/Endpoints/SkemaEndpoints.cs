@@ -701,6 +701,13 @@ public static class SkemaEndpoints
             if (actor.ActorRole == StatsTidRoles.Employee && employeeId != actor.ActorId)
                 return Results.Json(new { error = "Access denied", reason = "Employee can only save own data" }, statusCode: 403);
 
+            // SEC-062 — set below for a save on another person's behalf (the actor is not the subject):
+            // the organisation the scope check authorised, which the organisation-drift guard in the
+            // transaction compares with the subject's locked row. A save of one's own data takes no row
+            // lock and meets no guard (the self exemption, as the write floor's).
+            var saveOnBehalf = false;
+            string? saveAuthorisedOrgId = null;
+
             if (actor.ActorRole != StatsTidRoles.Employee)
             {
                 // ── S124 / TASK-12404 — owner ruling 2026-07-30 ──────────────────────────────
@@ -737,10 +744,14 @@ public static class SkemaEndpoints
                 var writeFloor = string.Equals(employeeId, actor.ActorId, StringComparison.Ordinal)
                     ? null
                     : StatsTidRoles.LocalHR;
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
+                var (allowed, reason, authorisedOrgId) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedWithOrgAsync(
                     actor, employeeId, writeFloor, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+                // A floor is set exactly when the actor is not the subject.
+                saveOnBehalf = writeFloor is not null;
+                saveAuthorisedOrgId = authorisedOrgId;
             }
 
             // Get employee profile for agreement info.
@@ -2455,8 +2466,17 @@ public static class SkemaEndpoints
                     // subject's state is consulted here (IsActive, and since S147 / TASK-14710 the
                     // end date the departed-subject floor reads): the pre-tx `user` snapshot keeps
                     // feeding the agreement / norm inputs exactly as before (access-control only).
-                    var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(
-                        conn, tx, employeeId, ct);
+                    //
+                    // SEC-062 — on another person's behalf this read locks the subject's row (FOR
+                    // UPDATE, the terminated-inclusive overload) and the organisation-drift guard
+                    // follows its 404, before the floor refusal and everything else: the scope check
+                    // read the subject on its own connection, and a transfer takes no `employee-`
+                    // lock, so only the locked row is stable. It must be in the organisation the check
+                    // authorised (a null authorisation fails closed), or the save rolls back with 409.
+                    // A save of one's own data keeps the plain read and meets no guard.
+                    var lockedSubject = saveOnBehalf
+                        ? (await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, employeeId, ct))?.User
+                        : await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
                     if (lockedSubject is null)
                     {
                         // The row vanished between the pre-check and the lock (no production path
@@ -2464,6 +2484,11 @@ public static class SkemaEndpoints
                         await tx.RollbackAsync(ct);
                         return Results.NotFound(new { error = "Employee not found" });
                     }
+                    if (saveOnBehalf
+                        && (saveAuthorisedOrgId is null
+                            || !string.Equals(lockedSubject.PrimaryOrgId, saveAuthorisedOrgId, StringComparison.Ordinal)))
+                        return await OrganisationDriftGuard.RefuseAsync(
+                            tx, loggerFactory, actor, "POST /api/skema/{employeeId}/save", ct);
                     // S147 / TASK-14710 — the SAME DepartedSubjectWriteFloor as the pre-check
                     // (departed subject AND (self OR below LocalHR)), on the in-lock row and the
                     // handler's single `today`. The deactivation can still land while we wait on the
