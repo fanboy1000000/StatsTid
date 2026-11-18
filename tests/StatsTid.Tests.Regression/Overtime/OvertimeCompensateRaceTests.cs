@@ -213,7 +213,17 @@ public sealed class OvertimeCompensateRaceTests : IClassFixture<OvertimeSelfDeci
     /// therefore still enqueues, and both racers answer 200: the "one 200 and one 409" assertion fails (statuses 200, 200)
     /// and the "exactly one outbox event" assertion fails (2 rows). The balance assertion (paid_out 6) holds on the base
     /// too: it is the control that the database itself refused the second payout. It would pass vacuously only if the race
-    /// never formed; then a request is not observed waiting and <c>AssertWaitingAsync</c> fails first.</para>
+    /// never formed; then a request is not observed waiting and the observation step fails first.</para>
+    ///
+    /// <para><b>Why the guarded update still refuses B.</b> B passed the route's unlocked pre-check (6 remaining) before it
+    /// queued at the users row. When A commits, B takes the users row and runs its own guarded update, whose WHERE clause
+    /// is re-checked against A's committed row (6 + 0 + 6 &lt;= 6 is false), so it changes nothing and the handler answers
+    /// 409. The users-row lock only orders the two requests; the update is still what refuses B.</para>
+    ///
+    /// <para><b>The second observation against other bases.</b> On <c>ba0a054e</c> (before W19's users-row lock) the new
+    /// second observation is not met, because B waits at the update, not at the users row: I ran this fact there on a
+    /// local throwaway PostgreSQL 16 and it failed with "compensation B was never observed waiting at the employee's users
+    /// row". That is the fact following the route's current choreography, not a regression.</para>
     /// </summary>
     [Fact(Timeout = 180_000)]
     public async Task TwoConcurrentCompensationsOfSix_One200_One409_OneOutboxEvent()
