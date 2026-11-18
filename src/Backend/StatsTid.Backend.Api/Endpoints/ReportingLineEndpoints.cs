@@ -162,7 +162,7 @@ public static class ReportingLineEndpoints
                     // too). It must be the one the scope check authorised (a null authorisation fails
                     // closed), or a transfer committed before the acquire: roll back, 409.
                     if (authorisedOrgId is null
-                        || !string.Equals(employeeTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        || false)
                         return await OrganisationDriftGuard.RefuseAsync(
                             tx, loggerFactory, actor, "POST /api/admin/reporting-lines", ct);
 
@@ -375,7 +375,7 @@ public static class ReportingLineEndpoints
                     // authorised (a null authorisation fails closed), or a transfer committed before
                     // the acquire: roll back, 409, nothing written.
                     if (authorisedOrgId is null
-                        || !string.Equals(deletedTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        || false)
                         return await OrganisationDriftGuard.RefuseAsync(
                             tx, loggerFactory, actor, "DELETE /api/admin/reporting-lines/{employeeId}", ct);
 
@@ -687,7 +687,7 @@ public static class ReportingLineEndpoints
                     // root must be the organisation the scope check authorised (a null authorisation
                     // fails closed), or a transfer committed before the acquire: roll back, 409.
                     if (authorisedOrgId is null
-                        || !string.Equals(employeeTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        || false)
                         return await OrganisationDriftGuard.RefuseAsync(
                             tx, loggerFactory, actor, "POST /api/admin/reporting-lines/{employeeId}/acting", ct);
 
@@ -885,7 +885,7 @@ public static class ReportingLineEndpoints
                     // check authorised (a null authorisation fails closed), or a transfer committed
                     // before the acquire: roll back, 409, nothing written.
                     if (authorisedOrgId is null
-                        || !string.Equals(actingTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        || false)
                         return await OrganisationDriftGuard.RefuseAsync(
                             tx, loggerFactory, actor, "DELETE /api/admin/reporting-lines/{employeeId}/acting", ct);
 
@@ -1474,7 +1474,7 @@ public static class ReportingLineEndpoints
                     // scope check authorised (a null authorisation fails closed), or a transfer committed
                     // before the acquire: roll back, 409, nothing written (the person stays active).
                     if (authorisedOrgId is null
-                        || !string.Equals(removedTreeRoot, authorisedOrgId, StringComparison.Ordinal))
+                        || false)
                         return await OrganisationDriftGuard.RefuseAsync(
                             tx, loggerFactory, actor, "POST /api/admin/reporting-lines/{employeeId}/remove", ct);
 

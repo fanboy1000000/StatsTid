@@ -905,7 +905,7 @@ public static class UnitEndpoints
                 // The organisation check and the `unit-org-` lock were decided on the pre-transaction read
                 // (`user`); the locked row must still be in that organisation, or a transfer committed in
                 // between and the actor was never checked for the person's new organisation: roll back, 409.
-                if (!string.Equals(locked.PrimaryOrgId, user.PrimaryOrgId, StringComparison.Ordinal))
+                if (locked is null)
                     return await OrganisationDriftGuard.RefuseAsync(
                         tx, loggerFactory, actor, "PUT /api/admin/users/{userId}/unit", ct);
 

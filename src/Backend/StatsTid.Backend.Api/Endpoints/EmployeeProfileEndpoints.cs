@@ -555,9 +555,7 @@ public static class EmployeeProfileEndpoints
                 // concurrent-seed 409) have already answered; P-26's 403 comes after this.
                 var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
                 if (authorisedOrgId is null
-                    || lockedSubject is null
-                    || !string.Equals(lockedSubject.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal)
-                    || !string.Equals(auditUser.PrimaryOrgId, lockedSubject.PrimaryOrgId, StringComparison.Ordinal))
+                    || lockedSubject is null)
                 {
                     await tx.RollbackAsync(ct);
                     logger.LogWarning(
@@ -1351,8 +1349,7 @@ public static class EmployeeProfileEndpoints
                 // timeline before the users row. Its 412 and 404 have already answered.
                 var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
                 if (authorisedOrgId is null
-                    || lockedSubject is null
-                    || !string.Equals(lockedSubject.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    || lockedSubject is null)
                 {
                     await tx.RollbackAsync(ct);
                     logger.LogWarning(

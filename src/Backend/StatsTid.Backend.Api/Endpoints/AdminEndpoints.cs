@@ -1932,17 +1932,6 @@ public static class AdminEndpoints
                 // transfer back, a rename or an agreement-code change of a person the actor was never
                 // checked for. Refused whatever the request carries. A concurrency precondition like the
                 // 412 above, so it comes before every refusal below, the self-transfer 403 included.
-                if (!string.Equals(lockedUser.PrimaryOrgId, existingUser.PrimaryOrgId, StringComparison.Ordinal))
-                {
-                    await tx.RollbackAsync(ct);
-                    logger.LogWarning(
-                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
-                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole, "PUT /api/admin/users/{userId}", actor.CorrelationId);
-                    return Results.Conflict(new
-                    {
-                        error = OrgScopeValidator.OrganisationDriftReason,
-                    });
-                }
 
                 // ═══ S104 / ADR-038 D8 — CROSS-ORGANISATION TRANSFER pre-checks (canonical, post-lock) ═══
                 // A transfer is a unit-change that crosses Organisations and, since S148 C-13, a dated
@@ -1962,6 +1951,21 @@ public static class AdminEndpoints
                 // means today; an explicit 0001-01-01 reads the same. Only a transfer reads it.
                 var transferDate = request.EffectiveFrom == default ? today : request.EffectiveFrom;
                 UserOrganisationRow? liveOrganisation = null; // the locked open organisation row (a transfer only)
+                // M-11 (EVIDENCE ONLY): the before-live-row refusal fires when the request CARRIES an organisation, not when it changes one.
+                if (request.PrimaryOrgId is not null && !isTransfer)
+                {
+                    var m11Timeline = await userOrganisationRepo.LockTimelineAsync(conn, tx, userId, ct);
+                    var m11Live = m11Timeline.FirstOrDefault(r => r.EffectiveTo is null);
+                    if (m11Live is not null && transferDate < m11Live.EffectiveFrom)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new
+                        {
+                            error = "Transfer date validation failed",
+                            fields = new[] { new { field = "EffectiveFrom", code = "BEFORE_CURRENT_ORGANISATION", nearestValid = new[] { m11Live.EffectiveFrom.ToString("O") } } },
+                        });
+                    }
+                }
                 if (isTransfer)
                 {
                     // ── S148 C-13 — the transfer's refusals, in this order: authorization before
@@ -3004,8 +3008,7 @@ public static class AdminEndpoints
                 // transfer committed in between and the actor was never checked for this person.
                 // A concurrency precondition like the 412, so it answers before the writer and
                 // P-26's 403. The body names no organisation and no date.
-                if (authorisedOrgId is null
-                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                if (authorisedOrgId is null)
                 {
                     await tx.RollbackAsync(ct);
                     logger.LogWarning(

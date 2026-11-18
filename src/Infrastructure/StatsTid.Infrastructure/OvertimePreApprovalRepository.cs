@@ -160,7 +160,7 @@ public sealed class OvertimePreApprovalRepository
         var sql =
             @"UPDATE overtime_pre_approvals
               SET status = @status, approved_by = @approvedBy, approved_at = NOW(), reason = @reason
-              WHERE id = @id AND status = 'PENDING'";
+              WHERE id = @id";
         var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("status", status);

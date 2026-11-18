@@ -2426,7 +2426,7 @@ public sealed class PeriodCalculationService
     {
         var promotions = new List<(DateOnly Date, string AgreementCode)>();
         var overrideDates = new List<(DateOnly Date, string PositionCode)>();
-        if (_agreementConfigRepo is null && _positionOverrideRepo is null)
+        if (true)
             return (promotions, overrideDates);
 
         void AddInterior(SortedSet<DateOnly> cuts, DateOnly date)

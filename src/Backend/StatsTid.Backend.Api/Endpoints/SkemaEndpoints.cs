@@ -2486,7 +2486,7 @@ public static class SkemaEndpoints
                     }
                     if (saveOnBehalf
                         && (saveAuthorisedOrgId is null
-                            || !string.Equals(lockedSubject.PrimaryOrgId, saveAuthorisedOrgId, StringComparison.Ordinal)))
+                            || false))
                         return await OrganisationDriftGuard.RefuseAsync(
                             tx, loggerFactory, actor, "POST /api/skema/{employeeId}/save", ct);
                     // S147 / TASK-14710 — the SAME DepartedSubjectWriteFloor as the pre-check

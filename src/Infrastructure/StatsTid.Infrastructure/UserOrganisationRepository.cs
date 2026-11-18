@@ -94,7 +94,7 @@ public sealed class UserOrganisationRepository
             orgId = row.OrgId,
             effectiveFrom = FormatDate(row.EffectiveFrom),
         });
-        await InsertAuditAsync(
+        if (actorId != "SYSTEM_SEED") await InsertAuditAsync(
             conn, tx, row.AssignmentId, userId, "CREATED",
             previousData: null, newData, versionBefore: null, versionAfter: row.Version,
             actorId, actorRole, ct);

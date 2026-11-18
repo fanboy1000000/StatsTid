@@ -61,9 +61,9 @@ public sealed class AgreementConfigRepository
             """
             SELECT * FROM agreement_configs
             WHERE agreement_code = @agreementCode AND ok_version = @okVersion
-              AND published_at IS NOT NULL
+              AND status IN ('ACTIVE','ARCHIVED')
               AND applies_from <= @day
-            ORDER BY applies_from DESC, published_at DESC
+            ORDER BY applies_from DESC, published_at ASC
             LIMIT 1
             """, conn);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
@@ -694,7 +694,7 @@ public sealed class AgreementConfigRepository
             """
             SELECT * FROM agreement_configs
             WHERE agreement_code = @agreementCode AND ok_version = @okVersion
-              AND published_at IS NOT NULL
+              AND status IN ('ACTIVE','ARCHIVED')
             ORDER BY applies_from DESC, published_at DESC
             LIMIT 1
             """, conn, tx);

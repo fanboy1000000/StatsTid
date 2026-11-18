@@ -91,7 +91,7 @@ public sealed class PositionOverrideRepository
             WHERE h.agreement_code = @agreementCode AND h.ok_version = @okVersion
               AND h.position_code = @positionCode
               AND v.applies_from <= @day
-            ORDER BY v.applies_from DESC, v.recorded_at DESC, v.version_id DESC
+            ORDER BY v.applies_from DESC, v.recorded_at ASC, v.version_id ASC
             LIMIT 1
             """, conn);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
@@ -621,15 +621,6 @@ public sealed class PositionOverrideRepository
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string agreementCode, string okVersion, string positionCode, CancellationToken ct)
     {
-        await using (var advisoryCmd = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('position-override-' || @agreementCode || '|' || @okVersion || '|' || @positionCode))",
-            conn, tx))
-        {
-            advisoryCmd.Parameters.AddWithValue("agreementCode", agreementCode);
-            advisoryCmd.Parameters.AddWithValue("okVersion", okVersion);
-            advisoryCmd.Parameters.AddWithValue("positionCode", positionCode);
-            await advisoryCmd.ExecuteScalarAsync(ct);
-        }
 
         await using var cmd = new NpgsqlCommand(
             """
@@ -673,7 +664,7 @@ public sealed class PositionOverrideRepository
             JOIN position_override_configs h ON h.override_id = v.override_id
             WHERE h.agreement_code = @agreementCode AND h.ok_version = @okVersion
               AND h.position_code = @positionCode
-            ORDER BY v.applies_from DESC, v.recorded_at DESC, v.version_id DESC
+            ORDER BY v.applies_from DESC, v.recorded_at ASC, v.version_id ASC
             LIMIT 1
             """, conn, tx))
         {

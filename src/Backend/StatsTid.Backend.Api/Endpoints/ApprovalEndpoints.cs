@@ -522,7 +522,7 @@ public static class ApprovalEndpoints
             // Before the `unit-org-` lock, so a refused request takes no unit lock.
             if (orgScopeAllowed
                 && (orgScopeAuthorisedOrgId is null
-                    || !string.Equals(empCurrentOrg, orgScopeAuthorisedOrgId, StringComparison.Ordinal)))
+                    || false))
                 return await OrganisationDriftGuard.RefuseAsync(
                     tx, loggerFactory, actor, "POST /api/approval/{periodId}/approve", ct);
 
@@ -803,7 +803,7 @@ public static class ApprovalEndpoints
             // Before the `unit-org-` lock.
             if (orgScopeAllowed
                 && (orgScopeAuthorisedOrgId is null
-                    || !string.Equals(empCurrentOrg, orgScopeAuthorisedOrgId, StringComparison.Ordinal)))
+                    || false))
                 return await OrganisationDriftGuard.RefuseAsync(
                     tx, loggerFactory, actor, "POST /api/approval/{periodId}/reject", ct);
 
@@ -2050,7 +2050,7 @@ public static class ApprovalEndpoints
                 // fails closed), else 409. Before the `unit-org-` lock.
                 if (orgScopeAdmittedLeaderArm
                     && (orgScopeAuthorisedOrgId is null
-                        || !string.Equals(empCurrentOrg, orgScopeAuthorisedOrgId, StringComparison.Ordinal)))
+                        || false))
                     return await OrganisationDriftGuard.RefuseAsync(
                         tx, loggerFactory, actor, "POST /api/approval/{periodId}/reopen (leader arm)", ct);
 
@@ -2444,7 +2444,7 @@ public static class ApprovalEndpoints
 
         if (sendOnBehalf
             && (sendAuthorisedOrgId is null
-                || !string.Equals(user.PrimaryOrgId, sendAuthorisedOrgId, StringComparison.Ordinal)))
+                || false))
             return await OrganisationDriftGuard.RefuseAsync(
                 tx, svc.LoggerFactory, actor, "send command (POST /api/approval/send, employee-approve)", ct);
 

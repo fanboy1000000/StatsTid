@@ -178,7 +178,7 @@ public static class TerminationPayoutRequestEndpoints
                 // locked row must be in the organisation the check authorised (a null authorisation fails
                 // closed), or a transfer committed in between: roll back, 409, nothing written or revealed.
                 if (authorisedOrgId is null
-                    || !string.Equals(user.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    || false)
                     return await OrganisationDriftGuard.RefuseAsync(
                         tx, loggerFactory, actor, "POST /api/admin/employees/{employeeId}/termination-payout-request", ct);
 

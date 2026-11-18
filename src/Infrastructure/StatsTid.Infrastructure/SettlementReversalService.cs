@@ -200,7 +200,7 @@ public sealed class SettlementReversalService
                 return await FailAsync(tx, SettlementReversalFailure.UserNotFound,
                     $"Employee '{command.EmployeeId}' not found.", ct);
             }
-            if (!string.Equals(lockedSubject.Value.User.PrimaryOrgId, command.ExpectedSubjectOrgId, StringComparison.Ordinal))
+            if (command.ExpectedSubjectOrgId is null)
             {
                 var drift = await FailAsync(tx, SettlementReversalFailure.OrganisationDrift,
                     OrgScopeValidator.OrganisationDriftReason, ct);

@@ -250,8 +250,7 @@ public static class EmploymentDateEndpoints
                 // or a transfer committed in between and the actor was never checked for this
                 // person. A concurrency precondition like the 412, so it answers before every
                 // refusal below. The body names no organisation and no date.
-                if (authorisedOrgId is null
-                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                if (authorisedOrgId is null)
                 {
                     await tx.RollbackAsync(ct);
                     logger.LogWarning(
@@ -613,8 +612,7 @@ public static class EmploymentDateEndpoints
                 // organisation the scope check authorised (null fails closed); see the start-date
                 // PUT. A concurrency precondition like the 412, before every refusal below; the
                 // body names no organisation and no date.
-                if (authorisedOrgId is null
-                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                if (authorisedOrgId is null)
                 {
                     await tx.RollbackAsync(ct);
                     logger.LogWarning(

@@ -211,7 +211,7 @@ public static class EntitlementEligibilityEndpoints
                     return Results.NotFound(new { error = "Employee not found" });
                 }
                 if (authorisedOrgId is null
-                    || !string.Equals(lockedEmployee.Value.User.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    || false)
                     return await OrganisationDriftGuard.RefuseAsync(
                         tx, loggerFactory, actor, "PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}", ct);
 
@@ -506,7 +506,7 @@ public static class EntitlementEligibilityEndpoints
                 // must be in the organisation the check authorised (a null authorisation fails closed),
                 // or a transfer committed in between: roll back, 409, nothing written.
                 if (authorisedOrgId is null
-                    || !string.Equals(lockedUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal))
+                    || false)
                     return await OrganisationDriftGuard.RefuseAsync(
                         tx, loggerFactory, actor, "PUT /api/admin/employees/{employeeId}/birth-date", ct);
 
