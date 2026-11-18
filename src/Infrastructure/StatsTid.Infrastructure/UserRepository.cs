@@ -417,6 +417,12 @@ public sealed class UserRepository
     /// (<c>POST /api/admin/employees/{employeeId}/termination-payout-request</c>); <c>SkemaEndpoints</c>
     /// (<c>POST /api/skema/{employeeId}/save</c>, on another person's behalf only); and
     /// <c>BackdateWorklistEndpoints</c> (<c>POST /api/hr/backdate-worklist/{worklistId}/resolve</c>).
+    /// Four older callers complete the list: <c>AdminEndpoints</c>
+    /// (<c>PUT /api/admin/users/{userId}/agreement-code</c>, the If-Match re-read after the pay-inputs lock);
+    /// <c>SettlementCloseService</c> (the leaver settlement close's in-lock re-read, S71);
+    /// <c>SettlementReversalService</c> (the reversal's users row in every mode, then the
+    /// organisation-drift guard, S148 TASK-14821); and <c>EmploymentEndDateLifecycleWriter.ApplyAsync</c>
+    /// (the end-date endpoint's canonical re-read, the TASK-7002 case above).
     /// General admin edit paths stay on the filtered overload (soft-deleted users are not
     /// addressable through admin edit).
     /// </para>
