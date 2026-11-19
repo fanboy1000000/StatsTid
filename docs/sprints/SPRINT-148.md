@@ -2085,3 +2085,26 @@ M-40 included [O for the 14 facts of the five classes run].
   - The year overview's registered read cost.
   - The registered version-restart weakness.
   - The corrected label.
+
+**CI-M4a and CI-M4b judged, 2026-11-19 (rules 4 and 5): both prove every pin they carry.** Results were read from the trx files by name.
+- **CI-M4a** (run 44481246221, draft PR #64, at `5f3f9a72`, headSha confirmed):
+  - Regression 2650 passed and **41 failed: exactly the 41 frozen facts**, each at its frozen assertion and line. The other jobs are green: Unit 1757, DemoSeed 170, smoke, E2E, the frontend build, docs, lizard and gitleaks.
+  - By mutation: M-9 1 (`PublishedOnlyInForceTests.cs:51`); M-11 1 (`TransferWriteTests.cs:380`, OK expected, BadRequest got); M-15 3 (`SameDayTieBreakTests.cs:40`, `:101`, `:156`); M-39 1 (`DatedConfigBoundaryTests.cs:109`); M-41 2 (`UserOrganisationBackfillSeederTests.cs:83`, `:120`); M-43 1 (`PositionOverrideConcurrencyTests.cs:329`); M-44 2 (`TransferRaceTests.cs:149`); M-45 7 (`OrganisationDriftGuardTests.cs:349`, `AssertDriftRefusedAsync`'s 409 assertion); M-46 9 and M-47 13 (`OrganisationDriftGuardRoutesTests.cs:840`, the same assertion); M-48 1 (`OvertimePreApprovalDecisionRaceTests.cs:147`, "got A(approve)=200 / B(reject)=200").
+  - No drift fact failed on the observation helper's "not seen waiting" remark, so each reached its locked read and failed only on the 409, as rulings C2-R1 and C2-R7 require.
+- **CI-M4b** (run 44481256823, draft PR #65, at `6fc866ca`, headSha confirmed):
+  - Regression 2684 passed and **7 failed: exactly the 7 frozen facts**, each at its frozen assertion and line. All other jobs are green.
+  - By mutation: M-10 1 (`SeededConfigsInForceTests.cs:52`, "10 of 10 compiled keys lack a published version"); M-14 3 (`PositionOverrideVersionReadTests.cs:77`, `:108`, `:142`); M-16 1 (`SameDayTieBreakTests.cs:151`); M-40 1 (`DatedConfigBoundaryTests.cs:166`); M-42 1 (`EmploymentWindowHandOffTests.cs:254`).
+  - M-10 changed `init.sql` and turned nothing else red, in Regression, smoke or E2E. That settles the builder's `(unproven)` that it might reach other classes.
+- **No unlisted red, and no frozen fact green.** So: no census miss, no defect, no re-run. The [A]-argued halves behind a first red assertion stay argued: M-9's predecessor half, M-39's arm 2 and M-40's arm 2.
+- **R8 and C2-R5 repeat (CI-M4b):** the eight tier-1 Choreography B facts and AC-C13s are green again, so they are green on two runs.
+- **Correction to the CI-M4 build entry above (M-45, the profile PUT).** In CI, `ProfilePut_OrganisationChangedUnderTheLock_409_NothingWritten` answered **200** under M-45, as 14821-T had argued, not the 403 the builder saw on its local cluster.
+  - So the logged sentence "the compare is not the only guard on that path: a later scope check also refuses" is **wrong for CI and is withdrawn**. In CI the compare is the guard, and the pin is proved either way.
+  - The cause of the local 403 is `(unproven)`; the builder's locally patched `DockerHarness` (one shared cluster) is the likely difference.
+- **Status change:** M-9, M-11, M-15 (read half), M-39, M-41, M-43 … M-48 and M-10, M-14, M-16, M-40, M-42 are CI-verified. The SEC-062, SEC-065, QUAL-206 and QUAL-257 cells now read "CI-verified", with the run ids.
+- PRs #64 and #65 are closed unmerged. `ci/s148-m4a` and `ci/s148-m4b` are deleted on the remote and locally.
+- **Wave 4 is fully closed out:** CI-W4, CI-M4a and CI-M4b are all judged. **Wave 5 is unblocked.**
+
+**Wave-5 batches A and B, rulings applied** (planner, Opus 5.5; `.claude/reviews/S148-wave5AB-briefs-applied-report.md`). The seven briefs are at draft 2, adjudicated, and the plan is at **"final + 25"**: 146 AC ids (+4: AC-C13t, AC-C2t, AC-C2u, AC-C1o) and 46 mutation ids (+M-49, at CI-M5). The counts were made by a script over the saved plan, which first reproduced "final + 24".
+- **Orchestrator ruling on T-BC-10** (raised while applying B12): option (b). AC-C1o (2)'s fixture gains an HK / OK24 publish dated Monday 2 February 2026, so its 2026 arm also catches a central-only lookup that ignores its day. No expected value moves.
+- **Interpretation calls accepted as the planner held them:** the existing `LocalAgreementProfileRepository.cs` shared-files row was edited in place; "four readers" was kept, with the backfill seeder named as a write-side fifth; the year-overview timing fact's name is the drafter's; and the four additions beyond § 3 that the revision row names are kept.
+- **The A9 QUAL ids** (Case A FIXED, Case B open) are assigned at O-15, after the 14823 stack.
