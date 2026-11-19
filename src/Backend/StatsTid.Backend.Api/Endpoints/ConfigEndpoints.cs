@@ -106,14 +106,13 @@ public static class ConfigEndpoints
         // stale state.
         // Validation: ProfileAlignmentValidator runs against changed fields (ADR-017 D9a) →
         // 400 with structured per-field errors on misalignment.
-        // Transaction (ADR-018 D3): the profile UPDATE/INSERT, the audit-row INSERT, and the
-        // outbox enqueue are committed in a single PostgreSQL transaction via the repo's
-        // in-transaction overload. A separate per-service OutboxPublisher drains
-        // outbox_events to the canonical event store at-least-once (ADR-018 D4) — this
-        // supersedes the S21 cycle-2 post-commit AppendAsync shape because the publisher's
-        // own ReadCommitted transaction sees the latest committed stream_version when it
-        // appends (eliminating the RepeatableRead snapshot conflict that drove the
-        // post-commit shape originally).
+        // Transaction (ADR-018 D3): one PostgreSQL transaction at READ COMMITTED whose first
+        // statement is the pay-inputs lock (S148 PIL); the profile UPDATE/INSERT via the repo's
+        // in-transaction overload, the audit-row INSERT, the outbox enqueue and the worklist
+        // hand-off (S148 T19: the exported months and settled holiday years the new profile
+        // reaches, for the organisation's employees on the agreement code) commit together. A
+        // separate per-service OutboxPublisher drains outbox_events to the canonical event store
+        // at-least-once (ADR-018 D4).
         app.MapPut("/api/config/{orgId}/profile/{agreementCode}/{okVersion}", async (
             string orgId,
             string agreementCode,
@@ -126,6 +125,7 @@ public static class ConfigEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<LocalAgreementProfileChanged> auditMapper,
             AuditProjectionRepository auditRepo,
+            HrBackdateWorklistRepository worklistRepo,
             ILoggerFactory loggerFactory,
             // S142 / TASK-14201 — the server-"today" seam. DI supplies TimeProvider.System in
             // production; a fixed provider in tests. Injected so the Copenhagen business date
@@ -241,16 +241,19 @@ public static class ConfigEndpoints
                 });
             }
 
-            // 6. Single-transaction profile + audit + outbox write (ADR-018 D3).
-            //    The repo's in-transaction overload performs the lock + (close+insert |
-            //    update-in-place | no-op short-circuit) + (route same-day-vs-supersession).
-            //    We then insert the audit row AND enqueue the LocalAgreementProfileChanged
-            //    outbox event on the same conn+tx and commit together — UNLESS the repo
-            //    reports IsNoOp = true (S23 / TASK-2304 same-day no field changes), in
-            //    which case the audit + outbox are skipped (Codex Step 0b cycle-3 P2 fix).
-            //    On OptimisticConcurrencyException we surface 412 with the actual current
-            //    state; on InvalidProfileSupersessionException we surface 400 (backdate-
-            //    before-predecessor per ADR-018 D9).
+            // 6. Single-transaction profile + audit + outbox + worklist write (ADR-018 D3).
+            //    Lock order (Block C): the pay-inputs lock (0) → the open profile row FOR UPDATE
+            //    → the worklist rows. The repo's in-transaction overload performs the row lock +
+            //    (close+insert | update-in-place | no-op short-circuit) + (route
+            //    same-day-vs-supersession). The route then checks that the row the repo locked is
+            //    the one step 4 read (6a), inserts the audit row, enqueues the
+            //    LocalAgreementProfileChanged outbox event and lands the worklist hand-off on the
+            //    same conn+tx and commits together — UNLESS the repo reports IsNoOp = true (S23 /
+            //    TASK-2304 same-day no field changes), in which case the audit, the outbox and the
+            //    hand-off are skipped (Codex Step 0b cycle-3 P2 fix). On
+            //    OptimisticConcurrencyException we surface 412 with the actual current state; on
+            //    InvalidProfileSupersessionException we surface 400 (backdate-before-predecessor
+            //    per ADR-018 D9).
             Guid persistedProfileId;
             long persistedVersion;
             bool persistedIsNoOp;
@@ -258,14 +261,45 @@ public static class ConfigEndpoints
             {
                 await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+                // READ COMMITTED, stated explicitly (PAT-015; refinement :602): the first statement
+                // waits for the pay-inputs lock, and every read after it, the row lock and the
+                // worklist read, must see what committed during the wait; under REPEATABLE READ the
+                // snapshot would predate it. Two writers of one profile are still serialized by the
+                // row lock and the partial unique index, and every writer by the exclusive
+                // pay-inputs lock.
+                await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement, taken even
+                    // when the save turns out to be a no-op (decided only under the row lock); nothing
+                    // is held before it on this or any other connection (the scope check and the
+                    // step-4 read above have finished on their own connections). Lock order: pay inputs
+                    // → the open profile row FOR UPDATE → the worklist rows.
+                    await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                     var saveResult = await profileRepo.SupersedeAndCreateAsync(
                         conn, tx, expectedCurrentVersion, candidate, ct);
                     persistedProfileId = saveResult.ProfileId;
                     persistedVersion = saveResult.Version;
                     persistedIsNoOp = saveResult.IsNoOp;
+
+                    // 6a. The stale predecessor (S148 ruling A9, Case A; auditability). The audit
+                    //     action, the field delta, the alignment validation and PrecedingProfileId all
+                    //     come from step 4's read, made before this transaction. If another save
+                    //     replaced that row while this one waited for the lock, the If-Match check can
+                    //     still pass (a supersession restarts the version at 1), and the audit row and
+                    //     event would describe replacing a row that is no longer there. So the row the
+                    //     repo locked must be the row step 4 read: same profile id and version, or both
+                    //     absent. Otherwise 412, the route's existing answer; the catch below rolls the
+                    //     transaction back, so nothing is written.
+                    if (saveResult.LockedPredecessorProfileId != predecessor?.ProfileId
+                        || saveResult.LockedPredecessorVersion != predecessor?.Version)
+                    {
+                        throw new OptimisticConcurrencyException(
+                            "The current profile changed after this request read it; refresh and retry.",
+                            expectedVersion: expectedCurrentVersion,
+                            actualVersion: saveResult.LockedPredecessorVersion);
+                    }
 
                     if (!persistedIsNoOp)
                     {
@@ -331,9 +365,20 @@ public static class ConfigEndpoints
                             ResolvedTargetOrgId: @event.OrgId);
                         var auditRow = auditMapper.Map(@event, auditCtx);
                         await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                        // The hand-off (S148 T19, Q-2 = (a)), last before the commit: the exported
+                        // months and settled holiday years the new profile reaches, for every employee
+                        // on the agreement code in this organisation on such a day (the dated
+                        // organisation), listed on HR's worklist under CONFIG_PUBLISHED, pointing at
+                        // this event and dated the profile's effective date. The LocalAdmin who saves
+                        // is not who recalculates; the worklist is how that person learns. Flag only.
+                        await worklistRepo.WriteForConfigurationChangeAsync(
+                            conn, tx,
+                            new ConfigurationChange(agreementCode, okVersion, candidate.EffectiveFrom, OrgId: orgId),
+                            @event.EventId, actor.ActorId ?? "unknown", ct);
                     }
 
-                    // Always commit — on no-op the tx held only the lock SELECT, no writes.
+                    // Always commit — on no-op the tx held only the two locks, no writes.
                     await tx.CommitAsync(ct);
                 }
                 catch

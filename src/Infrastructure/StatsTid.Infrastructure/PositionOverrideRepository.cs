@@ -596,7 +596,8 @@ public sealed class PositionOverrideRepository
 
     /// <summary>
     /// The key lock of (agreement, OK version, position) (TASK-14818 item 4.4, ruling B4; S148 Step 5a
-    /// ruling 1.1), an override write's first lock, taken by all four writers. Two statements, in order:
+    /// ruling 1.1), the first lock this repository takes in an override write, taken by all four writers
+    /// after the route's pay-inputs lock. Two statements, in order:
     /// <list type="number">
     /// <item>A transaction-scoped advisory lock named after the key,
     /// <c>hashtext('position-override-' || agreement || '|' || OK version || '|' || position)</c>, in the
@@ -610,11 +611,13 @@ public sealed class PositionOverrideRepository
     /// </list>
     /// <para>
     /// The lock order of an override write (Block C, PLAN-s148, ruling 1.1): (1) the pay-inputs lock
-    /// (148, 1) at the route head, TASK-14823's, which these routes do not take yet; (2) this advisory lock;
-    /// (3) the heads <c>FOR UPDATE</c>; (4) the head write, then the version row; (5) the audit, outbox and
-    /// projection rows, then TASK-14823's worklist rows. Only override writers take the
-    /// <c>position-override-</c> lock, and a transaction holding it takes no other advisory lock afterwards,
-    /// so a 32-bit hash collision with another lock family costs a wait, never a deadlock.
+    /// (148, 1) (<see cref="PayInputsLock"/>), taken by each of the four routes as the first statement of
+    /// its READ COMMITTED transaction; (2) this advisory lock; (3) the heads <c>FOR UPDATE</c>; (4) the head
+    /// write, then the version row; (5) the audit, outbox and projection rows, then the worklist rows (the
+    /// configuration hand-off, <see cref="HrBackdateWorklistRepository.WriteForConfigurationChangeAsync"/>).
+    /// Only override writers take the <c>position-override-</c> lock, and a transaction holding it takes no
+    /// other advisory lock afterwards, so a 32-bit hash collision with another lock family costs a wait,
+    /// never a deadlock.
     /// </para>
     /// </summary>
     private static async Task LockKeyAsync(

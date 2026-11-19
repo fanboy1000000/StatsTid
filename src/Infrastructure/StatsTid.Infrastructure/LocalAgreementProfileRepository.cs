@@ -10,9 +10,11 @@ namespace StatsTid.Infrastructure;
 /// Per ADR-017 D2 / D2.1 + ADR-018 D7-D10: lifecycle is <c>effective_to</c>-only (no
 /// <c>is_active</c>). At most one open-ended profile per (org_id, agreement_code, ok_version)
 /// is enforced at the schema level by the partial-unique-index <c>uq_local_agreement_profile_active</c>
-/// WHERE effective_to IS NULL. Save runs inside a single
-/// <see cref="IsolationLevel.RepeatableRead"/> transaction with <c>SELECT ... FOR UPDATE</c>
-/// on the current open row to gate concurrent writers.
+/// WHERE effective_to IS NULL. Save runs inside a single transaction with <c>SELECT ... FOR UPDATE</c>
+/// on the current open row to gate concurrent writers. Its one production caller, the PUT route,
+/// opens that transaction at <see cref="IsolationLevel.ReadCommitted"/> and takes the pay-inputs lock
+/// (<see cref="PayInputsLock"/>) first (S148 PIL; PAT-015); the self-contained overload opens its own
+/// at <see cref="IsolationLevel.RepeatableRead"/>.
 ///
 /// Routing (ADR-018 D9):
 /// <list type="bullet">
@@ -188,10 +190,11 @@ public sealed class LocalAgreementProfileRepository
     /// current open") throws <see cref="OptimisticConcurrencyException"/>.</description></item>
     /// </list>
     ///
-    /// Transaction: <see cref="IsolationLevel.RepeatableRead"/>. The
-    /// <c>SELECT ... FOR UPDATE</c> on the partial-unique row serializes concurrent writers to
-    /// the same (org, agreement_code, ok_version) triple. PostgreSQL RepeatableRead is
-    /// sufficient here — it prevents non-repeatable reads and the row-lock blocks competitors.
+    /// Transaction: this overload opens its own at <see cref="IsolationLevel.RepeatableRead"/> and
+    /// takes no pay-inputs lock. It has no production caller (the PUT route calls the in-transaction
+    /// overload inside its own READ COMMITTED transaction, after the pay-inputs lock); its callers are
+    /// tests. The <c>SELECT ... FOR UPDATE</c> on the open row, with the partial unique index for the
+    /// empty slot, serializes concurrent writers to the same (org, agreement_code, ok_version) triple.
     /// </summary>
     /// <returns>The post-write profile id and version (and whether the same-day write was
     /// a no-op — <see cref="SaveProfileResult.IsNoOp"/>). For first-create + supersession the
@@ -231,9 +234,14 @@ public sealed class LocalAgreementProfileRepository
     /// (ADR-018 D3 transactional outbox contract). The caller is responsible for committing
     /// or rolling back the transaction; this method does NOT commit and does NOT rollback.
     ///
-    /// Concurrency semantics, isolation expectation, and exception contract are identical to
-    /// the self-contained overload — the caller should open the transaction with
-    /// <see cref="IsolationLevel.RepeatableRead"/> for equivalent guarantees.
+    /// Concurrency semantics and exception contract are identical to the self-contained overload.
+    /// Isolation: the row lock and the partial unique index give the same guarantees at
+    /// <see cref="IsolationLevel.ReadCommitted"/>, where the PUT route runs it (S148 PIL): its
+    /// transaction's first statement waits for the pay-inputs lock, and under REPEATABLE READ the
+    /// snapshot would predate what committed during that wait (PAT-015). The result names the row
+    /// this save locked (<see cref="SaveProfileResult.LockedPredecessorProfileId"/>,
+    /// <see cref="SaveProfileResult.LockedPredecessorVersion"/>), so the caller can check it is the
+    /// row it computed its delta against.
     /// </summary>
     /// <returns>The post-write profile id, version, and a no-op flag. See <see cref="SaveProfileResult"/>
     /// for semantics. For first-create + supersession the version is <c>1</c>; for UPDATE-in-place
@@ -288,7 +296,11 @@ public sealed class LocalAgreementProfileRepository
                 //     with IsNoOp = true; the PUT handler skips audit + outbox emission.
                 if (AllOverridableFieldsMatch(predecessor, newProfile))
                 {
-                    return new SaveProfileResult(predecessor.ProfileId, predecessor.Version, IsNoOp: true);
+                    return new SaveProfileResult(predecessor.ProfileId, predecessor.Version, IsNoOp: true)
+                    {
+                        LockedPredecessorProfileId = predecessor.ProfileId,
+                        LockedPredecessorVersion = predecessor.Version,
+                    };
                 }
 
                 // 3b-update. UPDATE-in-place. profile_id stable; version bumped by one;
@@ -296,7 +308,11 @@ public sealed class LocalAgreementProfileRepository
                 //     site is MODIFIED (vs SUPERSEDED for 3c below).
                 var newVersion = await UpdateInPlaceAsync(
                     conn, tx, predecessor.ProfileId, newProfile, predecessor.Version, ct);
-                return new SaveProfileResult(predecessor.ProfileId, newVersion, IsNoOp: false);
+                return new SaveProfileResult(predecessor.ProfileId, newVersion, IsNoOp: false)
+                {
+                    LockedPredecessorProfileId = predecessor.ProfileId,
+                    LockedPredecessorVersion = predecessor.Version,
+                };
             }
 
             // 3c. Supersession (newProfile.EffectiveFrom > predecessor.EffectiveFrom):
@@ -334,7 +350,11 @@ public sealed class LocalAgreementProfileRepository
                 actualVersion: null,
                 innerException: ex);
         }
-        return new SaveProfileResult(newProfileId, Version: 1, IsNoOp: false);
+        return new SaveProfileResult(newProfileId, Version: 1, IsNoOp: false)
+        {
+            LockedPredecessorProfileId = current?.ProfileId,
+            LockedPredecessorVersion = current?.Version,
+        };
     }
 
     /// <summary>
@@ -505,8 +525,7 @@ public sealed class LocalAgreementProfileRepository
     /// The <c>WHERE version = @expectedVersion</c> clause is defense-in-depth (ADR-018 D7):
     /// the load-bearing optimistic-concurrency check happens earlier in
     /// <see cref="ValidatePrecondition"/> and the FOR UPDATE held by
-    /// <see cref="AcquireLockAsync"/> under <see cref="IsolationLevel.RepeatableRead"/>
-    /// prevents concurrent mutation. The clause guards against a future code path that
+    /// <see cref="AcquireLockAsync"/> prevents concurrent mutation. The clause guards against a future code path that
     /// bypasses the lock (e.g., a hypothetical bulk-update endpoint) and makes the SQL
     /// self-documenting about the optimistic invariant.
     /// </summary>
@@ -536,7 +555,7 @@ public sealed class LocalAgreementProfileRepository
         var newVersion = await updateCmd.ExecuteScalarAsync(ct);
         if (newVersion is null)
         {
-            // Defense-in-depth: should be unreachable because the lock under RepeatableRead
+            // Defense-in-depth: should be unreachable because the row lock
             // prevents concurrent mutation between AcquireLockAsync and UpdateInPlaceAsync.
             // If it ever fires, surfacing it loudly is preferable to silently dropping the
             // write or returning a stale version.
@@ -615,6 +634,19 @@ public sealed class LocalAgreementProfileRepository
 /// </summary>
 public sealed record SaveProfileResult(Guid ProfileId, long Version, bool IsNoOp)
 {
+    /// <summary>
+    /// The profile id of the open row the save locked (<c>SELECT ... FOR UPDATE</c>) as the one it
+    /// replaces or edits, or <c>null</c> when no open row existed. The PUT route compares it, with
+    /// <see cref="LockedPredecessorVersion"/>, against the row it read before its transaction, and
+    /// answers 412 when they differ (S148 ruling A9): the version alone can match a different row,
+    /// because a supersession restarts the version at 1.
+    /// </summary>
+    public Guid? LockedPredecessorProfileId { get; init; }
+
+    /// <summary>The version of the locked row named by <see cref="LockedPredecessorProfileId"/>, as
+    /// locked (before this save's write); <c>null</c> when no open row existed.</summary>
+    public long? LockedPredecessorVersion { get; init; }
+
     /// <summary>
     /// Backward-compat overload — preserves the S22 destructuring shape
     /// <c>var (id, version) = await repo.SupersedeAndCreateAsync(...)</c>. New code

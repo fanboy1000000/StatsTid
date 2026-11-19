@@ -38,8 +38,12 @@ namespace StatsTid.Infrastructure;
 /// <c>PeriodReopened</c> event for <see cref="WorklistTriggerKinds.PriorMonthReopened"/>, the
 /// <c>UserOrganisationTransferred</c> event for <see cref="WorklistTriggerKinds.OrganisationTransfer"/>,
 /// the <c>EmployeeEmploymentStartDateSet</c> or <c>EmployeeEmploymentEndDateSet</c> event for
-/// <see cref="WorklistTriggerKinds.EmploymentWindowChange"/>, and the <c>EmployeeProfileSoftDeleted</c>
-/// event for a profile close (kind <see cref="WorklistTriggerKinds.ProfileChange"/>).</param>
+/// <see cref="WorklistTriggerKinds.EmploymentWindowChange"/>, the <c>EmployeeProfileSoftDeleted</c>
+/// event for a profile close (kind <see cref="WorklistTriggerKinds.ProfileChange"/>), and the
+/// configuration write's own event for <see cref="WorklistTriggerKinds.ConfigPublished"/>:
+/// <c>AgreementConfigPublished</c>, <c>PositionOverrideCreated</c>, <c>PositionOverrideUpdated</c>,
+/// <c>PositionOverrideDeactivated</c>, <c>PositionOverrideActivated</c> or
+/// <c>LocalAgreementProfileChanged</c>.</param>
 /// <param name="EffectiveFrom">
 /// The EARLIEST DAY whose change can alter the flagged period — the date HR should start looking
 /// from. Its meaning is the same for every kind; only where the date comes from differs (S145,
@@ -69,17 +73,39 @@ namespace StatsTid.Infrastructure;
 ///     window cannot be placed) — never <c>0001-01-01</c> (N-1, NR-P2, NR-P12, NR-P20).</item>
 ///   <item><b>The profile close</b> (S148 B-4; kind <see cref="WorklistTriggerKinds.ProfileChange"/>):
 ///     the close's own date, today.</item>
+///   <item><b><see cref="WorklistTriggerKinds.ConfigPublished"/></b> (S148 T19): the configuration
+///     write's own date, the applies-from day the administrator gave (today when omitted), which is
+///     also the date its event carries. One value per write, on every row the write lands: it is
+///     NOT each employee's first matching day, which is later for an employee who matched only
+///     after the date, or for an OK26 write dated before its OK version begins (ruling A7; the
+///     per-employee exactness is given up for the date HR can recognise).</item>
 /// </list>
 /// </param>
 /// <param name="ActorId">Who made the correction or the reopen (becomes <c>created_by</c> on a new row; recorded per trigger).</param>
 public sealed record WorklistTrigger(string Kind, Guid EventId, DateOnly EffectiveFrom, string ActorId);
 
 /// <summary>
+/// S148 T19 — a dated configuration write as its worklist hand-off
+/// (<see cref="HrBackdateWorklistRepository.WriteForConfigurationChangeAsync"/>) sees it: the key it
+/// configures and the day its new version applies from. An agreement-config publish gives the
+/// agreement code and OK version; a position override adds <paramref name="PositionCode"/>; an
+/// institution's local profile adds <paramref name="OrgId"/>. At most one of the two is set.
+/// </summary>
+/// <param name="AppliesFrom">The write's own date as the route resolved it (today when omitted): the
+/// first day of its reach and the trigger's <see cref="WorklistTrigger.EffectiveFrom"/>.</param>
+public sealed record ConfigurationChange(
+    string AgreementCode,
+    string OkVersion,
+    DateOnly AppliesFrom,
+    string? PositionCode = null,
+    string? OrgId = null);
+
+/// <summary>
 /// The kinds of change that can land a worklist row: the three corrections of dated history
 /// (refinement rev 4, TASK-13803), the reopen of the month before an exported month (S145,
-/// refinement A6, R5(c)), a transfer to another organisation (S148 C-13, P-24), and a change of an
-/// employment date (S148 P-27). A profile close lands its rows as a
-/// <see cref="ProfileChange"/> (S148 B-4).
+/// refinement A6, R5(c)), a transfer to another organisation (S148 C-13, P-24), a change of an
+/// employment date (S148 P-27), and a dated configuration write (S148 T19). A profile close lands
+/// its rows as a <see cref="ProfileChange"/> (S148 B-4).
 /// </summary>
 public static class WorklistTriggerKinds
 {
@@ -118,13 +144,26 @@ public static class WorklistTriggerKinds
     /// </summary>
     public const string EmploymentWindowChange = "EMPLOYMENT_WINDOW_CHANGE";
 
+    /// <summary>
+    /// S148 T19 (Q-2 = (a); refinement A-1, A-4) — a configuration payroll reads changed from a date:
+    /// an agreement-config publish, a position override's create, edit, activation or deactivation,
+    /// or an institution's local-profile write. The days it reaches, while its OK version governs,
+    /// may lie in months already sent to payroll or in settled holiday years (whose day counts come
+    /// from the configured weekly norm), so those figures may be stale. Raised for every employee who
+    /// matched the write on such a day (<see cref="HrBackdateWorklistRepository.WriteForConfigurationChangeAsync"/>).
+    /// Flag only; nothing is recalculated or revalued. NON-BLOCKING: a configuration write changes no
+    /// wage-type key, so <see cref="BackdateWorklistDerivation.RecalcBlockedByForTrigger"/> derives no block.
+    /// </summary>
+    public const string ConfigPublished = "CONFIG_PUBLISHED";
+
     public static bool IsKnown(string? kind) =>
         string.Equals(kind, ProfileChange, StringComparison.Ordinal)
         || string.Equals(kind, AgreementCodeChange, StringComparison.Ordinal)
         || string.Equals(kind, EmploymentCategoryChange, StringComparison.Ordinal)
         || string.Equals(kind, PriorMonthReopened, StringComparison.Ordinal)
         || string.Equals(kind, OrganisationTransfer, StringComparison.Ordinal)
-        || string.Equals(kind, EmploymentWindowChange, StringComparison.Ordinal);
+        || string.Equals(kind, EmploymentWindowChange, StringComparison.Ordinal)
+        || string.Equals(kind, ConfigPublished, StringComparison.Ordinal);
 }
 
 /// <summary>The two row kinds of <c>hr_backdate_worklist</c> (the <c>kind</c> CHECK).</summary>
@@ -365,6 +404,8 @@ public static class BackdateWorklistDerivation
             WorklistTriggerKinds.OrganisationTransfer => null,
             // S148 P-27: a date change touches no wage-type key, so it never blocks the re-plan.
             WorklistTriggerKinds.EmploymentWindowChange => null,
+            // S148 T19: a configuration write changes no wage-type key, so it never blocks the re-plan.
+            WorklistTriggerKinds.ConfigPublished => null,
             _ => null,
         };
 
@@ -576,6 +617,117 @@ public static class BackdateWorklistDerivation
         if (newEndDate is not { } newEnd)
             return (oldEnd, null);
         return (oldEnd < newEnd ? oldEnd : newEnd, (oldEnd > newEnd ? oldEnd : newEnd).AddDays(1));
+    }
+
+    /// <summary>
+    /// S148 T19 (refinement A-1) — the REACH of a configuration write: the days from
+    /// <paramref name="appliesFrom"/> on which <paramref name="okVersion"/> governs
+    /// (<see cref="OkVersionResolver.ResolveVersion"/> returns it), as <c>[From, ToExclusive)</c> with a
+    /// null upper bound when the version governs from there on; <c>null</c> when it never governs on or
+    /// after the date (a version string the resolver never returns lists nothing).
+    ///
+    /// <para>
+    /// <b>Plain language.</b> Every configuration is keyed by its OK version, and a new version is never
+    /// dated before its predecessor, so a write is the one in force from its date until its OK version
+    /// stops applying. An OK24 write dated Monday 5 January 2026 reaches [5 January 2026, 1 April 2026);
+    /// an OK26 write dated then reaches from 1 April 2026, open-ended.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>How, without restating the resolver's dates.</b> The resolver's answer can change only on a
+    /// period's first day or on the day after its last (before the first period and after the last it
+    /// clamps), so it is constant between two consecutive such days; asking it on those days finds where
+    /// the version starts and stops governing, with no per-day loop.
+    /// </para>
+    /// </summary>
+    public static (DateOnly From, DateOnly? ToExclusive)? OkVersionReach(string okVersion, DateOnly appliesFrom)
+    {
+        var changeDays = new SortedSet<DateOnly>();
+        foreach (var (start, end, _) in OkVersionResolver.ResolveVersionsForPeriod(DateOnly.MinValue, DateOnly.MaxValue))
+        {
+            changeDays.Add(start);
+            if (end < DateOnly.MaxValue)
+                changeDays.Add(end.AddDays(1));
+        }
+
+        DateOnly? from = Governs(appliesFrom) ? appliesFrom : null;
+        if (from is null)
+        {
+            foreach (var day in changeDays)
+            {
+                if (day > appliesFrom && Governs(day))
+                {
+                    from = day;
+                    break;
+                }
+            }
+        }
+        if (from is not { } reachFrom)
+            return null;
+
+        foreach (var day in changeDays)
+        {
+            if (day > reachFrom && !Governs(day))
+                return (reachFrom, day);
+        }
+        return (reachFrom, null);
+
+        bool Governs(DateOnly day) =>
+            string.Equals(OkVersionResolver.ResolveVersion(day), okVersion, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// S148 T19 (refinement A-1) — one employee's MATCHING INTERVALS for a configuration write: the
+    /// days inside <paramref name="reach"/> on which every dimension of the write matches that
+    /// employee's dated rows on the same day. <paramref name="agreementCodeRows"/> are the employee's
+    /// <c>user_agreement_codes</c> rows carrying the write's agreement code; <paramref name="secondDimensionRows"/>
+    /// are the rows carrying the write's position (<c>employee_profiles</c>) or organisation
+    /// (<c>user_organisations</c>), or <c>null</c> for an agreement-config publish, which matches on the
+    /// agreement code alone. Every interval is half-open with a null upper bound meaning open-ended
+    /// (ADR-018 D9); a row that covers no day of the reach contributes nothing.
+    ///
+    /// <para>
+    /// Starts are compared as dates in C# (BC-11): an agreement-code row that began "since always"
+    /// may be stored as <c>-infinity</c> or <c>0001-01-01</c>, and an organisation row as
+    /// <c>0001-01-01</c>; both read back as <see cref="DateOnly.MinValue"/> and are clipped to the
+    /// reach by comparison, never matched against each other.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<(DateOnly From, DateOnly? ToExclusive)> MatchingIntervals(
+        (DateOnly From, DateOnly? ToExclusive) reach,
+        IEnumerable<(DateOnly From, DateOnly? ToExclusive)> agreementCodeRows,
+        IEnumerable<(DateOnly From, DateOnly? ToExclusive)>? secondDimensionRows)
+    {
+        var second = secondDimensionRows?.ToList();
+        var result = new List<(DateOnly From, DateOnly? ToExclusive)>();
+        foreach (var agreementRow in agreementCodeRows)
+        {
+            if (Intersect(reach, agreementRow) is not { } inReach)
+                continue;
+            if (second is null)
+            {
+                result.Add(inReach);
+                continue;
+            }
+            foreach (var row in second)
+            {
+                if (Intersect(inReach, row) is { } both)
+                    result.Add(both);
+            }
+        }
+        result.Sort((a, b) => a.From.CompareTo(b.From));
+        return result;
+    }
+
+    /// <summary>The intersection of two half-open intervals (null upper bound = open), or <c>null</c> when it is empty.</summary>
+    private static (DateOnly From, DateOnly? ToExclusive)? Intersect(
+        (DateOnly From, DateOnly? ToExclusive) a, (DateOnly From, DateOnly? ToExclusive) b)
+    {
+        var from = a.From > b.From ? a.From : b.From;
+        DateOnly? to = a.ToExclusive is not { } aTo ? b.ToExclusive
+            : b.ToExclusive is not { } bTo ? aTo
+            : (aTo < bTo ? aTo : bTo);
+        return to is { } end && end <= from ? null : (from, to);
     }
 
     /// <summary>
@@ -842,6 +994,41 @@ public sealed class HrBackdateWorklistRepository
         WHERE user_id = @employeeId
         """;
 
+    // S148 T19 — the configuration hand-off's three reads, one per dimension table: every row
+    // carrying the write's value that overlaps the reach [@reachStart, @reachEnd) (NULL = open),
+    // half-open [effective_from, effective_to) (ADR-018 D9). No is_active filter: a leaver's paid
+    // months can be stale too. Starts are compared only with the reach's real dates here; the
+    // clipping is MatchingIntervals', in C#.
+    private const string SelectAgreementCodeRowsInReachSql =
+        """
+        SELECT user_id, effective_from, effective_to
+        FROM user_agreement_codes
+        WHERE agreement_code = @value
+          AND (effective_to IS NULL OR effective_to > @reachStart)
+          AND (@reachEnd IS NULL OR effective_from < @reachEnd)
+        ORDER BY user_id, effective_from
+        """;
+
+    private const string SelectPositionRowsInReachSql =
+        """
+        SELECT employee_id, effective_from, effective_to
+        FROM employee_profiles
+        WHERE position = @value
+          AND (effective_to IS NULL OR effective_to > @reachStart)
+          AND (@reachEnd IS NULL OR effective_from < @reachEnd)
+        ORDER BY employee_id, effective_from
+        """;
+
+    private const string SelectOrganisationRowsInReachSql =
+        """
+        SELECT user_id, effective_from, effective_to
+        FROM user_organisations
+        WHERE org_id = @value
+          AND (effective_to IS NULL OR effective_to > @reachStart)
+          AND (@reachEnd IS NULL OR effective_from < @reachEnd)
+        ORDER BY user_id, effective_from
+        """;
+
     // Insert-or-append against the EXPORTED_MONTH partial unique (one OPEN row per month).
     // @trigger is a ONE-ELEMENT jsonb array so `||` appends the element on conflict.
     private const string UpsertExportedMonthSql =
@@ -963,8 +1150,30 @@ public sealed class HrBackdateWorklistRepository
         CancellationToken ct)
     {
         ValidateTrigger(trigger);
+        var exports = await SelectExportedMonthsAsync(
+            conn, tx, employeeId, from, toExclusive, CopenhagenBusinessDate.Today(_timeProvider), ct);
+        return await UpsertAndEmitExportedMonthsAsync(conn, tx, employeeId, trigger, exports, ct);
+    }
+
+    /// <summary>
+    /// The exported-month SELECTION of <see cref="WriteForExportedMonthsAsync"/>, read in the caller's
+    /// tx: the employee's export records whose month intersects <c>[from, toExclusive)</c>, a bounded
+    /// interval widened to the Monday after its last week (R5(a)), an open-ended one clipped at
+    /// <paramref name="today"/>'s month (the current Copenhagen month, read once by the caller,
+    /// PAT-028). Empty for an empty interval. Shared with the configuration hand-off, which takes the
+    /// union of several intervals' selections (S148 T19, ruling A8).
+    /// </summary>
+    private static async Task<IReadOnlyList<ExportedMonth>> SelectExportedMonthsAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string employeeId,
+        DateOnly from,
+        DateOnly? toExclusive,
+        DateOnly today,
+        CancellationToken ct)
+    {
         if (toExclusive is { } upper && upper <= from)
-            return Array.Empty<Guid>();
+            return Array.Empty<ExportedMonth>();
 
         var lo = new DateOnly(from.Year, from.Month, 1);
         // S145 R5(a): a BOUNDED interval reaches the month that SETTLED its last week. Writers pass
@@ -980,12 +1189,11 @@ public sealed class HrBackdateWorklistRepository
         // Monday 3 August and hide itself (WriteForExportedMonths_OpenEnded_SelectsThroughCurrentCopenhagenMonth_NotBeyond).
         var hi = toExclusive is { } bound
             ? BackdateWorklistDerivation.SettlingMondayAfter(bound)
-            : FirstDayOfNextMonth(CopenhagenBusinessDate.Today(_timeProvider));
+            : FirstDayOfNextMonth(today);
         if (hi <= lo)
-            return Array.Empty<Guid>();
+            return Array.Empty<ExportedMonth>();
 
-        var exports = await ReadExportedMonthsAsync(conn, tx, employeeId, lo, hi, ct);
-        return await UpsertAndEmitExportedMonthsAsync(conn, tx, employeeId, trigger, exports, ct);
+        return await ReadExportedMonthsAsync(conn, tx, employeeId, lo, hi, ct);
     }
 
     /// <summary>
@@ -1388,6 +1596,182 @@ public sealed class HrBackdateWorklistRepository
         }
 
         return ids;
+    }
+
+    // ── The configuration hand-off (S148 T19) ───────────────────────────────────────────────
+
+    /// <summary>
+    /// S148 T19 (Q-2 = (a); refinement A-1, A-4) — the hand-off of a dated configuration write: an
+    /// agreement-config publish, a position override's create, edit, activation or deactivation, or
+    /// an institution's local-profile write. Called once per write, last in the write's transaction,
+    /// after the route has taken the pay-inputs lock (<see cref="PayInputsLock"/>) at its head.
+    ///
+    /// <para>
+    /// <b>Plain language.</b> A configuration dated into the past changes the rules for days payroll
+    /// may already have paid, and nothing recalculates by itself (ADR-043 D12; ADR-013). So every
+    /// month already sent to payroll, and every settled holiday year, that the write reaches for an
+    /// employee it applies to, is listed on HR's worklist under <see cref="WorklistTriggerKinds.ConfigPublished"/>,
+    /// pointing at the write's own event. A GlobalAdmin recalculates; a settled year is flagged, never
+    /// revalued.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Who and which periods.</b> The REACH is the days from <see cref="ConfigurationChange.AppliesFrom"/>
+    /// on which its OK version governs (<see cref="BackdateWorklistDerivation.OkVersionReach"/>). An
+    /// employee is listed when the write's dimensions match their dated rows on the same day inside the
+    /// reach (<see cref="BackdateWorklistDerivation.MatchingIntervals"/>): the agreement code
+    /// (<c>user_agreement_codes</c>); and the position (<c>employee_profiles</c>) for an override, or the
+    /// organisation (<c>user_organisations</c>) for a local profile. Each matching interval selects
+    /// exported months by <see cref="WriteForExportedMonthsAsync"/>'s rule (a bounded interval widened
+    /// to the month that settled its last week, an open-ended one clipped at the current Copenhagen
+    /// month) and threatened settled years by <see cref="WriteForSettledYearsAsync"/>'s date rule. Every
+    /// dated write, not only a past-dated one: a write dated today reaches an exported month only when
+    /// the current month is already exported.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Once per (employee, month) and per (employee, year) per write</b> (ruling A8). The upserts
+    /// append without de-duplicating, so the selections of one employee's intervals are united first
+    /// and each month and year gets one trigger and one event, however many intervals reach it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The one definition of "in force".</b> The reach and the matching describe the same days the
+    /// dated lookups price (<c>AgreementConfigRepository.GetInForceAsync</c>,
+    /// <c>PositionOverrideRepository.GetInForceAsync</c>, the local profile's dated read, with
+    /// <see cref="OkVersionResolver"/> for the OK version): the write is in force from its date
+    /// because a new version is never dated before its predecessor. One asymmetry over-lists, never
+    /// under-lists: payroll applies a local profile only on a day with an employment record, while the
+    /// organisation match here needs none.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One connection.</b> Every read and write runs on the caller's <paramref name="conn"/>/<paramref name="tx"/>,
+    /// after the pay-inputs lock, so a recording that committed while the write waited is seen (PAT-015:
+    /// the caller's transaction is READ COMMITTED). It opens no other connection and takes no advisory lock.
+    /// </para>
+    /// </summary>
+    /// <param name="eventId">The write's own event (the trigger's causal link).</param>
+    /// <param name="actorId">Who made the write.</param>
+    /// <returns>The affected row ids (new or appended): per employee in id order, the exported months
+    /// in month order, then the settled years.</returns>
+    public async Task<IReadOnlyList<Guid>> WriteForConfigurationChangeAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        ConfigurationChange change,
+        Guid eventId,
+        string actorId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        if (change.PositionCode is not null && change.OrgId is not null)
+            throw new ArgumentException("A configuration write has a position or an organisation, never both.", nameof(change));
+
+        // EffectiveFrom is the write's own date on every row it lands (ruling A7).
+        var trigger = new WorklistTrigger(WorklistTriggerKinds.ConfigPublished, eventId, change.AppliesFrom, actorId);
+        ValidateTrigger(trigger);
+
+        if (BackdateWorklistDerivation.OkVersionReach(change.OkVersion, change.AppliesFrom) is not { } reach)
+            return Array.Empty<Guid>();
+
+        Dictionary<string, List<(DateOnly From, DateOnly? ToExclusive)>> agreementRows;
+        await using (var cmd = new NpgsqlCommand(SelectAgreementCodeRowsInReachSql, conn, tx))
+            agreementRows = await ReadRowsInReachAsync(cmd, change.AgreementCode, reach, ct);
+        if (agreementRows.Count == 0)
+            return Array.Empty<Guid>();
+
+        Dictionary<string, List<(DateOnly From, DateOnly? ToExclusive)>>? secondRows = null;
+        if (change.PositionCode is { } positionCode)
+        {
+            await using var cmd = new NpgsqlCommand(SelectPositionRowsInReachSql, conn, tx);
+            secondRows = await ReadRowsInReachAsync(cmd, positionCode, reach, ct);
+        }
+        else if (change.OrgId is { } orgId)
+        {
+            await using var cmd = new NpgsqlCommand(SelectOrganisationRowsInReachSql, conn, tx);
+            secondRows = await ReadRowsInReachAsync(cmd, orgId, reach, ct);
+        }
+
+        // The open-ended clip's "today", read once for the whole write (PAT-028).
+        var today = CopenhagenBusinessDate.Today(_timeProvider);
+        var ids = new List<Guid>();
+        foreach (var (employeeId, rows) in agreementRows.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            IEnumerable<(DateOnly From, DateOnly? ToExclusive)>? second = null;
+            if (secondRows is not null)
+            {
+                if (!secondRows.TryGetValue(employeeId, out var employeeSecondRows))
+                    continue;
+                second = employeeSecondRows;
+            }
+
+            var intervals = BackdateWorklistDerivation.MatchingIntervals(reach, rows, second);
+            if (intervals.Count == 0)
+                continue;
+
+            // Exported months: the union of every interval's selection, one row each (A8).
+            var exports = new SortedDictionary<(int Year, int Month), ExportedMonth>();
+            foreach (var (from, toExclusive) in intervals)
+            {
+                foreach (var export in await SelectExportedMonthsAsync(conn, tx, employeeId, from, toExclusive, today, ct))
+                    exports.TryAdd((export.Year, export.Month), export);
+            }
+            ids.AddRange(await UpsertAndEmitExportedMonthsAsync(
+                conn, tx, employeeId, trigger, exports.Values.ToList(), ct));
+
+            // Settled years: each ACTIVE settlement any interval threatens, once (A8). Flag only.
+            var active = await ReadActiveSettlementsAsync(conn, tx, employeeId, ct);
+            if (active.Count == 0)
+                continue;
+            var subject = await ReadSubjectAsync(conn, tx, employeeId, ct);
+            var resetMonthByType = new Dictionary<string, int?>(StringComparer.Ordinal);
+            var selected = new List<ActiveSettlement>(active.Count);
+            foreach (var settlement in active)
+            {
+                foreach (var (from, toExclusive) in intervals)
+                {
+                    if (await ThreatensSettledYearAsync(conn, tx, subject, settlement, from, toExclusive, resetMonthByType, ct))
+                    {
+                        selected.Add(settlement);
+                        break;
+                    }
+                }
+            }
+            ids.AddRange(await UpsertAndEmitSettledYearsAsync(conn, tx, employeeId, subject, trigger, selected, ct));
+        }
+
+        return ids;
+    }
+
+    /// <summary>
+    /// Runs one of the configuration hand-off's dimension reads (<paramref name="cmd"/>, built on the
+    /// caller's tx from one of the three literal statements): the rows carrying <paramref name="value"/>
+    /// that overlap <paramref name="reach"/>, grouped by employee, each as its half-open
+    /// <c>[effective_from, effective_to)</c>.
+    /// </summary>
+    private static async Task<Dictionary<string, List<(DateOnly From, DateOnly? ToExclusive)>>> ReadRowsInReachAsync(
+        NpgsqlCommand cmd, string value, (DateOnly From, DateOnly? ToExclusive) reach, CancellationToken ct)
+    {
+        cmd.Parameters.Add(new NpgsqlParameter("value", NpgsqlDbType.Text) { Value = value });
+        cmd.Parameters.Add(new NpgsqlParameter("reachStart", NpgsqlDbType.Date) { Value = reach.From });
+        cmd.Parameters.Add(new NpgsqlParameter("reachEnd", NpgsqlDbType.Date)
+        {
+            Value = reach.ToExclusive is { } end ? end : DBNull.Value,
+        });
+
+        var byEmployee = new Dictionary<string, List<(DateOnly From, DateOnly? ToExclusive)>>(StringComparer.Ordinal);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var employeeId = reader.GetString(0);
+            if (!byEmployee.TryGetValue(employeeId, out var rows))
+            {
+                rows = new List<(DateOnly From, DateOnly? ToExclusive)>();
+                byEmployee[employeeId] = rows;
+            }
+            rows.Add((reader.GetFieldValue<DateOnly>(1), reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2)));
+        }
+        return byEmployee;
     }
 
     // ── Reads (self-managed connection) ─────────────────────────────────────────────────────

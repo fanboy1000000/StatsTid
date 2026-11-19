@@ -443,8 +443,10 @@ public static class AgreementConfigEndpoints
         //    Copenhagen; a future date, one before the key's newest published version, or a
         //    non-Monday for a Monday-only field answers 400 with nothing written. Atomically
         //    archives the prior ACTIVE for (agreement_code, ok_version), which stays in force
-        //    for its own days, and activates the DRAFT from that date, in a single tx.
-        //    Concurrent state-change (S24 Step 7a P1) manifests as 412.
+        //    for its own days, and activates the DRAFT from that date, in a single tx that also
+        //    lists, on HR's correction worklist, every exported month and settled holiday year
+        //    the new version reaches (S148 T19, Q-2 = (a)). Concurrent state-change (S24 Step 7a
+        //    P1) manifests as 412.
         // ═══════════════════════════════════════════
         app.MapPost("/api/agreement-configs/{configId:guid}/publish", async (
             Guid configId,
@@ -455,6 +457,7 @@ public static class AgreementConfigEndpoints
             IAuditProjectionMapper<AgreementConfigPublished> publishedMapper,
             IAuditProjectionMapper<AgreementConfigArchived> archivedMapper,
             AuditProjectionRepository auditRepo,
+            HrBackdateWorklistRepository worklistRepo,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -485,11 +488,12 @@ public static class AgreementConfigEndpoints
                 return dateRefusal;
 
             // 3. Atomic publish (ADR-018 D3): archive prior ACTIVE + activate DRAFT + audit
-            //    (with version-transition pair) + outbox enqueue, all in a single tx at READ
-            //    COMMITTED. The v3 PublishAsync(conn, tx, configId, expectedVersion, appliesFrom, ...)
-            //    takes the key lock first (every row of the key FOR UPDATE, ruling B4), enforces
-            //    ETag/If-Match + status='DRAFT' (OptimisticConcurrencyException → 412), then the
-            //    date rules (AppliesFromRefusedException → 400), before it writes.
+            //    (with version-transition pair) + outbox enqueue + the worklist hand-off, all in a
+            //    single tx. Lock order (Block C): the pay-inputs lock (0) → the key's rows FOR UPDATE
+            //    → the worklist rows. The v3 PublishAsync(conn, tx, configId, expectedVersion,
+            //    appliesFrom, ...) takes the key lock (every row of the key FOR UPDATE, ruling B4),
+            //    enforces ETag/If-Match + status='DRAFT' (OptimisticConcurrencyException → 412), then
+            //    the date rules (AppliesFromRefusedException → 400), before it writes.
             //
             //    When the publish supersedes a prior ACTIVE config (saveResult.ArchivedId
             //    non-null), ADR-019 D1 mandates that we also emit a matching ARCHIVED audit
@@ -501,9 +505,17 @@ public static class AgreementConfigEndpoints
             {
                 await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                // READ COMMITTED, stated explicitly (PAT-015): the first statement waits for the
+                // pay-inputs lock, and the worklist read after it must see a payroll recording that
+                // committed during the wait; under REPEATABLE READ the snapshot would predate it.
+                await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement; nothing is held
+                    // before it on this or any other connection (the pre-flight read above has finished).
+                    // Lock order: pay inputs → the key's rows FOR UPDATE → the worklist rows.
+                    await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                     saveResult = await agreementConfigRepo.PublishAsync(
                         conn, tx, configId, expectedVersion, appliesFrom, actor.ActorId ?? "system", ct);
 
@@ -589,6 +601,17 @@ public static class AgreementConfigEndpoints
                         var archivedAuditRow = archivedMapper.Map(archivedEvent, archivedAuditCtx);
                         await auditRepo.InsertAsync(conn, tx, archivedEvent.EventId, archivedOutboxId, archivedEvent.EventType, archivedAuditRow, archivedAuditCtx, ct);
                     }
+
+                    // The hand-off (S148 T19, Q-2 = (a)), last before the commit: every exported month
+                    // and settled holiday year the new version reaches, for every employee on the
+                    // agreement code on such a day, is listed on HR's worklist under CONFIG_PUBLISHED,
+                    // pointing at the publish's own event and dated the publish's date. Flag only;
+                    // nothing is recalculated (ADR-043 D12), and the trigger never blocks the re-plan.
+                    // The key is the activated row's, read under the key lock.
+                    await worklistRepo.WriteForConfigurationChangeAsync(
+                        conn, tx,
+                        new ConfigurationChange(saveResult.Config.AgreementCode, saveResult.Config.OkVersion, appliesFrom),
+                        @event.EventId, actor.ActorId ?? "unknown", ct);
 
                     await tx.CommitAsync(ct);
                 }
