@@ -33,11 +33,12 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
    - CI-M4b is also the repeat run for R8 and C2-R5 (Choreography B and AC-C13s must stay green, since its mutations do not touch them).
    - **When both are judged:** log them; close PRs #64 and #65 unmerged; delete both remote branches and both local branches; update the SEC-062, SEC-065 and QUAL-257 register cells from "CI-pending" to "CI-verified" (CI-W4 plus CI-M4a).
    - **Wave 5 then starts.**
-3. **Wave-5 briefs, batches A and B** (Planning Drafters, Opus 5.5, dispatched 2026-11-19 while CI-M4 runs; cited at `bb529e62`):
-   - **Batch A:** TASK-14822, -T, 14823, -T and 14824. Its report will begin `## S148 wave-5 batch A planner report`.
-   - **Batch B:** TASK-14825 and -T. Its report will begin `## S148 wave-5 batch B planner report`.
-   - **When they return:** save each report as `.claude/reviews/S148-wave5A-briefs-planner-report.md` and `-wave5B-` (with `msgmatch.js`). Then adjudicate A and B together (Fable `adjudicator`, as wave 4 did: `S148-wave4AB-briefs-adjudication.md`). Then apply the rulings with a planner.
-   - **Later batches:** C is the T14b stack (14826, 14826-T, 14827, 14828, 14828-T, 14829). D is 14830, -T, 14831, -T and 14846. O-23 (the wage-type-mapping writer trace) must run before 14831's brief is adjudicated.
+3. **Wave-5 briefs** (logged in `0b77061e`):
+   - **Batches A and B are drafted.** Reports: `.claude/reviews/S148-wave5A-briefs-planner-report.md` and `-wave5B-`.
+   - **Their Fable adjudication is running.** Its output begins `## S148 wave-5 batches A and B — brief adjudication`; save it as `.claude/reviews/S148-wave5AB-briefs-adjudication.md`. Then a planner applies it ("final + 25"), and batch C is reconciled with the rulings.
+   - **Batch C (the T14b stack) is drafting in parallel.** Its report begins `## S148 wave-5 batch C planner report`; save it as `S148-wave5C-briefs-planner-report.md`.
+   - **O-23 is done** (`S148-O23-wage-type-mapping-trace.md`). It is input to TASK-14831's brief adjudication.
+   - **Batch D** (14830, -T, 14831, -T, 14846) is drafted after C.
 
 ## After that
 - **Wave 5** ends with **TASK-14846** (`ux`; the edit drawer locks one's own refused fields, with the contract Danish note).
