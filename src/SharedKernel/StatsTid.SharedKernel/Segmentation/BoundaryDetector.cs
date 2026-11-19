@@ -177,6 +177,8 @@ internal static class BoundaryDetector
         // part-time-fraction changes) now split segments. Tie-break slot per the D5 ruling:
         // after PositionOverrideEffective, before EuWtdRulesetVersion. Nullable for
         // backward compatibility with pre-S137 callers; null is treated as the empty list.
+        // The list also holds user_organisations start dates (transfers, ADR-040 D4): the payroll
+        // caller merges them in by ruling (no boundary kind of its own; TASK-14822's contract).
         if (sources.EmployeeProfileEffectiveDates is { } profileEffectiveDates)
         {
             foreach (var d in profileEffectiveDates)

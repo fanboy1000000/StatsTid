@@ -150,7 +150,8 @@ public sealed class PeriodCalculationService
     // S21 TASK-2108 (ADR-017 D9c): optional repository for hydrating
     // BoundarySources.LocalProfileActivations on the back-compat shim path. Optional
     // because existing PCS unit tests construct PCS without DI; null-tolerant behavior
-    // matches the IRuleClassificationProvider precedent (line 124). When null, the
+    // matches the IRuleClassificationProvider precedent (the optional classificationProvider
+    // constructor parameter, which falls back to EmptyRuleClassificationProvider). When null, the
     // shim emits no profile-activation boundaries — the same observable behavior as
     // pre-S21, so existing tests are unaffected.
     private readonly LocalAgreementProfileRepository? _localAgreementProfileRepo;
@@ -158,7 +159,7 @@ public sealed class PeriodCalculationService
     // lookup at the segmentProfile construction site. Optional because existing PCS
     // unit-test fixtures construct the service directly (no DI); the legacy
     // copy-caller-profile path is preserved when this is null (refinement cycle 2
-    // Codex W absorption — S29 _localAgreementProfileRepo precedent at line 86).
+    // Codex W absorption — S29 _localAgreementProfileRepo precedent, the field above).
     private readonly IEmploymentProfileResolver? _profileResolver;
     // S137 TASK-13702 (ADR-040 D5/D7): optional resolver for the employee's employment
     // window(s). Hydrates BoundarySources.EmploymentStartedDates/EmploymentEndedDates and
@@ -217,11 +218,13 @@ public sealed class PeriodCalculationService
     // ADR-040 D4, ADR-043 D12: the employee's organisation history read — the user_organisations effective-from
     // dates, read once per calculation with the two date reads above (ReadPlanHistoriesAsync). A transfer date
     // cuts the month through the existing EmployeeProfileChange boundary, the opening week's context pieces and
-    // the local-profile runs, so each part asks its own institution. Optional in the constructor, but NEVER
-    // SILENT and with no mode: every planning or calculating call that reads the histories throws
-    // InvalidOperationException naming the registration when it is absent (RequireOrganisationHistoryReader),
-    // because a month planned without its transfer cuts would price a part under the wrong institution's rules.
-    // Replay never reads it (ADR-016 D10: it never plans).
+    // the local-profile runs, so each part asks its own institution's local-profile history for activation dates.
+    // Optional in the constructor, but NEVER SILENT and with no mode: every planning or calculating call that
+    // reads the histories throws InvalidOperationException naming the registration when it is absent
+    // (RequireOrganisationHistoryReader). Today no paid figure depends on the organisation; once the T14b stack
+    // sends each part's own configuration to the engine, each part is priced under its own institution's rules,
+    // and a month planned without its transfer cuts would then price a part under the wrong institution's. The
+    // refusal keeps such a plan from being made. Replay never reads it (ADR-016 D10: it never plans).
     private readonly IOrganisationHistoryReader? _organisationHistoryReader;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
@@ -464,9 +467,11 @@ public sealed class PeriodCalculationService
     ///
     /// <para>
     /// <b>Why it throws (plain language).</b> A transfer from one institution to another inside a month splits
-    /// the month, so each part is priced under its own institution's local profile (ADR-043 D12). A service built
-    /// without the reader cannot see a transfer; planning the month as one piece instead would pay part of it
-    /// under the wrong institution's rules, silently, so it refuses, by name.
+    /// the month, so that each part can be priced under its own institution's rules (ADR-043 D12). Today no paid
+    /// figure depends on the organisation; once the T14b stack sends each part's own configuration to the engine,
+    /// it will. A service built without the reader cannot see a transfer, and a month planned as one piece would
+    /// then pay part of it under the wrong institution's rules, silently. The refusal, by name, keeps such a plan
+    /// from being made now.
     /// </para>
     /// </summary>
     private IOrganisationHistoryReader RequireOrganisationHistoryReader() =>
@@ -1938,9 +1943,10 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
-    /// <strong>Its name is load-bearing.</strong> Two planning-shape suites,
-    /// <c>EmploymentWindowHydrationTests</c> (Unit) and <c>ProfileBoundaryHydrationTests</c> (Regression),
-    /// invoke this private method by name through reflection, so renaming it breaks them.
+    /// <strong>Its name is load-bearing.</strong> Three planning-shape suites,
+    /// <c>EmploymentWindowHydrationTests</c> (Unit), <c>ProfileBoundaryHydrationTests</c> and
+    /// <c>DatedConfigBoundaryTests</c> (Regression), invoke this private method by name through reflection, so
+    /// renaming it breaks them.
     /// </para>
     /// </summary>
     private async Task<(PlannedCalculation Plan, PlanHistories Histories)> BuildPlanWithHistoriesAsync(
@@ -2027,8 +2033,8 @@ public sealed class PeriodCalculationService
         var datedResolutions = new Dictionary<DateOnly, DatedProfile>();
 
         // Local-agreement-profile activations (S21 TASK-2108, ADR-017 D9c) — asked of the employee's
-        // DATED record since S145 TASK-14519 (adjudicator R-20, QUAL-203), per (agreement, OK-version)
-        // interval, never of the request body: see ReadLocalProfileActivationsAsync for the cut, the
+        // DATED record since S145 TASK-14519 (adjudicator R-20, QUAL-203), per (organisation, agreement,
+        // OK-version) interval, never of the request body: see ReadLocalProfileActivationsAsync for the cut, the
         // key and why a single lookup keyed on the period start would miss an interior change.
         var localProfileActivations = await ReadLocalProfileActivationsAsync(
             profile, periodStart, periodEnd, okTransitions, agreementCodeEffectiveDates,
@@ -2249,7 +2255,8 @@ public sealed class PeriodCalculationService
     ///
     /// <para>
     /// <b>Plain language.</b> When an organisation switches on a local agreement profile partway through a
-    /// month, that date splits the month (and under the live rule set a split month is refused). A profile
+    /// month, that date splits the month (the live rule set refuses no split: the month is calculated part by
+    /// part, see <see cref="EvaluatedRuleIds"/>). A profile
     /// belongs to one (organisation, agreement, OK version), so the question "did a profile switch on?" is
     /// only meaningful for the organisation, agreement and OK version the employee actually had on each day.
     /// Before this task it was asked once, with the request body's organisation, agreement and OK version; every other
@@ -2448,8 +2455,11 @@ public sealed class PeriodCalculationService
     /// <b>The runs</b>, the shape of <see cref="ReadLocalProfileActivationsAsync"/>. The period is cut at its
     /// interior OK transitions and agreement-code dates (a config's key is (agreement, OK version)), and for
     /// overrides also at its interior profile dates, where the position can change (an override's key is
-    /// (agreement, OK version, position)). Each interval's key comes from the employee's dated record, read on
-    /// the interval's first day, or on its first employment start when the employee is not employed that day,
+    /// (agreement, OK version, position)), and at its interior transfer dates (the <c>user_organisations</c>
+    /// start dates, merged into the same list by <see cref="BuildPlanWithHistoriesAsync"/>; a transfer changes no
+    /// override key, so its cut only re-reads an unchanged one). Each interval's key comes from the employee's
+    /// dated record, read on the interval's first day, or on its first employment start when the employee is not
+    /// employed that day,
     /// through the plan's per-date cache (both days are EMPLOYED candidate segment starts, so no extra resolver
     /// read). Consecutive intervals with an unchanged key merge into one run; an interval with no key (no
     /// employed day, a record gap, or no position for an override) ends a run.
@@ -2508,7 +2518,9 @@ public sealed class PeriodCalculationService
         foreach (var date in agreementCodeEffectiveDates ?? Array.Empty<DateOnly>())
             AddInterior(configCuts, date);
 
-        // An override's key can also change where the position can: the employee_profiles dates.
+        // An override's key can also change where the position can: the employee_profiles dates. The list also
+        // holds the transfer dates (user_organisations), merged in by BuildPlanWithHistoriesAsync; a transfer
+        // changes no override key, so its cut only re-reads an unchanged one.
         var overrideCuts = new SortedSet<DateOnly>(configCuts);
         foreach (var date in employeeProfileEffectiveDates ?? Array.Empty<DateOnly>())
             AddInterior(overrideCuts, date);

@@ -61,6 +61,9 @@ public enum BoundaryCause
     /// ACTIVATED by ADR-040 D5 (S137) — profile effective dates now split segments, closing
     /// the "UI shows what payroll will not pay" divergence. Tie-break slot: after
     /// <see cref="PositionOverrideEffective"/>, before <see cref="EuWtdRulesetVersion"/>.
+    /// It also marks a <c>user_organisations</c> start date (a transfer, ADR-040 D4): payroll
+    /// merges those dates into the same source by ruling (no boundary kind of its own;
+    /// TASK-14822's contract), so this cause can stand on a date with no <c>employee_profiles</c> row.
     /// </summary>
     EmployeeProfileChange,
 
