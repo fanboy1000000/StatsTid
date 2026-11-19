@@ -2067,3 +2067,21 @@ M-40 included [O for the 14 facts of the five classes run].
 - **The one open case, `(unproven)`:** a segment starting today or later. If such a month can be approved and exported, a later recalculation could pick up the new code. The trace did not establish that it can. If it can, the smallest closure is the writer taking the pay-inputs lock together with a mapping check inside TASK-14831's re-derivation.
 - **Two corrections to the plan's premise:** the mapping routes are `GlobalAdminOnly`, not HR's; and nothing in `ExportAsync` re-reads the mapping today, so ruling 2.5's "the mapping inside payroll's recheck" would be a new check, not an extension.
 - The trace is input to TASK-14831's brief adjudication (batch D).
+
+**Wave-5 batches A and B adjudicated** (`.claude/reviews/S148-wave5AB-briefs-adjudication.md`, Fable 5.2, RULED, no owner question). A planner is applying the rulings to the seven briefs and to the plan ("final + 25"). Most planner leans stand; six things change:
+- **One Danish label is corrected:** `EMPLOYMENT_WINDOW_CHANGE` is "Ansættelsesperiode-ændring", not "Ansættelsesdato-ændring". The screens use "ansættelsesdato" for the start date only, and the trigger also covers the end date ("fratrædelsesdato"). The other two labels stand: "Konfigurationsændring" and "Organisationsskift".
+- **A race in the local-profile save is fixed inside TASK-14823** (ruling A9; new fact AC-C2u, mutation M-49 at CI-M5).
+  - The save reads the profile it replaces before it waits for the lock. If another administrator supersedes that profile during the wait, the audit row and event describe a replacement of the wrong row.
+  - TASK-14823 lengthens that wait, so it now refuses that case with its existing 412.
+  - A related weakness is registered at O-15, not fixed: the version counter restarts at 1 after a supersession, so a stale version can pass sequentially. The sprint-close C2-R4 census gains this second shape.
+- **"Refused by name" holds on every configuration-reading screen** (ruling B4). One Backend mapping answers 503 when the configuration cannot be read and a named 500 (`config_not_in_force`) when none is in force. Without it, Skema and the year overview would answer an anonymous error.
+- **The overtime compensation-choice routes ask for the OK version of the day they read** (B12). Paired with the current OK version, a configuration dated at its OK period's start would have refused a whole year.
+- **The norm calculator's per-day reads are a registered performance limit** (B6). The year overview goes from a handful of configuration reads to about 780 per request. 14825-T records a timing line, and TASK-14828 owns restoring reuse.
+- **PIN-2 keeps both comparisons** (B14), so its independence from QUAL-190 holds.
+- **Seams fixed for later batches:** one dated-organisation definition, but three readers, since three different questions are asked (A1: payroll's `IOrganisationHistoryReader` is new). The lookup is `IAgreementConfigLookup`, with `ResolveAsync`, `ResolveCentralAsync` and two named exceptions (B8). Batch C is reconciled with these names.
+- **Told to the owner, no decision:**
+  - Between TASK-14825 and the T14b stack, payroll splits a month at a dated change but still prices it on the built-in rules. No invariant is traded: the seeded versions all apply from `0001-01-01`, so PIN-1 is unaffected, and nothing exported in that window survives a reseed.
+  - The fail-closed error now reaches every configuration-reading screen, with an English sentence; Danish copy for it is not built.
+  - The year overview's registered read cost.
+  - The registered version-restart weakness.
+  - The corrected label.
