@@ -2196,3 +2196,18 @@ M-40 included [O for the 14 facts of the five classes run].
   - Orchestrator commit `a91615d8` (Small Tasks Exception: two string lines): the message now names its registrations by symbol. No test asserts that text.
 - **Two low items it flagged are left as true:** `:2264` is explicitly about the code before the task, and `IOrganisationHistoryReader.cs:7` ("each part resolves its own institution's record") holds today.
 - **TASK-14822-T fix-up 1 dispatched** (`test-qa`, base `a91615d8`): R1, R2, R3 (the exported-month fact through the route), the test remarks, R6, R7, and the R8 census re-run. **A local-cluster pre-check of the touched Docker facts is expected this time**: the two defects were the kind a single local run would have caught.
+
+**Wave-5 batch C, rulings applied** (planner, Opus 5.5; `.claude/reviews/S148-wave5C-briefs-applied-report.md`).
+- **The six briefs are at draft 2, adjudicated, and the plan is at "final + 26"** (`d473fa6d`): 147 AC ids (+AC-C1p) and 47 mutation ids (+M-50, local).
+- The 23 ruled strings were checked byte for byte by script.
+- **Interpretation calls accepted as held:**
+  - S7 and S10's place in the compliance route order is reported by the implementer, since no fact depends on it.
+  - Ruling 1's "serializer branch is ruling 22" is transcribed with ruling 19's control arm beside it.
+  - Ruling 15's cite of `HttpRuleClassificationProvider.cs:276` is recorded as a brief challenge. That reader accepts both forms, and the ruling stands on the Backend's other engine reads.
+  - 14828's "merge equal configs" hint is kept with ruling 13's caution.
+  - M-49 is added to 14828-T's CI-M5 list.
+- **Orchestrator, in the same commit:** TASK-14828-T's plan row carries the TASK-14822 5a rulings R8 (the census of every construction form) and R9 (a real-engine fact that a pure-transfer split moves no amount).
+
+**Wave-5 batch D drafting** (TASK-14830, -T, 14831, -T, 14846; planner, Opus 5.5), cited at `d473fa6d`.
+- The O-23 trace is input to TASK-14831's mapping fork, which goes to the adjudicator. The planner presents it and does not decide it.
+- The wave-5 lessons are carried into its prompt: the census of every construction form, R facts that run product code between their readings, and the expected local-cluster pre-check.
