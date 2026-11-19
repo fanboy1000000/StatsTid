@@ -2190,3 +2190,9 @@ M-40 included [O for the 14 facts of the five classes run].
   - R8: every later brief that changes PCS's constructor uses a census of every construction form.
   - R9 (unproven): TASK-14828-T pins that a pure-transfer split leaves June's line totals unchanged, on the real engine.
 - **Fix-up order:** TASK-14822 fix-up 1 (`payroll-integration`, comment only, R4 and R5) is dispatched on `a154a19f`. TASK-14822-T fix-up 1 (`test-qa`: R1, R2, R3, the test remarks, R6, R7) follows on its tip. Then cycle 2 on both lenses.
+
+**TASK-14822 fix-up 1 returned** (`payroll-integration`; `7f0ef37a`, comment only; report `.claude/reviews/S148-TASK-14822-fix1-report.md`). R4's production remarks and R5's three SharedKernel definitions are corrected. The comment-only check is clean, the build is unchanged and Unit is 1758 green.
+- **The agent correctly stopped on one item.** The stale "L72-73"/"L79" cites are inside the window-resolver coupling exception's string, not a comment, so ruling R4 had misdescribed them.
+  - Orchestrator commit `a91615d8` (Small Tasks Exception: two string lines): the message now names its registrations by symbol. No test asserts that text.
+- **Two low items it flagged are left as true:** `:2264` is explicitly about the code before the task, and `IOrganisationHistoryReader.cs:7` ("each part resolves its own institution's record") holds today.
+- **TASK-14822-T fix-up 1 dispatched** (`test-qa`, base `a91615d8`): R1, R2, R3 (the exported-month fact through the route), the test remarks, R6, R7, and the R8 census re-run. **A local-cluster pre-check of the touched Docker facts is expected this time**: the two defects were the kind a single local run would have caught.
