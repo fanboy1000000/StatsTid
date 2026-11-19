@@ -1,4 +1,4 @@
-# S148 resume point — updated 2026-11-19 (midday)
+# S148 resume point — updated 2026-11-19 (afternoon, usage limit)
 
 The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 24").
 
@@ -31,14 +31,15 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
   - PRs #63, #64 and #65 are closed unmerged, and every `ci/s148-*` branch is deleted.
   - Correction logged: under M-45 the profile PUT answered 200 in CI, not the local 403.
 
-## In flight (wave 5)
-1. **TASK-14822** (`payroll-integration`, worktree, base `86e33f5b`; brief at draft 2). Its report begins `## S148 TASK-14822 report`; save it as `.claude/reviews/S148-TASK-14822-report.md`.
-   - **Then** dispatch TASK-14822-T on its branch (AC-C13b, -13g with M-6 at its gate, AC-C13a's split, AC-C13t, and the 21 fixture re-points).
-   - **Then the merge checklist:** 5α on the union (`constraint-validator`); no security consult; 5a with the `reviewer` (Fable) and Codex (high risk: payroll export); merge `--no-ff`; GATE.
-2. **Batch C planner** (the T14b stack: 14826, -T, 14827, 14828, -T, 14829), drafting against batch B's draft-1 contract. Its report begins `## S148 wave-5 batch C planner report`; save it as `S148-wave5C-briefs-planner-report.md`.
-   - **Then reconcile it with the applied A/B briefs.** The final names are listed in `S148-wave5AB-briefs-applied-report.md` § 4. Then adjudicate C (Fable) and apply.
-3. **Batch D** (14830, -T, 14831, -T, 14846) is drafted after C. O-23's trace (`S148-O23-wage-type-mapping-trace.md`) is input to 14831's adjudication.
-4. **Wave-5 briefs A and B are at draft 2** (plan "final + 25"; T-BC-10 ruled (b)). TASK-14823's base is master after 14822's GATE.
+## In flight (wave 5) — stopped at the usage limit, 2026-11-19 afternoon
+1. **TASK-14822 + -T are MERGED** (`6fadd1fe`; paperwork and QUAL-258 `7df487f7`; GATE green `14929a89`). The five worktrees are removed.
+2. **NEXT: dispatch TASK-14823** (`backend-infrastructure`, worktree). The base is master `14929a89` or later. The brief is `.claude/plans/s148/TASK-14823.md` (draft 2). Use TASK-14822's dispatch prompt as the model. Carry ruling R8 (the census of every construction form; see `S148-TASK-14822-5a-rulings-c1.md`). Then 14823-T, REGEN (expected none), 14824 stacked; 5α on the union; Fable and Codex 5a; merge; GATE; O-15 (HRP-001 and the two A9 QUAL rows, Case A FIXED and Case B open, with the next free ids after QUAL-258).
+3. **Batch D planner (14830, -T, 14831, -T, 14846) was STOPPED** by the Orchestrator at the usage limit, before it reported.
+   - Check `.claude/plans/s148/` for partial drafts of `TASK-14830*.md`, `TASK-14831*.md` and `TASK-14846.md`.
+   - Re-dispatch the planner from the prompt in the session transcript (search "wave 5, batch D"), telling it to finish or redo any partial file.
+   - Then adjudicate (Fable) and apply. O-23 (`S148-O23-wage-type-mapping-trace.md`) is input to 14831's mapping fork.
+4. **Briefs ready:** batches A and B ("final + 25"), C ("final + 26", `d473fa6d`). The plan carries R8, R9 and C2-R5 in TASK-14828-T's row.
+5. **Housekeeping:** about 55 stale local `worktree-agent-*` branches with no worktree remain from earlier waves. Delete the merged ones when convenient (`git branch --merged master`).
 
 ## After that
 - **Wave 5** ends with **TASK-14846** (`ux`; the edit drawer locks one's own refused fields, with the contract Danish note).
