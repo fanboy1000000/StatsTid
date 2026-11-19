@@ -2263,3 +2263,17 @@ M-40 included [O for the 14 facts of the five classes run].
 **GATE green after the TASK-14822 merge** (`6fadd1fe`, paperwork `7df487f7`): `dotnet build StatsTid.sln -m:2 --no-incremental` has 0 errors and 125 warnings, with 113 distinct CA2100 (unchanged). Unit 1758 (+1, AC-C13g); DemoSeed 170; Regression `Category!=Docker` 140. These ran one at a time, in the foreground. The Docker facts are CI-pending until CI-W5a. **TASK-14823 next.**
 
 **TASK-14823 dispatched** (`backend-infrastructure`, worktree, base `5685aa3d`; brief at draft 2). **The wave-5 batch D planner was re-dispatched**: the first attempt was stopped by the Orchestrator at a usage limit, before it had written any file.
+
+**TASK-14823 returned** (`backend-infrastructure`, Opus 5.5; `ed94b085` on `5685aa3d`; report `.claude/reviews/S148-TASK-14823-report.md`).
+- **What it does:** a configuration write dated into the past lists the paid months and settled holiday years it reaches on HR's worklist, under the new trigger `CONFIG_PUBLISHED`, once per month and per year. The six writes are the publish, the four override writes and the local-profile PUT.
+  - Example: an HK OK24 publish dated Monday 5 January 2026 lists January to April, and April only because April's pay covered 30 March to 5 April.
+  - All six take the pay-inputs lock first, at READ COMMITTED; the local-profile write leaves REPEATABLE READ.
+  - The local-profile save refuses with its existing 412 when the profile it replaces was superseded during its wait (ruling A9, Case A).
+  - Nothing recalculates automatically.
+- **Gate:** the build has 0 errors and 125 warnings, with 113 CA2100. Unit 1758, DemoSeed 170 and Regression non-Docker 140 are green.
+  - The worklist SELECTs were checked on a throwaway PostgreSQL 16 cluster.
+  - The implementer's Docker census expects no red, and smoke, E2E and the demo loader call none of the six routes, so PIN-1 is unaffected.
+  - REGEN is expected none.
+- **Found, not fixed:** the local-profile PUT never validates `okVersion`. A version string the resolver never returns gives an empty reach, so the worklist lists nothing, silently. The S119 test key `OKS119` is an example. This is for the 5a lenses to weigh.
+- **`(unproven)`:** whether a large central publish is fast enough, since it reads per matched employee. TASK-14823-T records the timing figure.
+- **TASK-14823-T dispatched** (`test-qa`, base `ed94b085`). It carries TASK-14822's review lessons: a census of every call form, R facts that run product code, assertions that accept only the right answer, and a local-cluster pre-check of its Docker facts, which is expected.
