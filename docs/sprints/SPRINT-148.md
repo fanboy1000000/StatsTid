@@ -1946,3 +1946,107 @@ A planner is drafting the roadmap translation as a proposal for the owner (`.cla
 - **Ruling 1.9 settled:** this run's Copenhagen date was Wednesday 18 November, so it is the owed non-Monday Regression run. Every real-clock fact passed.
 - **The other jobs:** smoke, E2E, the frontend build, docs, lizard and gitleaks are green.
 - **Status change:** wave 4's second-half Docker facts move from "CI-pending" to "CI-verified". That covers AC-C13o, -p, -q and -s on SEC-062, SEC-065 and QUAL-257; their mutations M-46, M-47 and M-48 stay CI-pending until CI-M4a. PR #63 is closed unmerged, and `ci/s148-w4` is deleted.
+
+**CI-M4a and CI-M4b built** (`test-qa`, Sonnet 5.5; report `.claude/reviews/S148-CI-M4-builder-report.md`), on `c17db07c`, as two local branches:
+- **CI-M4a** (`ci/s148-m4a`): the mutation commit `3d506e58` holds M-9 (read half), M-11, M-15 (read half), M-39, M-41, M-43, M-44, M-45, M-46, M-47 and M-48, and touches `src/**` only. The evidence commit (rule 3) is `5f3f9a72`.
+- **CI-M4b** (`ci/s148-m4b`): the mutation commit `1834c305` holds M-10, M-14, M-16, M-40 and M-42. The evidence commit is `6fc866ca`.
+- **Local run:** on each branch Unit 1757, DemoSeed 170 and Regression non-Docker 140 stay green, as expected, because every pin is Docker-gated.
+- **The Docker pins, exercised locally:** the builder also ran the pins on a throwaway PostgreSQL 16 cluster on port 55434, with `DockerHarness` patched in scratch worktrees only. The cluster and the worktrees are deleted, and the 5432 service was never touched.
+  - Every frozen fact that ran went red at the assertion its row names, marked [O] below.
+  - The facts behind an earlier red assertion are argued, marked [A].
+  - This is not CI evidence. It ran on PostgreSQL 16.14 on Windows, not on `postgres:16-alpine`.
+- **Orchestrator rulings on the report:**
+  - **M-10 touches `docker/postgres/init.sql`** (two lines that unset the seeds' `published_at`), so the brief's "`src/**` only" does not hold for CI-M4b. Ruled acceptable: the compiled seeds are written only by `init.sql`, 14818-T's census used the same form, CI-M2b's M-23 set the precedent, and the branch is never merged.
+    - `(unproven)`: an `init.sql`-level mutation reaches every class that applies the schema. The builder ran only the Config namespace and the five pinned classes under it (all frozen facts red at their assertions, the rest green).
+    - Rule 5 governs any wider red. A red explained by M-10 is a census miss, recorded by name with no re-run.
+  - **M-45, the profile PUT answers 403, not 200.** Under M-45, `ProfilePut_OrganisationChangedUnderTheLock_409_NothingWritten` answers 403 "Actor scope does not cover target organization". 14821-T had argued 200.
+    - The fact is still red at its 409 assertion, so the pin is proved under rule 5.
+    - The 403 shows that the compare is not the only guard on that path: a later scope check also refuses. Recorded for the mutation table; no change ordered.
+  - **Plan drift, noted only:** the census for M-41 is in TASK-14820-T's report, not TASK-14819's. M-44's lines are `AdminEndpoints.cs:1935-1945` at `c17db07c`.
+- **Frozen list, CI-M4a** (verbatim from `3d506e58`):
+
+```text
+FROZEN LIST (rule 2). Class.Fact : assertion expected to fail first. [O] = seen red on a
+throwaway local PostgreSQL 16 by the builder, [A] = argued from the code.
+
+Unit 0 reds; DemoSeed 0 reds; Regression Category!=Docker 0 reds.
+
+M-9  PublishedOnlyInForceTests.ArchivedDraft_NeverInForce_NeverPredecessor [O]
+       first May read: Assert.Equal(v1, inForce.ConfigId) (PublishedOnlyInForceTests.cs:51); the
+       v2-publish BEFORE_PREDECESSOR half is behind it [A]
+M-11 TransferWriteTests.Transfer_DrawerCorrectionBeforeLaterTransfer_200 [O]
+       Assert.Equal(OK, status): expected OK, actual BadRequest (:380)
+M-15 SameDayTieBreakTests.TwoPublishesSameDayDateOmitted_ReadReturnsTheLaterPublish [O]  (1) Assert.Equal(v3) :40
+     SameDayTieBreakTests.OverrideEditedTwiceOnOneDate_ResolvesTheLaterWrite [O]          (2) expected 130 actual 110 :101
+     SameDayTieBreakTests.EarlierStartedPublishCommittingLater_IsTheOneInForce [O]        (4) second assertion, in-force is not X :156
+       (its first assertion, X's published_at later than Y's, stays green under M-15)
+M-39 DatedConfigBoundaryTests.VersionFromMondayInsideMonth_SplitsTheMonth [O]
+       arm 1: Assert.Equal(2, plan.Segments.Count): expected 2, actual 1 (:109); arm 2 [A]
+M-41 UserOrganisationBackfillSeederTests.Backfill_ActiveUsersGetOneRowFrom00010101_WithAuditRowAndEvent_InactiveSkipped [O]
+       Assert.Equal(1L, auditCount of CREATED by SYSTEM_SEED): expected 1, actual 0 (:83)
+     UserOrganisationBackfillSeederTests.Backfill_SecondRun_AddsNothing [O]
+       Assert.Equal(rows, audit): expected 21, actual 0 (:120)
+M-43 PositionOverrideConcurrencyTests.EmptyKey_ThreeWriters_LateCreateRefusedBeforePredecessor [O]
+       Assert.Throws<AppliesFromRefusedException>: no exception was thrown (:329)
+M-44 TransferRaceTests.OrganisationChangedUnderTheLock_RequestCarriesOldOrganisation_409_NothingWritten [O]
+     TransferRaceTests.OrganisationChangedUnderTheLock_NameOnlyEdit_409_NothingWritten [O]
+       both: Assert.Equal(Conflict, status): expected Conflict, actual OK (RunRaceAsync :149)
+M-45 OrganisationDriftGuardTests, seven facts, each at AssertDriftRefusedAsync "expected 409, got <status>" [O]:
+       AgreementCodeRoute_OrganisationChangedUnderTheLock_409_NothingWritten            got 200
+       ProfilePut_OrganisationChangedUnderTheLock_409_NothingWritten                    got 403 (scope check, not 200)
+       ProfileClose_OrganisationChangedUnderTheLock_409_NothingWritten                  got 204
+       StartDatePut_OrganisationChangedUnderTheLock_409_NothingWritten                  got 200
+       EndDatePut_OrganisationChangedUnderTheLock_409_NothingWritten                    got 200
+       BareSettlementReversal_OrganisationChangedWhileWaiting_409_NothingWritten_NoGuessedToken  got 200
+       ProfilePut_OrganisationChangedWhileWaitingForThePayInputsLock_409_NothingWritten got 200
+M-46 OrganisationDriftGuardRoutesTests, nine facts, each Assert.True(status == Conflict) [O]:
+       Approve_, Reject_, ReopenLeaderArm_, Send_OnAnothersBehalf_, OvertimePreApprovalCreate_OnAnothersBehalf_,
+       OvertimePreApprovalApprove_, OvertimePreApprovalReject_, OvertimeCompensate_, SkemaSave_OnAnothersBehalf_
+       (statuses 200; 201 for the pre-approval create)
+M-47 OrganisationDriftGuardRoutesTests, thirteen facts, each Assert.True(status == Conflict) [O]:
+       TransferAgreementPost_, SettlementResolve_, ReconcilePayout_, TerminationPayoutRequest_, EligibilityPut_,
+       BirthDatePut_, ReportingLineAssign_, ReportingLineDelete_ (204), ActingAssign_, ActingDelete_ (204),
+       RemovePerson_ (200), WorklistResolve_, UserUnitPut_  (statuses 200 / 201 / 204)
+M-48 OvertimePreApprovalDecisionRaceTests.TwoConcurrentDecisions_OneLands_TheOtherIs409_OneEvent [O]
+       status set: "expected one 200 and one 409, got 200 / 200"
+
+TOTAL frozen: 41 Docker facts (1 + 1 + 3 + 1 + 2 + 1 + 2 + 7 + 9 + 13 + 1), 0 Unit, 0 DemoSeed, 0 non-Docker Regression.
+No smoke or e2e fact is expected red [A].
+
+ARGUED GREEN (a reader might expect red): M-39's shared-date fact VersionDatedOnAKeyChange_KeepsTheKeyChangesCause [O];
+M-15's first assertion in EarlierStartedPublishCommittingLater [O]; Transfer_DrawerFutureAgreementCodeDate_200_NoOrganisationRow
+under M-11 [O]; OvertimeCompensateRaceTests and the six SelfEntitlementInputRefusalTests facts under M-46/M-47 [O];
+SameDayTieBreakTests under M-9 (no archived draft) [A]; the create-route CREATED audit rows under M-41 (actor is the admin) [A].
+```
+
+- **Frozen list, CI-M4b** (verbatim from `1834c305`):
+
+```text
+FROZEN LIST (rule 2). [O] = seen red on a throwaway local PostgreSQL 16 by the builder, [A] = argued.
+
+Unit 0 reds; DemoSeed 0 reds; Regression Category!=Docker 0 reds.
+
+M-10 SeededConfigsInForceTests.EveryCompiledAgreementOk_HasPublishedVersionInForceFrom00010101 [O]
+       "10 of 10 compiled keys lack a published version in force from 0001-01-01" (SeededConfigsInForceTests.cs:52)
+M-14 PositionOverrideVersionReadTests.CapEditedFromMonday2November2026_Friday30OctoberReads100_2NovemberReads120 [O]
+       first read: Assert.Equal(100, MaxFlexBalance) expected 100 actual 120 (:77)
+     PositionOverrideVersionReadTests.DeactivatedFromMonday9November_6NovemberReads120_9thNone [O]
+       first read: Assert.NotNull(Friday 6 November) value is null (:108)
+     PositionOverrideVersionReadTests.ReactivatedFromMonday16November_15thNone_16thReads120 [O]
+       Assert.Null(Sunday 15 November) value is not null (:142)
+M-16 SameDayTieBreakTests.EarlierStartedPublishCommittingLater_IsTheOneInForce [O]
+       first assertion Assert.True(xStamp > yStamp): "X's published_at ... must be later than Y's" (:151)
+M-40 DatedConfigBoundaryTests.VersionDatedOnAKeyChange_KeepsTheKeyChangesCause [O]
+       arm 1: Assert.Equal(AgreementCodeChange, cause): actual AgreementConfigPromotion (:166); arm 2 (EmployeeProfileChange) [A]
+M-42 EmploymentWindowHandOffTests.EndResavedUnchanged_Tue30Jun2026_JuneExported_200_NoRow [O]
+       zero-rows assertion Assert.Empty(rows): Collection was not empty (:254); its 200 and event assertions stay green
+
+TOTAL frozen: 7 Docker facts (1 + 3 + 1 + 1 + 1), 0 Unit, 0 DemoSeed, 0 non-Docker Regression.
+No smoke or e2e fact is expected red [A].
+
+ARGUED GREEN (a reader might expect red): under M-16 TwoPublishesSameDayDateOmitted_ReadReturnsTheLaterPublish [O]
+(separate transactions, NOW() still orders them); under M-14 OverrideEditedTwiceOnOneDate_ResolvesTheLaterWrite [O]
+(the head holds the later write); under M-40 VersionFromMondayInsideMonth_SplitsTheMonth [O] (its versions sit strictly
+inside the period); under M-10 every fact that publishes its own versions under unique codes, the shared-date fact of
+M-40 included [O for the 14 facts of the five classes run].
+```
