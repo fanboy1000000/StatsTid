@@ -2236,3 +2236,26 @@ M-40 included [O for the 14 facts of the five classes run].
   - **Registered at the merge** as an open QUAL row, Medium: no wrong figure and no duplicate, but the idempotency promise is void on the only live export route, and a retried export is told something false.
 - **C2-R5 (unproven), carried to TASK-14828-T's plan row:** what a correction of June emits after a pure transfer, i.e. whether the correction diff key includes a line's period.
 - **TASK-14822-T fix-up 2 dispatched;** cycle 3 (confirmation on both lenses) follows.
+
+**TASK-14822 + -T merged** (`6fadd1fe`, `--no-ff` of `9143857a`).
+- **Cycle 3** (a confirmation pass over `0b166b8b..9143857a`): **Codex APPROVED** (`S148-TASK-14822-5a-codex-c3.md`) and **Fable APPROVED** (`S148-TASK-14822-5a-reviewer-c3.md`).
+  - Fable has two optional NOTEs for the next touch of `TransferPayrollBoundaryTests.cs`: parse the 409 body's `kind` with `JsonDocument`, as sibling facts do, and also assert the error text "different content".
+- **What it delivers:** payroll knows which institution each day belongs to.
+  - A transfer splits the month through the existing employee-profile boundary, so a Monday 15 June transfer gives 1–14 and 15–30 June.
+  - The new institution's local profile is asked for its own days, and the opening week's context piece is cut too.
+  - A payroll service built without `IOrganisationHistoryReader` refuses by name.
+  - No payslip changes until the T14b stack.
+- **Review trail:** 5α FAIL on one confirmed test defect, ruled. Codex and Fable ran three cycles, ending APPROVED. Every finding was in the tests or in remarks, and none was in production behaviour. A security consult is not required (`PLAN:164`).
+- **Registers:** **QUAL-258** registered, OPEN, Medium (ruling C2-R4). Retrying an unchanged export is told "different content; use a correction", because each line's manifest id enters the content hash. ADR-034's S146 note had recorded this without a register row.
+- **CI-pending until CI-W5a:**
+  - AC-C13b (now driven through the Backend route and payroll's recalculation);
+  - AC-C13t (both cuts);
+  - AC-C13a's split half;
+  - the 84 re-pointed Docker facts;
+  - `DatedConfigBoundaryTests` (the M-39 and M-40 pins);
+  - PIN-1 (AC-C13c, argued: no demo person is transferred).
+  - AC-C13g is Unit and green, and M-6 was proved locally.
+- **Carried:**
+  - R8, the census of every construction form, goes to every later brief that changes a payroll constructor.
+  - R9 and C2-R5 go to TASK-14828-T's plan row: a real-engine fact that a pure-transfer split moves no amount, and what a correction emits after it.
+- **GATE next.**
