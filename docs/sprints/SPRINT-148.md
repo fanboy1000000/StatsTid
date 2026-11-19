@@ -2108,3 +2108,17 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Orchestrator ruling on T-BC-10** (raised while applying B12): option (b). AC-C1o (2)'s fixture gains an HK / OK24 publish dated Monday 2 February 2026, so its 2026 arm also catches a central-only lookup that ignores its day. No expected value moves.
 - **Interpretation calls accepted as the planner held them:** the existing `LocalAgreementProfileRepository.cs` shared-files row was edited in place; "four readers" was kept, with the backfill seeder named as a write-side fifth; the year-overview timing fact's name is the drafter's; and the four additions beyond § 3 that the revision row names are kept.
 - **The A9 QUAL ids** (Case A FIXED, Case B open) are assigned at O-15, after the 14823 stack.
+
+**TASK-14822 dispatched** (`payroll-integration`, worktree, base `86e33f5b`; brief at draft 2). This is wave 5's first implementation task.
+
+**Wave-5 batch C drafted** (the T14b stack: TASK-14826, -T, 14827, 14828, -T and 14829; planner, Opus 5.5; report `.claude/reviews/S148-wave5C-briefs-planner-report.md`). The planner rebuilt it against "final + 25" after the A/B rulings landed, so it already carries them.
+- **Main item for the adjudicator (14826 BC-11), found, not fixed.** `PositionOverrideConfigs.ApplyOverride` (`PositionOverrideConfigs.cs:63-105`) builds the merged configuration without seven members, so they take their defaults: minimum rest, rest derogation, norm model, annual norm hours, max daily hours, voluntary unsocial hours, and the weekly-max reference period.
+  - The seeds are unaffected, because the seeded overrides are AC's and AC uses every default.
+  - From the engine switch on, an override on an annual-activity agreement would pay it as a weekly-norm agreement, and an override would reset a configured minimum rest to 11 h.
+  - This is concrete evidence for the refinement's open A-10 `(unproven)` NOTE.
+- **Other forks:**
+  - the engine's fixed 400 sentences (14826 BC-6);
+  - replay between the stack and TASK-14830, when frozen pieces carry no configuration (14827 BC-2);
+  - payroll's second refusal status (14827 BC-3);
+  - the two per-field notes' Danish text (14829 BC-1, which blocks that task).
+- **Adjudication of batch C** (Fable `adjudicator`) is running.
