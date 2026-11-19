@@ -477,7 +477,7 @@ public sealed class PeriodCalculationService
             "the institutions' own values reach pay, part of the month would be paid under the wrong institution's " +
             "rules (ADR-040 D4, ADR-043 D12); it is refused before anything is read. Fix the wiring: the Payroll " +
             "host must register IOrganisationHistoryReader -> PostgresOrganisationHistoryReader in " +
-            "src/Integrations/StatsTid.Integrations.Payroll/Program.cs (beside IPriorPeriodApprovalReader). Test " +
+            "src/Integrations/StatsTid.Integrations.Payroll/Program.cs (beside the prior-month approval reader). Test " +
             "fixtures that plan or calculate must pass an IOrganisationHistoryReader as the " +
             "organisationHistoryReader constructor argument (a fake answering \"no transfer dates\", declared with " +
             "a comment, when the fixture is not about transfers).");
