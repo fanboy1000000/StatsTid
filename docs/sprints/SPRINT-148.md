@@ -2122,3 +2122,17 @@ M-40 included [O for the 14 facts of the five classes run].
   - payroll's second refusal status (14827 BC-3);
   - the two per-field notes' Danish text (14829 BC-1, which blocks that task).
 - **Adjudication of batch C** (Fable `adjudicator`) is running.
+
+**TASK-14822 returned** (`payroll-integration`, Opus 5.5; `ee98e546` and `075bd098` on `86e33f5b`; report `.claude/reviews/S148-TASK-14822-report.md`).
+- **What it does:** payroll reads each employee's transfer dates once per calculation through `IOrganisationHistoryReader` (a payroll-local interface with a Postgres reader; ruling A1).
+  - A transfer date joins the existing employee-profile boundary source, so a Monday 15 June transfer splits June into 1–14 and 15–30 June, with no new boundary kind.
+  - The local-profile activation read and the context pieces cut there too.
+  - A service built without the reader refuses every planning call with a fixed message naming the missing registration (ruling A2), before anything is read. The payroll host registers the reader.
+  - No payslip changes: pay still uses the built-in values until the T14b stack.
+- **Gate:** the build has 0 errors and 125 warnings, with 113 distinct CA2100 (unchanged). DemoSeed 170 and Regression non-Docker 140 are green.
+- **Unit has 49 expected reds in 9 files**, all on the fixed message. These are the hand-built services that TASK-14822-T re-points. The implementer also argues 84 Docker facts red for the same reason, CI-pending.
+- **Found, not fixed, handed to -T:**
+  - `RetroactiveCorrectionManifestTests.TransactionalBlockFailure_…` passes for the wrong reason until the re-point, because it uses `ThrowsAnyAsync<Exception>`.
+  - Never-silent facts that match a message substring can be satisfied by another reader's refusal. The implementer's first draft did exactly that, and `075bd098` fixed it.
+- **Found, not fixed, below the floor:** stale line cites in two `PeriodCalculationService.cs` remarks (`:394-395` "L72-73"/"L79"; `:150-156` "line 124"/"line 86"). These are for the 5a reviewers to weigh.
+- **TASK-14822-T dispatched** (`test-qa`, worktree, base `075bd098`).
