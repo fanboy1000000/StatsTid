@@ -394,8 +394,8 @@ public sealed class PeriodCalculationService
                 "(ADR-040 D5/D7). Fix the wiring: the Payroll host must register " +
                 "EmploymentWindowResolver + IEmploymentWindowResolver (src/Integrations/" +
                 "StatsTid.Integrations.Payroll/Program.cs — the AddSingleton<IEmploymentWindowResolver> " +
-                "registration beside IEmploymentProfileResolver, L72-73 at the time of writing) and " +
-                "EmployeeProfileRepository (L79 — optional: feeds the EmployeeProfileChange boundary). " +
+                "registration beside IEmploymentProfileResolver) and " +
+                "EmployeeProfileRepository (its AddSingleton registration — optional: feeds the EmployeeProfileChange boundary). " +
                 "Test fixtures that supply a profile resolver must supply a window resolver too.");
         }
         _employmentWindowResolver = employmentWindowResolver;
