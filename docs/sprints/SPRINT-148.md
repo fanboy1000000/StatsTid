@@ -2165,3 +2165,17 @@ M-40 included [O for the 14 facts of the five classes run].
   - The 84 Docker facts are argued green again, and `TransactionalBlockFailure_…` is argued to fail only for its own reason. All of this is CI-pending.
   - The optional local-cluster pre-check was not run.
 - **Merge checklist started:** 5α (`constraint-validator`) and 5a Codex (cycle 1, `86e33f5b..a154a19f`) are running. 5a with the `reviewer` (Fable) follows when an agent slot frees. There is no security consult (`PLAN:164`).
+
+**TASK-14822 5α and Codex cycle 1** (`.claude/reviews/S148-TASK-14822-5alpha.md`; `S148-TASK-14822-5a-codex.md`):
+- **5α: FAIL, on one confirmed defect.** Two SQL literals in `TransferPayrollBoundaryTests.cs` (`:547`, `:556`) end at `employee_id = ` without `@e`, so the exported-month fact would fail in CI with a syntax error.
+  - The Orchestrator verified it byte for byte.
+  - The -T agent had split a shared helper into two literal-SQL methods to keep the CA2100 count unchanged, and lost the placeholder.
+  - Every other check passes.
+  - **Orchestrator ruling on 5α's authorization note:** the three target-typed `new(...)` sites outside the brief's literal census are covered by ruling A2 ("every site that plans passes a reader") and were reported, not hidden. PASS on substance.
+- **Codex: CHANGES-REQUIRED, two BLOCKERs and one NOTE.**
+  - BLOCKER 1 is the same SQL defect.
+  - **BLOCKER 2:** `DatedConfigBoundaryTests.cs:198` builds its own payroll service without the reader. The -T report had said it builds through `TestFixtures.BuildPcs`; it does not. Its two Docker facts, the M-39 and M-40 pins, would throw the wiring refusal at CI-W5a. The Orchestrator verified it.
+  - **NOTE:** new test remarks say "CI-verified" for CI-pending facts, and some PCS remarks carry stale numeric line cites (`:153`, `:161`, `:394-395`).
+  - Codex found the production change consistent with the contract.
+- **5a Fable (cycle 1) dispatched** on the same SHA, told the known items so it can look beyond them. A fix-up follows both lenses.
+- **Lesson, carried to the remaining -T briefs:** a census that relies on a report's claim ("builds through the shared fixture") rather than on a grep of every construction site missed a real site. The stack's -T passes must grep every `new PeriodCalculationService(`, every `new(` typed as the service, and every reflection invocation.
