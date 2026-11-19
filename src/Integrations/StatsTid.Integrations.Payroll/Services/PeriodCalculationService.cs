@@ -2261,7 +2261,7 @@ public sealed class PeriodCalculationService
     /// only meaningful for the organisation, agreement and OK version the employee actually had on each day.
     /// Before this task it was asked once, with the request body's organisation, agreement and OK version; every other
     /// planning input already came from the dated record (R-10, R-11, R-12, A4), so a stale body for a past
-    /// month could invent a boundary (refusing the month for nothing) or miss one (calculating as one piece a
+    /// month could invent a boundary (cutting the month for nothing) or miss one (calculating as one piece a
     /// month that should split), and the manifest's cause summary would record the wrong reason. No paid
     /// figure depends on it: the Rule Engine applies no local profile, so a profile is a boundary source only.
     /// A replay never comes here (it loads the frozen plan and never plans).
