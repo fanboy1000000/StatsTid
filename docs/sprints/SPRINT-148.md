@@ -2050,3 +2050,20 @@ ARGUED GREEN (a reader might expect red): under M-16 TwoPublishesSameDayDateOmit
 inside the period); under M-10 every fact that publishes its own versions under unique codes, the shared-date fact of
 M-40 included [O for the 14 facts of the five classes run].
 ```
+
+**Wave 5 briefs, 2026-11-19** (drafted while CI-M4a and CI-M4b run; implementation waits for both). Planning Drafters, Opus 5.5, cite the code at `bb529e62`, whose `src/` equals the CI-W4 head.
+- **Batch A:** TASK-14822 (payroll's organisation boundary) and -T, TASK-14823 (the configuration writers' lock and HR hand-off) and -T, and TASK-14824 (the worklist's three Danish labels). Report: `.claude/reviews/S148-wave5A-briefs-planner-report.md`.
+- **Batch B:** TASK-14825 (C-1's dated, fail-closed configuration lookup) and -T. Report: `…-wave5B-…`.
+- **Main forks for the adjudicator:**
+  - one dated-organisation reader, or two (14822 BC-1 together with 14825's organisation lookup);
+  - what a screen shows when the configuration cannot be read (14825 BC-4: today all four callers fall back silently to the built-in values);
+  - the three Danish labels (14824 BC-1: neither the plan nor the refinement gives them);
+  - a pre-existing check-then-act on the local profile's version check (14823 BC-8; the QUAL-257 shape, `(unproven)`).
+- **Adjudication of A and B** (Fable `adjudicator`) and the **batch C draft** (the T14b stack: TASK-14826, -T, 14827, 14828, -T, 14829) are running in parallel. Batch C is drafted against batch B's proposed contract and reconciled when the rulings are applied, as wave 4 did with TASK-14815's names. Batch D (14830, -T, 14831, -T, 14846) follows.
+
+**O-23, the wage-type-mapping trace (done, 2026-11-19; `.claude/reviews/S148-O23-wage-type-mapping-trace.md`, `trace`, read-only).**
+- **The answer is no.** A today-dated mapping edit committed between payroll's calculate step and its record step cannot change a recorded line.
+- **Why:** calculate and record run in one request (`/api/payroll/calculate-and-export`). Each line's wage-type code is fixed at calculate time, from a read dated at the segment's start, and travels to the export in memory. The export never reads the mapping table. Because an edit only closes the old row at today and opens the new one from today, every segment that starts before today keeps its code on recalculation or replay.
+- **The one open case, `(unproven)`:** a segment starting today or later. If such a month can be approved and exported, a later recalculation could pick up the new code. The trace did not establish that it can. If it can, the smallest closure is the writer taking the pay-inputs lock together with a mapping check inside TASK-14831's re-derivation.
+- **Two corrections to the plan's premise:** the mapping routes are `GlobalAdminOnly`, not HR's; and nothing in `ExportAsync` re-reads the mapping today, so ruling 2.5's "the mapping inside payroll's recheck" would be a new check, not an extension.
+- The trace is input to TASK-14831's brief adjudication (batch D).
