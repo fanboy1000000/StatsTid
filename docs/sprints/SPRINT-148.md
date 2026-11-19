@@ -2289,3 +2289,16 @@ M-40 included [O for the 14 facts of the five classes run].
   - refuse a calculating-route export whose context lacks the recheck (the never-silent rule).
 - **TASK-14846's Danish note is already ruled** (`PLAN:371`, `:617`).
 - **Adjudication dispatched** (Fable `adjudicator`).
+
+**TASK-14823-T returned** (`test-qa`; `d8ef347b` on `ed94b085`; report `.claude/reviews/S148-TASK-14823-T-report.md`).
+- **Facts:**
+  - Eight hand-off facts in `ConfigPublishHandOffTests`: AC-C2g, -2f twice, -2j (1) and (2), AC-C2c's hand-off half, AC-C2i, and AC-C2t (two matching intervals give one trigger).
+  - AC-C2h's Unit half, which was red on `5685aa3d` as stated.
+  - The six row-(2) lock facts in `PayInputsLockCensusTests`, plus AC-C2u (the stale predecessor refused with 412, nothing written).
+  - The publish timing fact.
+- **M-49, local:** with the route's identity comparison deleted, AC-C2u answers 200, because the stale `If-Match: "1"` passes against R2. The frozen list for CI-M5 is AC-C2u alone.
+- **Local pre-check** (a throwaway cluster on port 55432; not CI evidence): all 26 of its Docker facts are green.
+- **Measured publish:** 300 people and 1,200 rows took 2,960 ms of wall clock, with the pay-inputs lock held. This is local (`fsync=off`, a Debug build), not CI evidence. The timing line reaches the trx, so CI-W5a can read the figure.
+- **Gate:** build 0 errors, 125 warnings, 113 CA2100. Unit 1759, DemoSeed 170 and Regression non-Docker 140 are green.
+- **Census:** none of the 14 existing classes that call the six routes can change what it asserts, and no test constructs `SaveProfileResult`.
+- **TASK-14824 dispatched** (`ux`, stacked on `d8ef347b`; REGEN none). The three labels are ruled: Konfigurationsændring, Organisationsskift, Ansættelsesperiode-ændring.
