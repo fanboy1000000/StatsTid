@@ -2221,3 +2221,18 @@ M-40 included [O for the 14 facts of the five classes run].
   - Its first run caught a wrong expectation: the repeat June export answers **409 `payroll-export-conflict`**, not 200. The fact now accepts either.
 - **Found by that run, not yet ruled:** `PayrollExportManifest.ComputeContentHash` hashes lines that carry each calculation's own `manifestId`, so on `/calculate-and-export` the "same hash is an idempotent no-op" branch may never fire, and every repeat export of an exported month answers 409. Both cycle-2 lenses are asked to verify it.
 - **Cycle 2 dispatched** over `a154a19f..0b166b8b`: Codex and Fable.
+
+**TASK-14822 5a cycle 2** (`.claude/reviews/S148-TASK-14822-5a-codex-c2.md`, APPROVED-WITH-WARNINGS; `S148-TASK-14822-5a-reviewer-c2.md`, Fable 5.2, APPROVED-WITH-WARNINGS; rulings `S148-TASK-14822-5a-rulings-c2.md`, C2-R1 … C2-R5).
+- **Every cycle-1 finding is closed as ruled.**
+  - The exported-month fact can now fail: both lenses name product changes that turn it red.
+  - The two-host fixture is safe.
+  - "Manifest +1 with two segments" is the correct reading. The cycle-1 ruling's "manifest counts unchanged" was wrong, and the fix-up rightly departed from it.
+- **C2-R1 (Fable WARNING):** only a 409 is correct after the transfer, because the split changes the lines' periods. The fact therefore asserts 409 `payroll-export-conflict` only (TASK-14822-T fix-up 2).
+- **C2-R2:** three remarks made true; the one in PCS is an Orchestrator comment commit, `b212a8bf`.
+- **C2-R3, census correction:** the fix-up report's "no target-typed `new(` construction exists" is false. Three exist (`EmploymentRecordGapDiagnosticsTests`, `FlexLedgerOpeningTests`, `PcsNeverSilentTests`) and all pass the reader; `PcsConstructionCouplingTests` only constructs. The conclusion, that every planning site has a reader, is confirmed by both lenses' own censuses.
+- **C2-R4, the repeat-export limitation, is verified by both lenses.**
+  - Each export line carries its calculation's manifest id, and the content hash covers it. So on `/calculate-and-export` a repeat of a month with lines always answers 409 "different content; use a correction", even when nothing changed. The idempotent no-op fires only for an employed zero-line month.
+  - It was already recorded in ADR-034 D3 (S146 N-6, "recorded, not changed"), but it has no register row.
+  - **Registered at the merge** as an open QUAL row, Medium: no wrong figure and no duplicate, but the idempotency promise is void on the only live export route, and a retried export is told something false.
+- **C2-R5 (unproven), carried to TASK-14828-T's plan row:** what a correction of June emits after a pure transfer, i.e. whether the correction diff key includes a line's period.
+- **TASK-14822-T fix-up 2 dispatched;** cycle 3 (confirmation on both lenses) follows.
