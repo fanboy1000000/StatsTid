@@ -2261,3 +2261,5 @@ M-40 included [O for the 14 facts of the five classes run].
 - **GATE next.**
 
 **GATE green after the TASK-14822 merge** (`6fadd1fe`, paperwork `7df487f7`): `dotnet build StatsTid.sln -m:2 --no-incremental` has 0 errors and 125 warnings, with 113 distinct CA2100 (unchanged). Unit 1758 (+1, AC-C13g); DemoSeed 170; Regression `Category!=Docker` 140. These ran one at a time, in the foreground. The Docker facts are CI-pending until CI-W5a. **TASK-14823 next.**
+
+**TASK-14823 dispatched** (`backend-infrastructure`, worktree, base `5685aa3d`; brief at draft 2). **The wave-5 batch D planner was re-dispatched**: the first attempt was stopped by the Orchestrator at a usage limit, before it had written any file.
