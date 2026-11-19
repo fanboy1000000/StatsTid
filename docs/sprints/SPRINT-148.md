@@ -2277,3 +2277,15 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Found, not fixed:** the local-profile PUT never validates `okVersion`. A version string the resolver never returns gives an empty reach, so the worklist lists nothing, silently. The S119 test key `OKS119` is an example. This is for the 5a lenses to weigh.
 - **`(unproven)`:** whether a large central publish is fast enough, since it reads per matched employee. TASK-14823-T records the timing figure.
 - **TASK-14823-T dispatched** (`test-qa`, base `ed94b085`). It carries TASK-14822's review lessons: a census of every call form, R facts that run product code, assertions that accept only the right answer, and a local-cluster pre-check of its Docker facts, which is expected.
+
+**Wave-5 batch D drafted** (TASK-14830, -T, 14831, -T, 14846; planner, Opus 5.5; report `.claude/reviews/S148-wave5D-briefs-planner-report.md`; draft 1 committed `ced63e9f`).
+- **Forks for the adjudicator, all on TASK-14831:**
+  - **Reads under the shared lock** (BC-1). Every re-derivation read opens its own connection. The planner argues correctness holds, because no exclusive writer can commit while the shared lock is held, but it couples payroll's pool the way SEC-066 does. Lean: separate connections, plus a dated SEC-066 note.
+  - **The wage-type mapping** (BC-2, the O-23 trace). Lean: nothing in the check. Open: whether a month recorded on its own last day can carry a segment starting that day.
+  - **The exact 409 sentences** (BC-3), and a recording-time 503 sentence, since TASK-14827's "Nothing was calculated" is untrue once the manifest exists (BC-4).
+- **Proposals:**
+  - a new local mutation M-51 for TASK-14830-T's round-trip-every-member pin;
+  - two comment-only authorizations outside TASK-14830's files;
+  - refuse a calculating-route export whose context lacks the recheck (the never-silent rule).
+- **TASK-14846's Danish note is already ruled** (`PLAN:371`, `:617`).
+- **Adjudication dispatched** (Fable `adjudicator`).
