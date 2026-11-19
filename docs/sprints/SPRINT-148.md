@@ -2259,3 +2259,5 @@ M-40 included [O for the 14 facts of the five classes run].
   - R8, the census of every construction form, goes to every later brief that changes a payroll constructor.
   - R9 and C2-R5 go to TASK-14828-T's plan row: a real-engine fact that a pure-transfer split moves no amount, and what a correction emits after it.
 - **GATE next.**
+
+**GATE green after the TASK-14822 merge** (`6fadd1fe`, paperwork `7df487f7`): `dotnet build StatsTid.sln -m:2 --no-incremental` has 0 errors and 125 warnings, with 113 distinct CA2100 (unchanged). Unit 1758 (+1, AC-C13g); DemoSeed 170; Regression `Category!=Docker` 140. These ran one at a time, in the foreground. The Docker facts are CI-pending until CI-W5a. **TASK-14823 next.**
