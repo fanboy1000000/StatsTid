@@ -2152,3 +2152,16 @@ M-40 included [O for the 14 facts of the five classes run].
   - Proof before CI: a real-engine control fact (ruling 19, new local mutation M-50). TASK-14828-T's local-cluster run of PIN-1 is now expected, not optional (ruling 22).
 - **Exact strings fixed as contract:** ten engine refusal sentences, two payroll bodies (503 `payroll-config-unavailable`; 422 `payroll-config-not-in-force`), the Danish per-field note ("Påvirker endnu ikke lønberegningen. Advarslerne om overarbejde bruger stadig aftalens indbyggede værdi."), and the two Skema warning sentences, which now name the served minimum rest instead of a fixed "11".
 - **Told to the owner at O-17, no decision needed:** the interim replay's set-fingerprint limit; one misconfigured agreement blanks a whole Teamoversigt response; Teamoversigt's agreement and OK-version source changes.
+
+**TASK-14822-T returned** (`test-qa`; `a154a19f` on `075bd098`; report `.claude/reviews/S148-TASK-14822-T-report.md`).
+- **Facts:**
+  - AC-C13b: `TransferPayrollBoundaryTests.TransferMonday15June2026_SplitsJune`, F (CI). It expects two EMPLOYED segments, [1–14] and [15–30 June], each with the cause `EmployeeProfileChange`.
+  - An exported June is unchanged by a back-dated transfer: R (CI). Its content hash, both line sets and `exported_at` are compared, after a non-empty guard.
+  - AC-C13t: the new institution's profile from 22 June makes a third segment, and a 30 June transfer cuts July's opening-week context piece. Both are F (CI).
+  - AC-C13g: `OrganisationHistoryWiringTests.Unwired_RefusesWithFixedMessage`, N (Unit). It asserts the message names `IOrganisationHistoryReader` and the host file, and names no other reader.
+- **M-6, local:** with "skip the read when unwired" mutated in, exactly that one Unit fact goes red ("No exception was thrown"). The frozen list is that fact only.
+- **Re-points:** 22 hand-built services now pass a fake answering "no transfer dates" (one fake per test project). The census found 3 target-typed `new(...)` sites the brief's grep missed. The never-silent substring facts now also assert the absence of the other readers' names.
+- **Gate:** the build is unchanged (125 warnings, 113 CA2100). Unit is 1758 of 1758, so all 49 of 14822's reds are green. DemoSeed 170 and Regression non-Docker 140 are green.
+  - The 84 Docker facts are argued green again, and `TransactionalBlockFailure_…` is argued to fail only for its own reason. All of this is CI-pending.
+  - The optional local-cluster pre-check was not run.
+- **Merge checklist started:** 5α (`constraint-validator`) and 5a Codex (cycle 1, `86e33f5b..a154a19f`) are running. 5a with the `reviewer` (Fable) follows when an agent slot frees. There is no security consult (`PLAN:164`).
