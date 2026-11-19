@@ -54,7 +54,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// </para>
 ///
 /// <para>
-/// Docker-gated (Testcontainers Postgres + full <c>init.sql</c>): CI-pending; argued statically, never locally green.
+/// Docker-gated (Testcontainers Postgres + full <c>init.sql</c>): CI-W5a pending; run green once on a local scratch cluster (not CI evidence).
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -170,10 +170,10 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     /// (<c>calculate-and-export</c> → 200, one export record with lines, one manifest). The transfer to STY02
     /// effective Monday 15 June 2026 is then recorded THROUGH THE PRODUCT: <c>PUT /api/admin/users/{id}</c> on a Backend
     /// host over the same container (clock fixed at 10 July 2026, so the date is a past one). Payroll's
-    /// <c>calculate-and-export</c> for June is then called AGAIN and must answer either 200 (the idempotent no-op) or
-    /// the 409 <c>payroll-export-conflict</c> ("use a correction"); today it answers 409, because the export lines carry
-    /// the calculation's own manifest id and so the content hash of a repeat never equals the first (a repeat WITHOUT a
-    /// transfer answers 409 as well). Any other answer (422, 500, 503) fails the fact. Asserts: June's
+    /// <c>calculate-and-export</c> for June is then called AGAIN and must answer the 409 <c>payroll-export-conflict</c>
+    /// ("use a correction"): the repeat is refused because the transfer's split changes the lines' periods (1-14 and
+    /// 15-30 June against the exported 1-30 June), and also because each calculation's manifest id enters the content hash.
+    /// Any other answer, 200 included, fails the fact. Asserts: June's
     /// <c>payroll_export_records</c> row keeps its <c>content_hash</c>, <c>original_lines</c>,
     /// <c>current_effective_lines</c> and <c>exported_at</c>, and there is still ONE export row for the person.
     ///
@@ -225,9 +225,8 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
         var again = await CalculateAndExportAsync(employeeId, Jun01, Jun30);
         var againJson = await again.Content.ReadAsStringAsync();
         Assert.True(
-            again.StatusCode == HttpStatusCode.OK
-            || (again.StatusCode == HttpStatusCode.Conflict && againJson.Contains("\"kind\":\"payroll-export-conflict\"", StringComparison.Ordinal)),
-            $"expected 200 or the 409 payroll-export-conflict, got {(int)again.StatusCode}: {againJson}");
+            again.StatusCode == HttpStatusCode.Conflict && againJson.Contains("\"kind\":\"payroll-export-conflict\"", StringComparison.Ordinal),
+            $"expected the 409 payroll-export-conflict, got {(int)again.StatusCode}: {againJson}");
 
         // The second calculation saw the transfer (its own manifest has two segments)...
         Assert.Equal(manifestsBefore + 1, await CountManifestsAsync(employeeId));
