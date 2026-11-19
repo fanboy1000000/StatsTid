@@ -2302,3 +2302,25 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Gate:** build 0 errors, 125 warnings, 113 CA2100. Unit 1759, DemoSeed 170 and Regression non-Docker 140 are green.
 - **Census:** none of the 14 existing classes that call the six routes can change what it asserts, and no test constructs `SaveProfileResult`.
 - **TASK-14824 dispatched** (`ux`, stacked on `d8ef347b`; REGEN none). The three labels are ruled: Konfigurationsændring, Organisationsskift, Ansættelsesperiode-ændring.
+
+**Wave-5 batch D adjudicated** (`.claude/reviews/S148-wave5D-briefs-adjudication.md`, Fable 5.2, **RULED-WITH-QUESTIONS**: one owner question, which does not block dispatch). A planner is applying it ("final + 27").
+- **TASK-14831's reads under the shared lock (ruling 1): separate connections.**
+  - The adjudicator grepped every writer of every re-derived table. Each takes `(148, 1)` exclusive, or cannot touch a calculated month (the user create, startup seeders, drafts, and the test-only profile overload). So under READ COMMITTED the fresh reads see a stable state, and reading inside the transaction would add nothing.
+  - **The cost is availability, not correctness:** a recording holds two pooled connections. As many recordings as the pool has connections (100 by default), in their turn at once, stall about 15 s and fail, writing nothing.
+  - It is **registered** (a dated SEC-066 note at the merge, naming the payroll variant and its two known closures), **marked** (one `shortcut(pending)` at the recheck) and **measured** (a fourth TASK-14831-T figure with a pool of 4). No invariant is traded.
+- **The wage-type mapping stays out of the check (ruling 2).** The O-23 trace's open case is reachable, but it is not a race, so no lock closes it.
+  - **Example:** March has a profile change scheduled for Wednesday 25 March 2026, March is recorded on Friday 20 March, and the mapping is edited on Monday 23 March. The recorded 25–31 March lines keep the old code, and a replay maps them with the new code without refusing.
+  - ADR-016 D10 already records this exception. **It goes to the owner** (below).
+- **Exact strings as contract:**
+  - two 409 `payroll-inputs-changed` sentences. The correction's says "run the correction again", not "calculate the month again", which would send an admin to the route that answers "use a correction".
+  - one recording-time 503 sentence, in its own exception type, so TASK-14827's calculate-time arm cannot answer the wrong sentence.
+- **New local mutations:**
+  - M-51, the round-trip-every-member pin, with two more arms (a default-value round trip, and `normModel` as a JSON number).
+  - M-52, AC-PIL-f arm (3). M-7 trips arms (1) and (2) only, which corrects the brief's "(1)–(3)".
+- **TASK-14846:** the two carry-forward checkboxes are also disabled on one's own record, and the note uses the `info` variant.
+  - The adjudicator also found AC-C13r's facts would pass falsely while the drawer loads, since every input is disabled then. Each case now first waits until `ep-email` is enabled.
+- **Other corrections:**
+  - comments name "every exclusive taker", never a count (TASK-14832 adds two in wave 6);
+  - the recheck's hint signature drops its unused `(conn, tx)`;
+  - QUAL-258 interacts as known: an unchanged retry passes the recheck and answers `payroll-export-conflict`, and a dated revisit note is added at the merge.
+- **Owner question (asked 2026-11-19):** should the replay promise keep its one known exception for wage-type codes? The options are (a) close it after S148, by storing each line's resolved code in the month's proof (the adjudicator's lean); (b) accept it as a known hole; or (c) let payroll record only finished months.
