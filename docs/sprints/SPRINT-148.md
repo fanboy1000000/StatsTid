@@ -2136,3 +2136,19 @@ M-40 included [O for the 14 facts of the five classes run].
   - Never-silent facts that match a message substring can be satisfied by another reader's refusal. The implementer's first draft did exactly that, and `075bd098` fixed it.
 - **Found, not fixed, below the floor:** stale line cites in two `PeriodCalculationService.cs` remarks (`:394-395` "L72-73"/"L79"; `:150-156` "line 124"/"line 86"). These are for the 5a reviewers to weigh.
 - **TASK-14822-T dispatched** (`test-qa`, worktree, base `075bd098`).
+
+**Wave-5 batch C adjudicated** (`.claude/reviews/S148-wave5C-briefs-adjudication.md`, Fable 5.2, RULED, no owner question). A planner is applying it ("final + 26"). Four material changes:
+- **The override-merge defect is QUAL-190, fixed inside the stack** (ruling 1).
+  - `ApplyOverride` sets 34 of the configuration's 41 members.
+  - Beyond the annual-norm case it also drops HK's and PROSA's rest derogation, so an override on an HK position would have turned rest warnings into violations.
+  - The fix goes into TASK-14826, the first commit in which the engine trusts what it is handed. A reflection-based fact (new AC-C1p) stops the next omission, and an end-to-end arm (AC-C1f (2)) proves a dated 12 h minimum rest survives an override.
+  - No seeded value moves. QUAL-190 is closed at O-17.
+- **Replay between the stack and TASK-14830** (ruling 11): the planner's lean is overruled.
+  - Reading the organisation from today's employment record would have suspended R42 ("a replay never consults today's profile history") and turned its pin red.
+  - Instead TASK-14827 freezes the organisation on each piece now (`FrozenPiece.OrgId`, brought forward from 14830), so replay re-resolves from frozen keys only. R42 holds unchanged.
+  - A named limit is recorded, not built around: the interim fingerprint is a set hash, so in that window it cannot see two pieces swapping configurations. No route replays, and TASK-14830 retires the fingerprint.
+- **A wire defect nobody had flagged** (ruling 15). Payroll serialises engine requests with a string-enum converter, while the engine host binds enums as numbers. The configuration carries the first enum on that wire, so every payroll calculation would have been refused after the stack.
+  - Contract: engine requests carry enums as numbers.
+  - Proof before CI: a real-engine control fact (ruling 19, new local mutation M-50). TASK-14828-T's local-cluster run of PIN-1 is now expected, not optional (ruling 22).
+- **Exact strings fixed as contract:** ten engine refusal sentences, two payroll bodies (503 `payroll-config-unavailable`; 422 `payroll-config-not-in-force`), the Danish per-field note ("Påvirker endnu ikke lønberegningen. Advarslerne om overarbejde bruger stadig aftalens indbyggede værdi."), and the two Skema warning sentences, which now name the served minimum rest instead of a fixed "11".
+- **Told to the owner at O-17, no decision needed:** the interim replay's set-fingerprint limit; one misconfigured agreement blanks a whole Teamoversigt response; Teamoversigt's agreement and OK-version source changes.
