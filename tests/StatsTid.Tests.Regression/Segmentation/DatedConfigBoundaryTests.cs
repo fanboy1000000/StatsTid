@@ -208,7 +208,9 @@ public sealed class DatedConfigBoundaryTests : IAsyncLifetime
             employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
             userAgreementCodeRepo: userAgreementCodeRepo,
             agreementConfigRepo: _configRepo,
-            positionOverrideRepo: _overrideRepo);
+            positionOverrideRepo: _overrideRepo,
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new TestFixtures.NoTransferDates());
     }
 
     private async Task<PlannedCalculation> PlanAsync(EmploymentProfile profile, DateOnly periodStart, DateOnly periodEnd)

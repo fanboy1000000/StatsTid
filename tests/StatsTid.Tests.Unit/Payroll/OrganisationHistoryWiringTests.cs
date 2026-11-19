@@ -13,10 +13,11 @@ namespace StatsTid.Tests.Unit.Payroll;
 ///
 /// <para>
 /// <b>Plain language.</b> The reader answers "on which days did this employee move to another institution?".
-/// Payroll cuts the month at each such day, because each part is priced under its own institution's local
-/// profile. A host that forgot to register the reader would plan every month as one piece, quietly, and a part of
-/// a transferred employee's month would later be paid under the wrong institution's rules. So a service built
-/// without the reader refuses to calculate, by name, before anything is read or sent to the rule engine.
+/// Payroll cuts the month at each such day. Today no paid figure depends on the organisation; once the T14b stack
+/// sends each part's own configuration to the engine, each part is priced under its own institution's rules. A host
+/// that forgot to register the reader would plan every month as one piece, quietly, and a part of a transferred
+/// employee's month would then be priced under the wrong institution's rules. So a service built without the
+/// reader refuses to calculate, by name, before anything is read or sent to the rule engine.
 /// </para>
 ///
 /// <para>

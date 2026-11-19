@@ -15,6 +15,7 @@ using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
+using StatsTid.Tests.Regression.Organisation;
 using StatsTid.Tests.Regression.Segmentation;
 using StatsTid.Tests.Regression.TestSupport;
 using Testcontainers.PostgreSql;
@@ -42,17 +43,18 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// <b>Harness.</b> The real Payroll host (<see cref="PayrollHostFactory"/>, the
 /// <c>PayrollHostRecalcBlockedTests</c> shape) over one Testcontainers Postgres with the full schema; the person is
 /// seeded through <see cref="RegressionSeed"/>, so the first <c>user_organisations</c> row starts at the SQL literal
-/// <c>0001-01-01</c> (a parameter bound to <see cref="DateOnly.MinValue"/> would store <c>-infinity</c>). A
-/// transfer is written by SQL (the open row is closed at the transfer date and the successor inserted, end
-/// exclusive); the Backend user-edit route is TASK-14820-T's pin and needs a second host over the same container,
-/// while every assertion here is about what payroll reads and writes, which is the same either way. Facts run one at
+/// <c>0001-01-01</c> (a parameter bound to <see cref="DateOnly.MinValue"/> would store <c>-infinity</c>). Three
+/// facts write their transfer by SQL (<see cref="RecordTransferAsync"/>; what it reproduces and what it does not is
+/// on the helper): there every assertion is about what payroll reads, which is the same either way. The
+/// exported-month fact records its transfer through the Backend user-edit route on a Backend host over the same
+/// container, because only the route runs product code between that fact's two readings. Facts run one at
 /// a time (<c>tests/StatsTid.Tests.Regression/xunit.runner.json</c>); each uses its own employee, and the one fact that
 /// seeds a local profile removes it again. Recorded hours (7.4 h on every weekday) are seeded so every month has
 /// lines to export and writes its record.
 /// </para>
 ///
 /// <para>
-/// Docker-gated (Testcontainers Postgres + full <c>init.sql</c>): CI-verified, never locally green.
+/// Docker-gated (Testcontainers Postgres + full <c>init.sql</c>): CI-pending; argued statically, never locally green.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -79,6 +81,9 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     private DbConnectionFactory _db = null!;
     private PayrollHostFactory _factory = null!;
     private long _outboxSeq = 5000;
+    private string _cs = null!;
+    private StatsTidWebApplicationFactory? _backendFactory;
+    private WebApplicationFactory<Program>? _backendHost;
 
     public async Task InitializeAsync()
     {
@@ -90,15 +95,28 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
             .Build();
         await _container.StartAsync();
 
-        var cs = _container.GetConnectionString();
+        var cs = _cs = _container.GetConnectionString();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(cs);
         _db = new DbConnectionFactory(cs);
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
         _factory = new PayrollHostFactory(cs, new RuleRegistry().GetAll());
     }
 
+    /// <summary>A Backend host over this container, its Copenhagen "today" pinned to <paramref name="today"/> and its leaver
+    /// job off (no seeded person is switched off behind a fact's back). Booted by the one fact that records its transfer
+    /// through the route, before that fact seeds anyone (PAT-008).</summary>
+    private WebApplicationFactory<Program> BootBackendHost(DateOnly today)
+    {
+        _backendFactory = new StatsTidWebApplicationFactory(_cs, withoutLeaverJob: true);
+        _backendHost = _backendFactory.WithFixedToday(today);
+        _ = _backendHost.CreateClient();
+        return _backendHost;
+    }
+
     public async Task DisposeAsync()
     {
+        _backendHost?.Dispose();
+        _backendFactory?.Dispose();
         if (_factory is not null)
             await _factory.DisposeAsync();
         if (_container is not null)
@@ -117,7 +135,7 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     /// segments each carries the cause of the boundary between them). The norm half of AC-C13a is TASK-14828-T's.
     ///
     /// <para>
-    /// <b>Red conditions</b> (Docker-gated; CI-verified). On the code before TASK-14822 no transfer date reaches the
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; argued statically). On the code before TASK-14822 no transfer date reaches the
     /// planner, so June is ONE segment (1-30 June) and <c>Assert.Equal(2, manifest.Segments.Count)</c> fails with 1.
     /// With the reader registered but a mutation that ignores its dates the same assertion trips.
     /// </para>
@@ -149,16 +167,29 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
 
     /// <summary>
     /// <b>Kind R (CI).</b> AC-C13b. An HK person in STY01 throughout; June 2026 is APPROVED and exported
-    /// (<c>calculate-and-export</c> → 200, one export record with lines, one manifest). A transfer to STY02 effective
-    /// Monday 15 June 2026 is then recorded (by SQL; the reason is in the class remark). Asserts: June's
+    /// (<c>calculate-and-export</c> → 200, one export record with lines, one manifest). The transfer to STY02
+    /// effective Monday 15 June 2026 is then recorded THROUGH THE PRODUCT: <c>PUT /api/admin/users/{id}</c> on a Backend
+    /// host over the same container (clock fixed at 10 July 2026, so the date is a past one). Payroll's
+    /// <c>calculate-and-export</c> for June is then called AGAIN and must answer 200 (the same lines, the same flex
+    /// balance: the idempotent no-op, no second record, nothing delivered again). Asserts: June's
     /// <c>payroll_export_records</c> row keeps its <c>content_hash</c>, <c>original_lines</c>,
-    /// <c>current_effective_lines</c> and <c>exported_at</c>, there is still ONE export row for the person, and no new
-    /// <c>segment_manifests</c> row appeared (nothing recalculates by itself, ADR-013).
+    /// <c>current_effective_lines</c> and <c>exported_at</c>, and there is still ONE export row for the person.
     ///
     /// <para>
-    /// <b>Red conditions</b> (Docker-gated; CI-verified). R: it holds on the code before TASK-14822 too. The
-    /// discriminating assertion is the <c>content_hash</c> equality (with the lines and the timestamp): it trips if
-    /// recording a transfer ever rewrote, re-exported or recalculated an exported month. The first captured row is
+    /// <b>Product code that runs between the two readings:</b> the Backend user-edit route (it writes the dated
+    /// organisation rows) and payroll's second calculation, whose planner now reads the transfer date (the recalculation
+    /// writes its own manifest, ADR-016 D10, so the manifest count rises from 1 to 2 and the new manifest holds TWO
+    /// segments, 1-14 and 15-30 June). The discriminating assertion is that the June export record is unchanged AFTER a
+    /// calculation that DID see the transfer: <c>content_hash</c> equality with the lines and the timestamp, and the
+    /// 200 (not a 409 "different content").
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; argued statically). R: the record holds on the code before
+    /// TASK-14822 as well (no transfer date reaches the planner, the new manifest has ONE segment, so the two-segment
+    /// assertion fails there, which is the proof that the second calculation is not a repeat of the first). The record
+    /// assertions trip if recording a transfer or recalculating after it ever rewrote, re-exported or changed an
+    /// exported month (a changed content hash would also turn the second call into a 409). The first captured row is
     /// asserted non-empty so the fact cannot pass on a record that was never written.
     /// </para>
     /// </summary>
@@ -166,6 +197,8 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     public async Task BackdatedTransfer_ExportedMonthUnchanged()
     {
         const string employeeId = "EMP-S148-TRANSFER-EXPORTED";
+        // Boot order (PAT-008): the Backend host boots before any fixture is seeded.
+        var backend = BootBackendHost(new DateOnly(2026, 7, 10));
         await SeedEmployeeAsync(employeeId, FromOrg);
         await SeedWeekdayHoursAsync(employeeId, Jun01, Jun30);
         await SeedApprovedMonthAsync(employeeId, Jun01, Jun30);
@@ -180,15 +213,29 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
         var manifestsBefore = await CountManifestsAsync(employeeId);
         Assert.Equal(1, manifestsBefore);
 
-        await RecordTransferAsync(employeeId, Jun15);
+        // The transfer, recorded by the product's own route.
+        var put = await TransferWriteTests.PutUserAsync(
+            TransferWriteTests.GlobalAdminClient(backend), _cs, employeeId,
+            new { primaryOrgId = ToOrg, effectiveFrom = "2026-06-15" });
+        Assert.True(put.StatusCode == HttpStatusCode.OK,
+            $"expected 200 from the user-edit route, got {(int)put.StatusCode}: {await put.Content.ReadAsStringAsync()}");
 
+        // Payroll calculates June again, now knowing the transfer.
+        var again = await CalculateAndExportAsync(employeeId, Jun01, Jun30);
+        var againJson = await again.Content.ReadAsStringAsync();
+        Assert.True(again.StatusCode == HttpStatusCode.OK, $"expected 200, got {(int)again.StatusCode}: {againJson}");
+
+        // The second calculation saw the transfer (its own manifest has two segments)...
+        Assert.Equal(manifestsBefore + 1, await CountManifestsAsync(employeeId));
+        Assert.Equal(2, await LatestManifestSegmentCountAsync(employeeId));
+
+        // ...and the exported month is exactly as it was.
         var after = await LoadExportRecordAsync(employeeId);
         Assert.Equal(before.ContentHash, after.ContentHash);
         Assert.Equal(before.OriginalLines, after.OriginalLines);
         Assert.Equal(before.CurrentEffectiveLines, after.CurrentEffectiveLines);
         Assert.Equal(before.ExportedAt, after.ExportedAt);
         Assert.Equal(1, await CountExportRecordsAsync(employeeId));
-        Assert.Equal(manifestsBefore, await CountManifestsAsync(employeeId));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -204,7 +251,7 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     /// <c>LocalProfileActivation</c>. The profile row is removed afterwards, so no other fact sees it.
     ///
     /// <para>
-    /// <b>Red conditions</b> (Docker-gated; CI-verified). Before TASK-14822 the local-profile lookup reads one key
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; argued statically). Before TASK-14822 the local-profile lookup reads one key
     /// for the whole month, on 1 June, so it asks STY01's history, finds no activation, and misses STY02's: the
     /// month plans as ONE segment (the transfer date is no cut either), so <c>Assert.Equal(3, …Count)</c> fails with 1.
     /// With the transfer cut but the lookup left on STY01 the plan has two segments and the same assertion fails with
@@ -248,8 +295,9 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     /// pieces, [2026-06-29, 2026-06-29] and [2026-06-30, 2026-06-30], then July's own piece (from 1 July).
     ///
     /// <para>
-    /// <b>Red conditions</b> (Docker-gated; CI-verified). Before TASK-14822 the context days are ONE piece,
-    /// [2026-06-29, 2026-06-30]: the first piece's end date is 30 June, not 29 June, so the first assertion fails.
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; argued statically). Before TASK-14822 the context days are ONE piece,
+    /// [2026-06-29, 2026-06-30]: the frozen pieces number two (one context piece, then July's own), not three, so the count guard
+    /// (<c>pieces.Count >= 3</c>) fails first; were the count met, the first piece's end date (30 June, not 29 June) is the next to fail.
     /// </para>
     /// </summary>
     [Fact]
@@ -362,9 +410,14 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A transfer to STY02 effective <paramref name="effectiveFrom"/>, written as the product writes one: the open
-    /// row is closed at the date (end exclusive; the first row keeps its <c>0001-01-01</c> start), the successor row
-    /// starts on it, and <c>users.primary_org_id</c> follows.
+    /// A transfer to STY02 effective <paramref name="effectiveFrom"/>, written by SQL, for the facts whose subject is
+    /// payroll's reading of the dates. It reproduces the route's row shape: the open row's <c>effective_to</c> becomes
+    /// the date (end exclusive; the first row keeps its <c>0001-01-01</c> start), the successor row starts on the date
+    /// with a NULL <c>effective_to</c>, <c>users.primary_org_id</c> follows, and the versions are the route's (the closed
+    /// row keeps its version; the successor is the predecessor's version + 1). It does NOT write what else the route
+    /// writes: the SUPERSEDED <c>user_organisations_audit</c> row, the <c>UserOrganisationTransferred</c> event and its
+    /// projection, or the reporting-line and vikar fan-out. A fact that needs those goes through the route (as
+    /// <see cref="BackdatedTransfer_ExportedMonthUnchanged"/> does).
     /// </summary>
     private async Task RecordTransferAsync(string employeeId, DateOnly effectiveFrom)
     {
@@ -373,7 +426,7 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
         await using var tx = await conn.BeginTransactionAsync();
 
         await using (var close = new NpgsqlCommand(
-            "UPDATE user_organisations SET effective_to = @d, version = version + 1 WHERE user_id = @u AND effective_to IS NULL",
+            "UPDATE user_organisations SET effective_to = @d WHERE user_id = @u AND effective_to IS NULL",
             conn, tx))
         {
             close.Parameters.AddWithValue("d", effectiveFrom);
@@ -383,7 +436,7 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
         await using (var open = new NpgsqlCommand(
             """
             INSERT INTO user_organisations (assignment_id, user_id, org_id, effective_from, effective_to, version)
-            VALUES (gen_random_uuid(), @u, @o, @d, NULL, 1)
+            VALUES (gen_random_uuid(), @u, @o, @d, NULL, 2)
             """, conn, tx))
         {
             open.Parameters.AddWithValue("u", employeeId);
@@ -544,7 +597,19 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     {
         await using var conn = _db.Create();
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand("SELECT COUNT(*) FROM segment_manifests WHERE employee_id = ", conn);
+        await using var cmd = new NpgsqlCommand("SELECT COUNT(*) FROM segment_manifests WHERE employee_id = @e", conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    /// <summary>The number of segments of the employee's most recently written manifest.</summary>
+    private async Task<int> LatestManifestSegmentCountAsync(string employeeId)
+    {
+        await using var conn = _db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT jsonb_array_length(segments_jsonb) FROM segment_manifests WHERE employee_id = @e ORDER BY created_at DESC LIMIT 1",
+            conn);
         cmd.Parameters.AddWithValue("e", employeeId);
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
@@ -553,7 +618,7 @@ public sealed class TransferPayrollBoundaryTests : IAsyncLifetime
     {
         await using var conn = _db.Create();
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand("SELECT COUNT(*) FROM payroll_export_records WHERE employee_id = ", conn);
+        await using var cmd = new NpgsqlCommand("SELECT COUNT(*) FROM payroll_export_records WHERE employee_id = @e", conn);
         cmd.Parameters.AddWithValue("e", employeeId);
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
