@@ -1,4 +1,4 @@
-# S148 resume point — updated 2026-11-19 (morning)
+# S148 resume point — updated 2026-11-19 (midday)
 
 The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 24").
 
@@ -24,21 +24,21 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
 
 **Nothing on master is pushed.** Only the evidence branches `ci/s148-m4a` and `ci/s148-m4b` are on the remote.
 
-## In flight
-1. **CI-M4a**: draft PR #64, branch `ci/s148-m4a`, run **44481246221** at `5f3f9a72` (mutation commit `3d506e58` plus the evidence `ci.yml` commit).
-2. **CI-M4b**: draft PR #65, branch `ci/s148-m4b`, run **44481256823** at `6fc866ca` (mutation commit `1834c305` plus the evidence commit).
-   - Both were started 2026-11-19 07:39 UTC. A background poll (task `bocznf00n`) waits on both; if it is reaped, check by hand.
-   - The builder report is `.claude/reviews/S148-CI-M4-builder-report.md`. The frozen lists and the rulings on M-10's `init.sql` edit and M-45's 403 are in the sprint log (`1e5ca900`).
-   - **Judge each run by rules 4 and 5 (`PLAN:630-640`):** download `test-results`, then read the failed set from the trx files. A pin is proved only when its failure message is the frozen assertion. A frozen fact that stays green is a finding. An unlisted red is a census miss if the mutation explains it; otherwise it is a defect.
-   - CI-M4b is also the repeat run for R8 and C2-R5 (Choreography B and AC-C13s must stay green, since its mutations do not touch them).
-   - **When both are judged:** log them; close PRs #64 and #65 unmerged; delete both remote branches and both local branches; update the SEC-062, SEC-065 and QUAL-257 register cells from "CI-pending" to "CI-verified" (CI-W4 plus CI-M4a).
-   - **Wave 5 then starts.**
-3. **Wave-5 briefs** (logged in `0b77061e`):
-   - **Batches A and B are drafted.** Reports: `.claude/reviews/S148-wave5A-briefs-planner-report.md` and `-wave5B-`.
-   - **Their Fable adjudication is running.** Its output begins `## S148 wave-5 batches A and B — brief adjudication`; save it as `.claude/reviews/S148-wave5AB-briefs-adjudication.md`. Then a planner applies it ("final + 25"), and batch C is reconciled with the rulings.
-   - **Batch C (the T14b stack) is drafting in parallel.** Its report begins `## S148 wave-5 batch C planner report`; save it as `S148-wave5C-briefs-planner-report.md`.
-   - **O-23 is done** (`S148-O23-wage-type-mapping-trace.md`). It is input to TASK-14831's brief adjudication.
-   - **Batch D** (14830, -T, 14831, -T, 14846) is drafted after C.
+## Where wave 4 ended
+- **CI-W4, CI-M4a and CI-M4b are all green and judged** (`d7278932`, `86e33f5b`).
+  - CI-M4a: 41 of 41 frozen facts red at their assertions; CI-M4b: 7 of 7. No unlisted red.
+  - The registers read "CI-verified".
+  - PRs #63, #64 and #65 are closed unmerged, and every `ci/s148-*` branch is deleted.
+  - Correction logged: under M-45 the profile PUT answered 200 in CI, not the local 403.
+
+## In flight (wave 5)
+1. **TASK-14822** (`payroll-integration`, worktree, base `86e33f5b`; brief at draft 2). Its report begins `## S148 TASK-14822 report`; save it as `.claude/reviews/S148-TASK-14822-report.md`.
+   - **Then** dispatch TASK-14822-T on its branch (AC-C13b, -13g with M-6 at its gate, AC-C13a's split, AC-C13t, and the 21 fixture re-points).
+   - **Then the merge checklist:** 5α on the union (`constraint-validator`); no security consult; 5a with the `reviewer` (Fable) and Codex (high risk: payroll export); merge `--no-ff`; GATE.
+2. **Batch C planner** (the T14b stack: 14826, -T, 14827, 14828, -T, 14829), drafting against batch B's draft-1 contract. Its report begins `## S148 wave-5 batch C planner report`; save it as `S148-wave5C-briefs-planner-report.md`.
+   - **Then reconcile it with the applied A/B briefs.** The final names are listed in `S148-wave5AB-briefs-applied-report.md` § 4. Then adjudicate C (Fable) and apply.
+3. **Batch D** (14830, -T, 14831, -T, 14846) is drafted after C. O-23's trace (`S148-O23-wage-type-mapping-trace.md`) is input to 14831's adjudication.
+4. **Wave-5 briefs A and B are at draft 2** (plan "final + 25"; T-BC-10 ruled (b)). TASK-14823's base is master after 14822's GATE.
 
 ## After that
 - **Wave 5** ends with **TASK-14846** (`ux`; the edit drawer locks one's own refused fields, with the contract Danish note).
