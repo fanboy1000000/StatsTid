@@ -241,6 +241,8 @@ public sealed class MonthEndCrossingTests
                 hoursReader: reader,
                 // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
                 priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+                // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+                organisationHistoryReader: new NoTransferDates(),
                 // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
                 flexLedgerReader: new InMemoryFlexLedgerReader());
 

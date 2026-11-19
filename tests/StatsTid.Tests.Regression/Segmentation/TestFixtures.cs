@@ -283,6 +283,8 @@ internal static class TestFixtures
             hoursReader: hoursReader ?? new InMemoryRecordedHoursReader(),
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
             priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new TestFixtures.NoTransferDates(),
             // S146 R-14: the opening is derived from the recorded ledger, never handed in. Default = an EMPTY
             // in-memory ledger (not about the chain: LEDGER_START 0, the opening the former caller-supplied 0m
             // said); a fact over the database that records months passes the Postgres reader.
@@ -472,6 +474,18 @@ internal static class TestFixtures
         public Task<string?> GetApprovalStatusAsync(
             string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct)
             => Task.FromResult<string?>("APPROVED");
+    }
+
+    /// <summary>
+    /// The fake organisation-history reader for every PCS-level fact that is not ABOUT transfers: it answers "no
+    /// transfer dates" (ADR-040 D4). The service refuses a plan without a reader, so a fixture passes this one and
+    /// says so in a comment. One fake for the whole Regression project.
+    /// </summary>
+    public sealed class NoTransferDates : IOrganisationHistoryReader
+    {
+        public Task<IReadOnlyList<DateOnly>> GetEffectiveFromDatesAsync(
+            string employeeId, DateOnly afterExclusive, DateOnly toInclusive, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<DateOnly>>(Array.Empty<DateOnly>());
     }
 
     public sealed class StubHandler : HttpMessageHandler

@@ -225,6 +225,8 @@ public sealed class SplitMonthPcsTests
             classificationProvider: new FixedProvider(live),
             hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31),
             priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new NoTransferDates(),
             // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
             flexLedgerReader: new InMemoryFlexLedgerReader());
 

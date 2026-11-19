@@ -103,6 +103,8 @@ internal static class ReplayTestKit
             userAgreementCodeRepo: agreementCodeRepo,
             hoursReader: hours,
             priorPeriodApprovalReader: approval,
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new TestFixtures.NoTransferDates(),
             flexLedgerReader: ledger);
         Ledgers.Add(pcs, ledger);
         return pcs;

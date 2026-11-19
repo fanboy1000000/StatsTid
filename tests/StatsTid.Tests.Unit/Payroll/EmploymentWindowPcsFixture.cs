@@ -250,6 +250,8 @@ internal static class EmploymentWindowPcsFixture
             hoursReader: hoursReader ?? new InMemoryRecordedHoursReader(),
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
             priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new NoTransferDates(),
             // S146 R-14: the opening comes from the recorded ledger now, never from the caller. A fact that is
             // not about the chain gets an EMPTY ledger (no records), so the month opens at LEDGER_START 0, which
             // is what the former caller-supplied 0m said. A fact that needs a non-zero opening passes
@@ -267,6 +269,19 @@ internal static class EmploymentWindowPcsFixture
         public Task<string?> GetApprovalStatusAsync(
             string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct)
             => Task.FromResult<string?>("APPROVED");
+    }
+
+    /// <summary>
+    /// The fake organisation-history reader for every PCS-level fact that is not ABOUT transfers: it answers "no
+    /// transfer dates", so the month is planned as the profile and agreement dates alone cut it (ADR-040 D4). The
+    /// service refuses a plan without a reader (<see cref="IOrganisationHistoryReader"/>), so a fixture passes this
+    /// one and says so in a comment. One fake for the whole Unit project.
+    /// </summary>
+    public sealed class NoTransferDates : IOrganisationHistoryReader
+    {
+        public Task<IReadOnlyList<DateOnly>> GetEffectiveFromDatesAsync(
+            string employeeId, DateOnly afterExclusive, DateOnly toInclusive, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<DateOnly>>(Array.Empty<DateOnly>());
     }
 
     /// <summary>
