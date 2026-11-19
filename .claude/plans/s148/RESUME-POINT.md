@@ -1,4 +1,4 @@
-# S148 resume point — updated 2026-11-18 (evening)
+# S148 resume point — updated 2026-11-19 (morning)
 
 The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 24").
 
@@ -20,24 +20,19 @@ The TASK-14845 reviews:
 
 Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked FIXED. Worktrees are pruned.
 
-**Nothing on master is pushed.** Only the evidence branch `ci/s148-w4` is on the remote.
+**CI-W4 is green** (run 44352425811; Regression 2691/2691; watch items R6, R7 and R8 met; ruling 1.9's non-Monday run settled). It is logged in `d7278932`, PR #63 is closed unmerged, and `ci/s148-w4` is deleted.
+
+**Nothing on master is pushed.** Only the evidence branches `ci/s148-m4a` and `ci/s148-m4b` are on the remote.
 
 ## In flight
-1. **CI-W4.** Draft PR #63, branch `ci/s148-w4`, run **44352425811** at `c17db07c` (head confirmed). It was started at 16:53 UTC on Wednesday, which settles the owed non-Monday run.
-   - A background `gh run watch` is waiting on it. It can be reaped for low memory; if so, check by hand.
-   - **Judge it against** CI-W4's list (`PLAN:700`) and the watch items:
-     - R6: the on-behalf success facts must not hang;
-     - R7: `OrganisationDriftGuardTests` must run 7 of 7;
-     - R8 and C2-R5: Choreography B and AC-C13s must stay green on repeat.
-   - **When green:** close PR #63 unmerged, delete `ci/s148-w4`, and log the run id and the facts that flipped.
-2. **The CI-M4a and CI-M4b builder** (`test-qa`, worktree) is building the local branches `ci/s148-m4a` (M-9, M-11, M-15, M-39, M-41, M-43 to M-48) and `ci/s148-m4b` (M-10, M-14, M-16, M-40, M-42) on `c17db07c`, each with its frozen list in the commit message.
-   - **When it returns:**
-     - Save its report as `.claude/reviews/S148-CI-M4-builder-report.md`. Use `S148-session-helpers/msgmatch.js <subagent jsonl> <out> "<marker>"`.
-     - Copy each frozen list into the sprint log.
-     - Add the evidence-only `ci.yml` commit (rule 3, `PLAN:629`: `if: ${{ !cancelled() }}` on three steps).
-     - Push each branch as a draft PR ("EVIDENCE ONLY — S148 checkpoint CI-M4a; never merge").
-     - Judge each run by rules 4 and 5 (`PLAN:630-640`).
-   - **Wave 5 waits for CI-W4, CI-M4a and CI-M4b.**
+1. **CI-M4a**: draft PR #64, branch `ci/s148-m4a`, run **44481246221** at `5f3f9a72` (mutation commit `3d506e58` plus the evidence `ci.yml` commit).
+2. **CI-M4b**: draft PR #65, branch `ci/s148-m4b`, run **44481256823** at `6fc866ca` (mutation commit `1834c305` plus the evidence commit).
+   - Both were started 2026-11-19 07:39 UTC. A background poll (task `bocznf00n`) waits on both; if it is reaped, check by hand.
+   - The builder report is `.claude/reviews/S148-CI-M4-builder-report.md`. The frozen lists and the rulings on M-10's `init.sql` edit and M-45's 403 are in the sprint log (`1e5ca900`).
+   - **Judge each run by rules 4 and 5 (`PLAN:630-640`):** download `test-results`, then read the failed set from the trx files. A pin is proved only when its failure message is the frozen assertion. A frozen fact that stays green is a finding. An unlisted red is a census miss if the mutation explains it; otherwise it is a defect.
+   - CI-M4b is also the repeat run for R8 and C2-R5 (Choreography B and AC-C13s must stay green, since its mutations do not touch them).
+   - **When both are judged:** log them; close PRs #64 and #65 unmerged; delete both remote branches and both local branches; update the SEC-062, SEC-065 and QUAL-257 register cells from "CI-pending" to "CI-verified" (CI-W4 plus CI-M4a).
+   - **Wave 5 then starts.**
 
 ## After that
 - **Wave 5** ends with **TASK-14846** (`ux`; the edit drawer locks one's own refused fields, with the contract Danish note).
