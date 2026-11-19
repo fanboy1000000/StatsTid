@@ -632,7 +632,9 @@ public static class PeriodPlanner
 /// — activates the ADR-016 D5b-reserved <see cref="BoundaryCause.EmployeeProfileChange"/>
 /// cause (tie-break slot: after <see cref="BoundaryCause.PositionOverrideEffective"/>,
 /// before <see cref="BoundaryCause.EuWtdRulesetVersion"/>). Hydrated by the caller from
-/// the profile-history read. Optional trailing param, <c>null</c> = empty.</param>
+/// the profile-history read. Optional trailing param, <c>null</c> = empty. It also holds the
+/// <c>user_organisations</c> start dates (transfers, ADR-040 D4), which the payroll caller merges
+/// in by ruling (no boundary kind of its own; TASK-14822's contract).</param>
 /// <param name="AgreementCodeEffectiveDates">S144 (QUAL-150 groundwork):
 /// <c>user_agreement_codes</c> <c>effective_from</c> dates — each introduces a boundary with
 /// cause <see cref="BoundaryCause.AgreementCodeChange"/> (tie-break slot, ruled R1: after

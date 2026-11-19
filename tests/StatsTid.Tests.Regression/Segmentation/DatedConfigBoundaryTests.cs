@@ -30,7 +30,8 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// and invoke its private <c>BuildPlanWithHistoriesAsync</c> by reflection (the sibling
 /// <c>ProfileBoundaryHydrationTests</c>). Planning reads only: QUAL-182's no-write rule is asserted inside both
 /// facts as the row counts of six tables, before and after each planning call (B14). Docker-gated:
-/// CI-verified, never locally green.
+/// CI-pending until CI-W5a (both facts were CI-verified at CI-W4a and CI-M4a/b on the previous build; the service
+/// construction changed since); run green once on a local scratch cluster (not CI evidence).
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -208,7 +209,9 @@ public sealed class DatedConfigBoundaryTests : IAsyncLifetime
             employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
             userAgreementCodeRepo: userAgreementCodeRepo,
             agreementConfigRepo: _configRepo,
-            positionOverrideRepo: _overrideRepo);
+            positionOverrideRepo: _overrideRepo,
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new TestFixtures.NoTransferDates());
     }
 
     private async Task<PlannedCalculation> PlanAsync(EmploymentProfile profile, DateOnly periodStart, DateOnly periodEnd)

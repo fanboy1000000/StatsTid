@@ -517,6 +517,8 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
             hoursReader: new ProjectionHoursReader(_db,
                 new TimeEntryProjectionRepository(_db), new AbsenceProjectionRepository(_db)),
             priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)),
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new Segmentation.TestFixtures.NoTransferDates(),
             // S146 R-14: the production reader over payroll_export_records (the full schema is applied); a fact that
             // needs a non-zero opening seeds a ledger record with FlexLedgerSeed, the rest read an empty ledger.
             flexLedgerReader: new PostgresFlexLedgerReader(_db));

@@ -141,6 +141,12 @@ builder.Services.AddSingleton<ApprovalPeriodRepository>();
 // without this registration every such calculation throws, naming it (the host 409 facts pin that,
 // mutation MD-21).
 builder.Services.AddSingleton<IPriorPeriodApprovalReader, ApprovalPeriodPriorPeriodReader>();
+// ADR-040 D4, ADR-043 D12: the employee's transfer dates. PeriodCalculationService reads the user_organisations
+// effective-from dates once per calculation, beside the profile and agreement-code date reads, and cuts the month
+// at each transfer so every part asks its own institution. A read-only cross-context read of a Backend-owned
+// table (PostgresOrganisationHistoryReader). Optional in PCS's constructor but never silent: without this
+// registration every planning or calculating call throws, naming this line.
+builder.Services.AddSingleton<IOrganisationHistoryReader, PostgresOrganisationHistoryReader>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 // S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on
 // the legacy [Obsolete] CalculateAsync(profile, …) shim path. Optional dependency on

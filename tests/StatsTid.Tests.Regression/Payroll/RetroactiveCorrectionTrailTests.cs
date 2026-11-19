@@ -248,6 +248,8 @@ public sealed class RetroactiveCorrectionTrailTests : IAsyncLifetime
             employmentWindowResolver: new EmploymentWindowResolver(factory),
             hoursReader: new InMemoryRecordedHoursReader(entries),
             priorPeriodApprovalReader: new Segmentation.TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new Segmentation.TestFixtures.NoTransferDates(),
             // S146 R-14: a correction/ledger fact over the database: the production reader over payroll_export_records.
             flexLedgerReader: new PostgresFlexLedgerReader(factory));
 

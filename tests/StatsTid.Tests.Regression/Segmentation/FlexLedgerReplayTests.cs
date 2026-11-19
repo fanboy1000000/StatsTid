@@ -58,6 +58,8 @@ public sealed class FlexLedgerReplayTests : IClassFixture<FlexLedgerHostFixture>
             hoursReader: new ProjectionHoursReader(
                 factory, new TimeEntryProjectionRepository(factory), new AbsenceProjectionRepository(factory)),
             priorPeriodApprovalReader: null,
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new TestFixtures.NoTransferDates(),
             flexLedgerReader: null);
     }
 

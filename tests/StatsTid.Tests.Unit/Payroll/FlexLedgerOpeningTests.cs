@@ -435,6 +435,8 @@ public class FlexLedgerNeverSilentTests
             classificationProvider: new Classifications(),
             hoursReader: hours,
             priorPeriodApprovalReader: new EmploymentWindowPcsFixture.AlwaysApprovedPriorPeriods(),
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new EmploymentWindowPcsFixture.NoTransferDates(),
             flexLedgerReader: null);
 
     /// <summary>
@@ -459,6 +461,8 @@ public class FlexLedgerNeverSilentTests
 #pragma warning restore CS0618
 
         Assert.Contains("IFlexLedgerReader", ex.Message);
+        // Fails only on its own refusal: the organisation reader is present, and its text must not satisfy this fact.
+        Assert.DoesNotContain("IOrganisationHistoryReader", ex.Message);
         Assert.Equal(0, hours.Reads);
         Assert.Empty(engine.Calls);
     }

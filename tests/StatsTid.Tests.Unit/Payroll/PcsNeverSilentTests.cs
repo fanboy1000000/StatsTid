@@ -79,6 +79,8 @@ public sealed class PcsNeverSilentTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => CalculateAsync(pcs, Oct01, Oct31));
 
         Assert.Contains("IPriorPeriodApprovalReader", ex.Message);
+        // Fails only on its own refusal: the organisation reader is present, and its text must not satisfy this fact.
+        Assert.DoesNotContain("IOrganisationHistoryReader", ex.Message);
         Assert.Empty(engine.Paths);
     }
 
@@ -125,6 +127,7 @@ public sealed class PcsNeverSilentTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => CalculateAsync(pcs, Jun01, Jun30));
 
         Assert.Contains("IRecordedHoursReader", ex.Message);
+        Assert.DoesNotContain("IOrganisationHistoryReader", ex.Message);
         Assert.Empty(engine.Paths);
         Assert.Equal(0, approval.Calls);
         Assert.Empty(windows.Calls);
@@ -201,6 +204,8 @@ public sealed class PcsNeverSilentTests
             employeeProfileRepo: null,
             hoursReader: hours,
             priorPeriodApprovalReader: approval,
+            // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
+            organisationHistoryReader: new NoTransferDates(),
             // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
             flexLedgerReader: new InMemoryFlexLedgerReader());
 
