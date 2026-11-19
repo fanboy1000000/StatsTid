@@ -2179,3 +2179,14 @@ M-40 included [O for the 14 facts of the five classes run].
   - Codex found the production change consistent with the contract.
 - **5a Fable (cycle 1) dispatched** on the same SHA, told the known items so it can look beyond them. A fix-up follows both lenses.
 - **Lesson, carried to the remaining -T briefs:** a census that relies on a report's claim ("builds through the shared fixture") rather than on a grep of every construction site missed a real site. The stack's -T passes must grep every `new PeriodCalculationService(`, every `new(` typed as the service, and every reflection invocation.
+
+**TASK-14822 5a cycle 1 — Fable and the rulings** (`.claude/reviews/S148-TASK-14822-5a-reviewer.md`, Fable 5.2, APPROVED-WITH-WARNINGS; rulings `S148-TASK-14822-5a-rulings-c1.md`, R1–R9).
+- **Production change:** both lenses find it correct, with nothing to change in behaviour.
+- **New from Fable (WARNING): the exported-month fact (AC-C13b) cannot fail.** It writes the transfer by SQL and re-reads the export record with no product code in between.
+  - Ruled R3: record the transfer through the Backend user-edit route on a Backend host, call payroll's `calculate-and-export` for June again, and then assert the record unchanged.
+  - Fallback, if one class cannot compose two hosts: the SQL transfer, the payroll call, and a narrowed docstring.
+- **Remarks not true now** (R4, R5). In PCS and `IOrganisationHistoryReader`: present-tense "is priced under its own institution's profile" (no paid figure depends on the organisation until the T14b stack), "a split month is refused" (false), "two planning-shape suites" (three), and numeric line cites. Also `EmployeeProfileChange`'s SharedKernel definition, which now also marks a transfer date. All are comment only.
+- **Carried:**
+  - R8: every later brief that changes PCS's constructor uses a census of every construction form.
+  - R9 (unproven): TASK-14828-T pins that a pure-transfer split leaves June's line totals unchanged, on the real engine.
+- **Fix-up order:** TASK-14822 fix-up 1 (`payroll-integration`, comment only, R4 and R5) is dispatched on `a154a19f`. TASK-14822-T fix-up 1 (`test-qa`: R1, R2, R3, the test remarks, R6, R7) follows on its tip. Then cycle 2 on both lenses.
