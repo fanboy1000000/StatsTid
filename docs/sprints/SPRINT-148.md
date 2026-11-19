@@ -2211,3 +2211,13 @@ M-40 included [O for the 14 facts of the five classes run].
 **Wave-5 batch D drafting** (TASK-14830, -T, 14831, -T, 14846; planner, Opus 5.5), cited at `d473fa6d`.
 - The O-23 trace is input to TASK-14831's mapping fork, which goes to the adjudicator. The planner presents it and does not decide it.
 - The wave-5 lessons are carried into its prompt: the census of every construction form, R facts that run product code between their readings, and the expected local-cluster pre-check.
+
+**TASK-14822-T fix-up 1 returned** (`test-qa`; `b9f9b0a0`, `0b166b8b` on `a91615d8`; report `.claude/reviews/S148-TASK-14822-T-fix1-report.md`).
+- **R1, R2, R4's second bullet, R6 and R7 are done.** R6 went further: the SQL helper now mirrors the route's versions, and says what it does not write.
+- **R3 was built as option (a).** The exported-month fact boots a Backend host over the same container, records the transfer through `PUT /api/admin/users/{id}`, and has payroll calculate June again. It asserts the newest manifest has two segments and June's export record is unchanged.
+- **The R8 census** confirms every site that plans or calculates passes a reader.
+- **Gate:** build 0 errors, 125 warnings, 113 CA2100. Unit 1758, DemoSeed 170 and Regression non-Docker 140 are green.
+- **Local pre-check** (a throwaway cluster on port 55432; not CI evidence): the six touched Docker facts are 6 of 6 green.
+  - Its first run caught a wrong expectation: the repeat June export answers **409 `payroll-export-conflict`**, not 200. The fact now accepts either.
+- **Found by that run, not yet ruled:** `PayrollExportManifest.ComputeContentHash` hashes lines that carry each calculation's own `manifestId`, so on `/calculate-and-export` the "same hash is an idempotent no-op" branch may never fire, and every repeat export of an exported month answers 409. Both cycle-2 lenses are asked to verify it.
+- **Cycle 2 dispatched** over `a154a19f..0b166b8b`: Codex and Fable.
