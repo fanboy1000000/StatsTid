@@ -34,6 +34,7 @@ window away from being unrecoverable.
 | F6 | Loading-flash perception | **OPEN — the S126 measurement was RETRACTED** (harness measured full page loads, and its stop condition was true before the route mounted). Chunk sizes valid; durations and the 250 ms threshold are not. |
 | F7 | One extra single-row read per admitted manager–employee pair on the my-reports list and Teamoversigt (S147, TASK-14725) | **OPEN — accepted, revisit** (S147 Step 7a fix; Fable's TASK-14725 review, NOTE 6). See below |
 | F8 | The holiday-balance seed's sum runs on every save that touches an entitlement type, even when the balance row exists (S148, TASK-14842) | **OPEN — accepted, revisit** (both TASK-14842 5a lenses: no merge blocker). See below |
+| F9 | A long configuration publish holds the "pay inputs" lock while it lists the worklist rows it reaches, and every other pay-input writer waiting behind it fails after 30 seconds instead of waiting (S148, TASK-14823) | **OPEN — registered, revisit** (TASK-14823 stack Step 5a cycle 1, ruling R6). See below |
 
 ---
 
@@ -324,6 +325,28 @@ cycle 1, N-3). The tidy option, recommended by Codex: compute the sum inside the
 (`INSERT … SELECT … WHERE NOT EXISTS`, keeping `ON CONFLICT` and the lock), so it runs only when the row is created.
 Revisit if Skema saves measure slow, or the next time the repository's writers are opened.
 
+## F9 — the pay-inputs lock's 30-second cliff behind a long publish (S148, recorded 2026-11-20)
+
+**What it is.** Since TASK-14823, the six configuration writes (the agreement-config publish, the four position-override
+writes and a local-profile write) take the shared "pay inputs" advisory lock `(148, 1)` exclusive first and hold it while
+they list, per matching employee, every payroll-exported month and settled holiday year the change reaches
+(`HrBackdateWorklistRepository.WriteForConfigurationChangeAsync`: per-employee reads, and one worklist upsert, event and
+audit row per listed month, all under the lock). Every other taker of `(148, 1)` waits: the Backend's pay-input writers
+(TASK-14821) and, from TASK-14831, payroll's exports and corrections. But the lock statement
+(`PayInputsLock.AcquireExclusiveAsync`) runs under Npgsql's default 30-second command timeout (no `CommandTimeout` is set
+anywhere in `src`), so a waiter behind a holder longer than 30 seconds fails with a 500 and writes nothing, rather than
+waiting its turn. `PayInputsLock.cs:38-46` says "Blocks until granted"; TASK-14831 corrects that remark (carried).
+
+**Size.** Measured locally only (TASK-14823-T, `ConfigPublishTimingTests`; PostgreSQL 16.14 on the development machine,
+`fsync=off`, Debug build, one measured publish after one warm-up): 300 people with four exported months each, 1,200 rows,
+**2,960 ms** of lock hold. Extrapolated (not measured): about 3,000 people with four paid months reach 30 seconds. The CI
+figure from CI-W5a replaces the local one here when it lands.
+
+**Disposition: registered, revisit** (TASK-14823 stack Step 5a cycle 1, Fable WARNING 1; ruling R6). Not a correctness
+defect: a timed-out waiter rolls back and writes nothing. Two known closures: set the lock statement's timeout
+deliberately with a designed "busy, retry" answer, or batch the hand-off so the hold stays short. Revisit when CI-W5a's
+figure lands, at TASK-14831 (payroll recordings become waiters on the same statement), and before any institution with
+thousands of employees is modelled.
 ## Standing convention
 
 Any future performance analysis is written HERE as it is produced, with each finding carrying a

@@ -48,13 +48,16 @@ public sealed class BackdateWorklistRowCreated : DomainEventBase
     public string? EntitlementType { get; init; }
     public int? EntitlementYear { get; init; }
 
-    /// <summary><c>PROFILE_CHANGE</c> | <c>AGREEMENT_CODE_CHANGE</c> | <c>EMPLOYMENT_CATEGORY_CHANGE</c> | <c>PRIOR_MONTH_REOPENED</c> (S145) | <c>ORGANISATION_TRANSFER</c> (S148) | <c>EMPLOYMENT_WINDOW_CHANGE</c> (S148).</summary>
+    /// <summary><c>PROFILE_CHANGE</c> | <c>AGREEMENT_CODE_CHANGE</c> | <c>EMPLOYMENT_CATEGORY_CHANGE</c> | <c>PRIOR_MONTH_REOPENED</c> (S145) | <c>ORGANISATION_TRANSFER</c> (S148) | <c>EMPLOYMENT_WINDOW_CHANGE</c> (S148) | <c>CONFIG_PUBLISHED</c> (S148).</summary>
     public required string TriggerKind { get; init; }
     /// <summary>The event that caused this trigger: the correction event for the three correction kinds (the causal
     /// link into dated history), the <c>PeriodReopened</c> event for <c>PRIOR_MONTH_REOPENED</c>, the
     /// <c>UserOrganisationTransferred</c> event for <c>ORGANISATION_TRANSFER</c>, the <c>EmployeeEmploymentStartDateSet</c>
     /// or <c>EmployeeEmploymentEndDateSet</c> event for <c>EMPLOYMENT_WINDOW_CHANGE</c>, and the
-    /// <c>EmployeeProfileSoftDeleted</c> event for a profile close (kind <c>PROFILE_CHANGE</c>).</summary>
+    /// <c>EmployeeProfileSoftDeleted</c> event for a profile close (kind <c>PROFILE_CHANGE</c>), and for
+    /// <c>CONFIG_PUBLISHED</c> the configuration write's own event: <c>AgreementConfigPublished</c>,
+    /// <c>PositionOverrideCreated</c> / <c>Updated</c> / <c>Deactivated</c> / <c>Activated</c>, or
+    /// <c>LocalAgreementProfileChanged</c>.</summary>
     public required Guid TriggerEventId { get; init; }
     /// <summary>
     /// The EARLIEST DAY whose change can alter the flagged period — the date HR should start
@@ -74,6 +77,8 @@ public sealed class BackdateWorklistRowCreated : DomainEventBase
     ///     exported-month row) or the earliest day a selected settlement's accrual window opens (the
     ///     settled-year row).</item>
     ///   <item>The profile close (S148; kind <c>PROFILE_CHANGE</c>): the close's own date, today.</item>
+    ///   <item><c>CONFIG_PUBLISHED</c> (S148): the configuration write's own date (its applies-from or effective-from),
+    ///     which can be earlier than an employee's first matching day (ruling A7).</item>
     /// </list>
     /// </summary>
     public required DateOnly TriggerEffectiveFrom { get; init; }

@@ -2384,3 +2384,26 @@ M-40 included [O for the 14 facts of the five classes run].
   - Removing 2b alone leaves 6b catching case 1, so that mutation would not test the guard.
   - Under the two-check form both cases went red locally: case 1 answers 200 and supersedes R2, and case 2 answers 400. The frozen list for CI-M5 is both cases (plan `aabe8ce2`).
 - **Cycle 2 dispatched** over `bb72fea1..768a53ca`: Codex and Fable.
+
+**TASK-14823 stack, cycles 2 and 3.**
+- **Cycle 2:** Codex APPROVED (`S148-TASK-14823-5a-codex-c2.md`). Fable APPROVED-WITH-WARNINGS (`…-reviewer-c2.md`): case 1's docstring still described M-49 in its one-check form.
+  - Rulings `…-5a-rulings-c2.md`, C2-R1–C2-R4. The fix is the Orchestrator's comment-only commit `8e74df3b`, with the brief's M-49 row marked superseded (`71c24874`).
+- **Cycle 3** (a confirmation pass over `768a53ca..8e74df3b`): **Codex APPROVED, Fable APPROVED** (`…-codex-c3.md`, `…-reviewer-c3.md`).
+
+**The TASK-14823 stack merged** (`90828667`, `--no-ff` of `8e74df3b`; TASK-14823 + -T + TASK-14824).
+- **What it delivers:**
+  - A configuration change dated into the past lists every payroll-exported month and settled holiday year it reaches on HR's worklist (`CONFIG_PUBLISHED`), once per month and year per write. The six writes are the publish, the four override writes and the local-profile PUT.
+  - The six writers take the pay-inputs lock first, at READ COMMITTED.
+  - A local-profile save whose predecessor was replaced during its wait is refused with 412 in every ordering (QUAL-260).
+  - The worklist names the three new reasons in Danish.
+- **O-15, same merge:**
+  - HRP-001's trigger cell names the new triggers.
+  - `BackdateWorklistRowCreated.cs`'s remarks gain `CONFIG_PUBLISHED` (Orchestrator, comment only).
+  - **QUAL-260** is registered FIXED (A9 Case A; CI-pending until CI-W5a and CI-M5).
+  - **QUAL-261** is registered OPEN (A9 Case B: the profile version restarts at 1, so a stale sequential `If-Match` passes; it joins the C2-R4 census).
+  - **F9** is registered: the pay-inputs lock's 30-second cliff behind a long publish. The local figure is 300 people and 1,200 rows in 2.96 s; CI-W5a's figure replaces it.
+- **CI-pending until CI-W5a:** AC-C2f, -2g, -2i, -2j, AC-C2c's hand-off half, AC-PIL-e row (2), AC-C2t, AC-C2u (both cases), the R4 append fact and the publish timing figure. **CI-M5:** M-49 (both identity checks).
+- **Carried:**
+  - R6 goes to TASK-14831's plan row (the "Blocks until granted" remark).
+  - R7 (the profile PUT accepts any OK-version string) and the widespread ADR-018 D9/D8 miscitation are recorded below the floor.
+- **GATE next.**
