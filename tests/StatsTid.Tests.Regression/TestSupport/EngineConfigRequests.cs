@@ -13,9 +13,9 @@ namespace StatsTid.Tests.Shared;
 /// Since ADR-043 D12 the Rule Engine reads no configuration of its own: every route takes the
 /// config from its request and refuses a request without one. A test that used to let the engine
 /// resolve the rules now hands them over, and this helper is the hand. <see cref="Config"/> is
-/// <c>CentralAgreementConfigs.GetConfig</c> with the same arguments, which is exactly what the
-/// deleted <c>AgreementConfigProvider</c> forwarded to, so a repaired test gets the same object,
-/// value for value, as before: no expected value moves.
+/// <c>CentralAgreementConfigs.GetConfig</c> with the same arguments, which is exactly the config
+/// the engine resolved before ADR-043 D12, so a repaired test gets the same object, value for
+/// value, as before: no expected value moves.
 /// </para>
 ///
 /// <para>
