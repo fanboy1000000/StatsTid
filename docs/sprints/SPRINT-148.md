@@ -2448,3 +2448,27 @@ M-40 included [O for the 14 facts of the five classes run].
   - The `shortcut(pending)` comment and the O-16 F-row state both figures.
   - TASK-14828's reuse work covers every repeated caller in a request, and TASK-14828-T measures a whole Skema read and save. This is carried into its plan row.
 - **Fix-ups dispatched in parallel from `6b5a5b87`:** TASK-14825 fix-up 1 (comment only, R3 and R4) and TASK-14825-T fix-up 1 (R1, R2, R5). The files are disjoint, and the Orchestrator combines them.
+
+**TASK-14825 5a cycles 2 and 3.**
+- **Cycle 2:** Codex APPROVED (`S148-TASK-14825-5a-codex-c2.md`). Fable APPROVED-WITH-WARNINGS (`…-reviewer-c2.md`).
+  - Fable's one warning was the Orchestrator's own summary comment (`4977ce67`): it named only the two month figures as bypassing the lookup, and omitted the Rule Engine and payroll's pricing.
+  - Fixed, comment only, in `e029f523` (rulings `…-5a-rulings-c2.md`).
+- **Cycle 3:** Codex APPROVED and Fable APPROVED (`…-codex-c3.md`, `…-reviewer-c3.md`).
+  - Fable N2 is carried to TASK-14828's plan row: reword that summary at the stack's merge.
+
+**TASK-14825 + -T merged** (`7af9176b`, `--no-ff` of `e029f523`). The -T fix-up was combined by cherry-pick (`c4d3ad0d` → `fc4292df`), because the two fix-ups' files were disjoint.
+- **What it delivers:** one dated, fail-closed configuration lookup (T14a, C-1). Each configuration screen reads the central agreement, the position override and the institution's local profile in force on the day it shows.
+  - A database failure answers 503, and no published configuration answers a named 500. There is never a silent fallback to compiled values.
+  - The compensation-choice routes ask the OK version of 1 January.
+  - The payroll host registers the lookup.
+- **O-16, same merge:**
+  - **QUAL-184 FIXED:** the payroll host is buildable, proven by AC-C1g.
+  - **QUAL-042 FIXED:** the test-only wrappers are retired.
+  - **QUAL-148** gains its B12 note.
+  - **F10** is registered: per-day configuration resolution. A Skema month read is about 135 configuration reads with a position, and a year overview about 780. TASK-14828 restores reuse per stretch.
+- **Told to the owner, no decision needed (O-16):**
+  - **(a)** From this merge, payroll splits a month at a past-dated published configuration version, but prices both parts on the built-in rules until the T14b stack (BC-9). On the seeded data nothing splits, because every seeded version applies from `0001-01-01`.
+  - **(b)** The fail-closed error now reaches every configuration-reading screen, as an English sentence ("Agreement configuration service unavailable", or the named `config_not_in_force`). Danish copy is not built.
+  - **(c)** The year overview's registered read cost (F10). The local timing was 895 ms median; CI-W5a's figure replaces it.
+- **CI-pending until CI-W5a:** AC-C1m's overtime half, AC-C1o, the per-layer fail-closed facts, the B12 facts, PIN-2 (both arms), PIN-1 with the hydration on, and the two timing lines. AC-C1g is non-Docker and green.
+- **GATE next, then CI-W5a.**

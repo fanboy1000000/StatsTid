@@ -35,6 +35,7 @@ window away from being unrecoverable.
 | F7 | One extra single-row read per admitted manager–employee pair on the my-reports list and Teamoversigt (S147, TASK-14725) | **OPEN — accepted, revisit** (S147 Step 7a fix; Fable's TASK-14725 review, NOTE 6). See below |
 | F8 | The holiday-balance seed's sum runs on every save that touches an entitlement type, even when the balance row exists (S148, TASK-14842) | **OPEN — accepted, revisit** (both TASK-14842 5a lenses: no merge blocker). See below |
 | F9 | A long configuration publish holds the "pay inputs" lock while it lists the worklist rows it reaches, and every other pay-input writer waiting behind it fails after 30 seconds instead of waiting (S148, TASK-14823) | **OPEN — registered, revisit** (TASK-14823 stack Step 5a cycle 1, ruling R6). See below |
+| F10 | Every weekday resolves its own agreement configuration (no reuse across days): about 135 configuration reads for one Skema month read with a position, about 780 for a year overview (S148, TASK-14825) | **OPEN — registered, revisit** (wave-5 batch-A/B brief adjudication B6; TASK-14825 Step 5a cycle-1 ruling R4). See below |
 
 ---
 
@@ -347,6 +348,25 @@ defect: a timed-out waiter rolls back and writes nothing. Two known closures: se
 deliberately with a designed "busy, retry" answer, or batch the hand-off so the hold stays short. Revisit when CI-W5a's
 figure lands, at TASK-14831 (payroll recordings become waiters on the same statement), and before any institution with
 thousands of employees is modelled.
+## F10 — per-day configuration resolution in the norm calculator (S148, recorded 2026-11-20)
+
+**What it is.** TASK-14825 made every configuration read dated and fail-closed (C-1). `DailyNormCalculator` now resolves
+the configuration for each weekday separately through `IAgreementConfigLookup` (central, then the position override,
+then the local profile, each in force that day): two reads per lookup, three with a position. Its earlier cache keyed
+on (organisation, agreement, OK version, position) without the day, which would have handed one day's configuration to
+another once reads were dated, so it was removed (ruling B6; correctness first). One calculator pass over a month is
+about 22 lookups. A Skema month read runs the calculator twice (`dailyNorm` and `consumptionBasis`) plus a month-end
+scalar: about 45 lookups, **about 135 configuration reads with a position, 90 without**. The year overview's month loop
+is **about 780 reads**. These are traced from the code, not measured.
+
+**Size.** Local timing lines from TASK-14825-T (throwaway PostgreSQL 16 cluster, not CI evidence): the year overview
+median 895 ms over five reads after a warm-up. CI-W5a's `YEAROVERVIEW-TIMING` line replaces it here when it lands.
+
+**Disposition: registered, revisit.** The `shortcut(pending)` comment at `DailyNormCalculator.cs:151` points here.
+TASK-14828 restores reuse per stretch of days with no dated change in agreement, OK version, position, organisation or
+any layer's applies-from date, and the reuse covers every repeated caller in a request (ruling R4, carried into its
+plan row); TASK-14828-T measures a complete Skema month read and save beside the year overview. This row closes when
+that lands and the figures fall.
 ## Standing convention
 
 Any future performance analysis is written HERE as it is produced, with each finding carrying a
