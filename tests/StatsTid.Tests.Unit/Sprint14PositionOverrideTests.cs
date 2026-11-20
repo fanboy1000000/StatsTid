@@ -97,36 +97,6 @@ public class Sprint14PositionOverrideTests
     }
 
     // ========================================================================
-    // 3. ConfigResolutionService static helpers
-    // ========================================================================
-
-    [Theory]
-    [InlineData("AC", "OK24")]
-    [InlineData("HK", "OK24")]
-    [InlineData("PROSA", "OK24")]
-    [InlineData("AC", "OK26")]
-    public void GetCentralConfig_ReturnsCorrectConfig(string code, string version)
-    {
-        var config = ConfigResolutionService.GetCentralConfig(code, version);
-
-        Assert.NotNull(config);
-        Assert.Equal(code, config!.AgreementCode);
-        Assert.Equal(version, config.OkVersion);
-    }
-
-    [Theory]
-    [InlineData("AC", "OK24", true)]
-    [InlineData("HK", "OK24", true)]
-    [InlineData("PROSA", "OK24", true)]
-    [InlineData("UNKNOWN", "OK24", false)]
-    [InlineData("AC", "OK99", false)]
-    public void HasCentralConfig_ReturnsExpected(string code, string version, bool expected)
-    {
-        var result = ConfigResolutionService.HasCentralConfig(code, version);
-        Assert.Equal(expected, result);
-    }
-
-    // ========================================================================
     // 4. CentralAgreementConfigs.GetConfig with position — end-to-end
     // ========================================================================
 

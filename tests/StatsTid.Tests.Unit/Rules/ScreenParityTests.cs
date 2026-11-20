@@ -100,6 +100,7 @@ public sealed class ScreenParityTests
             new AgreementConfigRepository(factory),
             new LocalConfigurationRepository(factory),
             new PositionOverrideRepository(factory),
+            new LocalAgreementProfileRepository(factory),
             NullLogger<ConfigResolutionService>.Instance);
         return new DailyNormCalculator(new NoProfileResolver(), resolver);
     }

@@ -83,42 +83,6 @@ public class Sprint12AgreementConfigTests
     }
 
     // ========================================================================
-    // 3. ConfigResolutionService.GetCentralConfig static method
-    // ========================================================================
-
-    [Fact]
-    public void GetCentralConfig_ReturnsConfig_ForKnownPair()
-    {
-        var config = ConfigResolutionService.GetCentralConfig("AC", "OK24");
-
-        Assert.NotNull(config);
-        Assert.Equal("AC", config!.AgreementCode);
-        Assert.Equal("OK24", config.OkVersion);
-    }
-
-    [Fact]
-    public void GetCentralConfig_ReturnsNull_ForUnknownPair()
-    {
-        var config = ConfigResolutionService.GetCentralConfig("UNKNOWN", "OK24");
-
-        Assert.Null(config);
-    }
-
-    [Fact]
-    public void GetCentralConfig_ValuesMatchExpected_AcOk24()
-    {
-        var config = ConfigResolutionService.GetCentralConfig("AC", "OK24");
-
-        Assert.NotNull(config);
-        Assert.Equal(37.0m, config!.WeeklyNormHours);
-        Assert.False(config.HasOvertime);
-        Assert.True(config.HasMerarbejde);
-        Assert.Equal(150.0m, config.MaxFlexBalance);
-        Assert.False(config.OnCallDutyEnabled);
-        Assert.True(config.TravelTimeEnabled);
-    }
-
-    // ========================================================================
     // 4. CentralAgreementConfigs coverage — all 10 configs resolvable
     // ========================================================================
 

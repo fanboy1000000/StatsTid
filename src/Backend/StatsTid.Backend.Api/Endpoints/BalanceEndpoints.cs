@@ -816,9 +816,11 @@ public static class BalanceEndpoints
             if (todayProfile is not null)
             {
                 var orgId = todayProfile.OrgId ?? user.PrimaryOrgId;
+                // The merged config in force today; a lookup refusal leaves the handler for the
+                // Backend's one mapping (P-13).
                 var mergedConfig = await configResolver.ResolveAsync(
                     orgId, todayProfile.AgreementCode, OkVersionResolver.ResolveVersion(today),
-                    todayProfile.Position, ct);
+                    todayProfile.Position, today, ct);
                 weeklyNormHours = DayNorm.ForWeekday(mergedConfig.WeeklyNormHours, todayProfile.PartTimeFraction)
                     * DayNorm.WorkingDaysPerWeek;
             }

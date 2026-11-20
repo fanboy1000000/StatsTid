@@ -60,9 +60,13 @@ public static class ConfigEndpoints
             ConfigResolutionService configService,
             OrganizationRepository orgRepo,
             OrgScopeValidator scopeValidator,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
+            // The handler's one business-date read (PAT-028; ADR-041): the configuration shown is the
+            // one in force today.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var actor = context.GetActorContext();
 
             // Validate actor scope covers org
@@ -75,8 +79,12 @@ public static class ConfigEndpoints
             if (org is null)
                 return Results.NotFound(new { error = $"Organization '{orgId}' not found" });
 
-            // Resolve merged config (central + local overrides)
-            var mergedConfig = await configService.ResolveAsync(orgId, org.AgreementCode, org.OkVersion, ct: ct);
+            // The merged config in force today (central + this organisation's local profile; no
+            // position). The subject is the organisation itself, so its own agreement code and OK
+            // version are asked. Fail-closed (P-13): a refusal leaves the handler for the Backend's
+            // one mapping.
+            var mergedConfig = await configService.ResolveAsync(
+                orgId, org.AgreementCode, org.OkVersion, position: null, today, ct);
 
             return Results.Ok(new EffectiveConfigResponse(
                 OrgId: orgId,
