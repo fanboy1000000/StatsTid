@@ -2374,3 +2374,13 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Gate:** 0 errors, 125 warnings, 113 CA2100. Unit 1759, DemoSeed 170 and Regression non-Docker 140 are green.
 - **Found, not fixed, below the floor:** at least 20 other `src/` lines cite ADR-018 D9 for end-exclusive intervals, where D8 is right. The backend agent definition had the same slip; it is corrected by the Orchestrator (`3e2a735d`).
 - **TASK-14823-T fix-up 1 dispatched** (base `11f8e3b8`): R2, R3, R4, and M-49's local census at its new site, with the expected local-cluster pre-check.
+
+**TASK-14823-T fix-up 1 returned** (`test-qa`; `768a53ca`; report `.claude/reviews/S148-TASK-14823-T-fix1-report.md`).
+- **R2: AC-C2u gains its second ordering**, which must answer 412, not 400. Both cases now seed an exported March, so "no worklist row" can fail; the old actor filter had been inert. Both assert that `currentState` names R2.
+- **R3:** four Unit facts on `BackdateWorklistDerivation` (where the functions actually live, not on the repository). Each fact is proven red by its own local mutation.
+- **R4:** two saves reaching one exported month give one row, two triggers, version 2, and the second event has `Appended = true`. This is R on the stack tip and F against master.
+- **Local pre-check:** 12 of 12 (not CI evidence). **Gate:** Unit 1763, DemoSeed 170, Regression non-Docker 140; build unchanged.
+- **Orchestrator ruling on the pass's brief contradiction:** M-49 is re-pointed to **both identity checks removed** (the repository's 2b and the id half of the route's 6b), with the version checks kept.
+  - Removing 2b alone leaves 6b catching case 1, so that mutation would not test the guard.
+  - Under the two-check form both cases went red locally: case 1 answers 200 and supersedes R2, and case 2 answers 400. The frozen list for CI-M5 is both cases (plan `aabe8ce2`).
+- **Cycle 2 dispatched** over `bb72fea1..768a53ca`: Codex and Fable.
