@@ -125,4 +125,18 @@ public sealed record FrozenPiece(
     [property: JsonRequired] DateOnly To,
     [property: JsonRequired] decimal PartTimeFraction,
     [property: JsonRequired] string AgreementCode,
-    string? Position);
+    string? Position)
+{
+    /// <summary>
+    /// The organisation (institution) the employee belonged to over the piece: the dated record's, never a
+    /// request body's (ADR-040 D4). It selects the institution's local profile, so a replay re-resolves the
+    /// piece's agreement configuration from the keys frozen here (this organisation, the agreement, the position
+    /// and the OK version of <see cref="From"/>) without reading the employee's organisation history (R42), until
+    /// the configurations themselves are frozen (TASK-14830; ADR-043 D12, ADR-016 D10). No rule reads it, so it is
+    /// not sent to the Rule Engine. Optional, NOT <c>[JsonRequired]</c> and non-positional, so no existing
+    /// construction changes: absent in a record written before it existed, read as null and omitted in the JSON
+    /// when null, like <see cref="Position"/>; a replay refuses a piece without one as a manifest without frozen
+    /// inputs.
+    /// </summary>
+    public string? OrgId { get; init; }
+}

@@ -157,8 +157,8 @@ builder.Services.AddSingleton<LocalAgreementProfileRepository>();
 // lookup requires (one constructor, every repository required), so the host builds under Development's
 // ValidateOnBuild and a dropped registration refuses to build. Registering them also fills
 // PeriodCalculationService's two optional repository parameters: its planner splits a month at a published
-// version's applies-from date (the AgreementConfigPromotion and PositionOverrideEffective boundaries). Each
-// part is still priced on the compiled rules until payroll calls the lookup (the engine switch, T14b).
+// version's applies-from date (the AgreementConfigPromotion and PositionOverrideEffective boundaries). The lookup
+// fills its configLookup parameter: each part is priced on the configuration in force on its own days (ADR-043 D12).
 builder.Services.AddSingleton<AgreementConfigRepository>();
 builder.Services.AddSingleton<PositionOverrideRepository>();
 builder.Services.AddSingleton<ConfigResolutionService>();
@@ -433,6 +433,20 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // checked. The plan is built before anything is calculated or written → nothing exists to
         // undo. Fixed 503; the upstream detail stays in the provider's log.
         return RulesUnavailable();
+    }
+    catch (ConfigLookupUnavailableException)
+    {
+        // ADR-043 D12 (P-13; wave-5 batch-C ruling 12): the agreement configuration in force could not be read. The
+        // calculation resolves every piece's configuration before its first rule-engine call, so nothing was
+        // calculated, written or exported. Fixed 503; the lookup logged the detail.
+        return ConfigUnavailable();
+    }
+    catch (NoConfigInForceException)
+    {
+        // ADR-043 D12 (P-13; ruling 12): no published agreement configuration is in force for a day of the month,
+        // so the month cannot be calculated as it stands. Refused before any rule-engine call: nothing was
+        // calculated, written or exported. Fixed 422; the lookup logged the agreement, OK version and day.
+        return ConfigNotInForce();
     }
     catch (ManifestNotPersistedException)
     {
@@ -756,6 +770,21 @@ app.MapPost("/api/payroll/recalculate", async (
         // correction event and the idempotency marker are all untouched. Fixed 503.
         return RulesUnavailable();
     }
+    catch (ConfigLookupUnavailableException)
+    {
+        // ADR-043 D12 (P-13; wave-5 batch-C ruling 12): the agreement configuration in force could not be read. The
+        // correction service calculates BEFORE it opens its transaction, so the export baseline, the correction
+        // event, the audit row and the idempotency marker are all untouched. Fixed 503, the same body as
+        // /calculate-and-export's.
+        return ConfigUnavailable();
+    }
+    catch (NoConfigInForceException)
+    {
+        // ADR-043 D12 (P-13; ruling 12): no published agreement configuration is in force for a day of the month.
+        // Raised before the correction transaction opens, so nothing was written. Fixed 422, the same body as
+        // /calculate-and-export's.
+        return ConfigNotInForce();
+    }
     catch (ManifestNotPersistedException)
     {
         // S146 TASK-14604 (QUAL-205; R-22, R-27): the recalculation's manifest was not persisted, so the
@@ -820,6 +849,31 @@ static IResult RulesUnavailable() =>
         error = "The rule set could not be obtained from the Rule Engine, so the period could not be checked. Nothing was calculated, written or exported. Retry when the Rule Engine is reachable.",
         kind = "payroll-rules-unavailable"
     }, statusCode: 503);
+
+// ADR-043 D12 (P-13; wave-5 batch-C ruling 12) — the ONE response for "the agreement configuration lookup could not
+// read the configuration database" (ConfigLookupUnavailableException). 503 because the cause is a dependency outage
+// and the caller should retry. The body is FIXED (contract): no agreement code, no date, no employee id, never the
+// database error (the lookup logs it). Shared by /calculate-and-export and /recalculate.
+static IResult ConfigUnavailable() =>
+    Results.Json(new
+    {
+        success = false,
+        error = "The agreement configuration could not be read, so the period could not be calculated. Nothing was calculated, written or exported. Retry when the configuration database is reachable.",
+        kind = "payroll-config-unavailable"
+    }, statusCode: 503);
+
+// ADR-043 D12 (P-13; ruling 12) — the ONE response for "no published agreement configuration is in force for a day of
+// the period" (NoConfigInForceException). 422 because the month's own inputs cannot be calculated as they stand (the
+// payroll-activity-type-refused and employment-window precedent); 409 is kept for conflicts with another period. The
+// body is FIXED (contract): no agreement code and no date (ADR-040 D7); the lookup logs both. Shared by
+// /calculate-and-export and /recalculate.
+static IResult ConfigNotInForce() =>
+    Results.Json(new
+    {
+        success = false,
+        error = "No published agreement configuration is in force for a day of this period. Nothing was calculated, written or exported. A configuration administrator must publish one.",
+        kind = "payroll-config-not-in-force"
+    }, statusCode: 422);
 
 // S146 TASK-14604 (QUAL-205; rulings R-22, R-27) — the ONE response for "the calculation's manifest was not
 // persisted, so its result is not provable and is not used". Both calculating routes answer it when
