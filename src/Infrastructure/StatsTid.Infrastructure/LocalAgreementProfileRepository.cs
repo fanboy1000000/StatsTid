@@ -698,7 +698,9 @@ public readonly record struct ExpectedPredecessor(Guid? ProfileId);
 /// Thrown by <see cref="LocalAgreementProfileRepository.SupersedeAndCreateAsync(System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
 /// (and its in-transaction sibling) when the caller's optimistic-concurrency precondition
 /// (HTTP <c>If-Match: "&lt;version&gt;"</c> / <c>If-None-Match: *</c>) does not match the
-/// version of the row currently holding the active slot. Per ADR-018 D7, the PUT endpoint
+/// version of the row currently holding the active slot, or (S148 TASK-14823, ruling A9) when the version matches but the
+/// locked open row is not the row the caller read before the lock (a different profile id, or one present where the
+/// other is absent). Per ADR-018 D7, the PUT endpoint
 /// (TASK-2205) maps this to <c>412 Precondition Failed</c> and returns the current state in
 /// the response body.
 /// </summary>

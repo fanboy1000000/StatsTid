@@ -1,4 +1,4 @@
-﻿using System.Data;
+using System.Data;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
@@ -403,6 +403,7 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
             () => PutProfileAsync(client, "STY01", ifMatchVersion: null, "2026-03-02", 30m),
             HttpStatusCode.OK, "the local-profile write");
     }
+
     /// <summary>
     /// <b>F (CI).</b> AC-C2u case 1 (ruling A9, Case A). A local-profile save whose predecessor is superseded while it
     /// waits for the pay-inputs lock is refused with the route's existing 412 and writes nothing. R1 of STY01's (HK,
@@ -415,8 +416,9 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
     /// and no audit row, outbox event or worklist row from the request. One HK person in STY01 has March 2026
     /// exported, so a save that went through would list March and "no worklist row" can fail.
     /// <para><b>Red conditions.</b> Before TASK-14823 the local-profile write takes no pay-inputs lock, so the
-    /// request never waits and the "observed waiting" assertion fails. The guard's own RED is M-49 (CI-M5): with the
-    /// identity check removed and the version check kept, the stale <c>If-Match: "1"</c> passes against R2, the
+    /// request never waits and the "observed waiting" assertion fails. The guard's own RED is M-49 (CI-M5): with BOTH
+    /// identity checks removed (the repository's step 2b and the id half of the route's guard 6b) and both version
+    /// checks kept, the stale <c>If-Match: "1"</c> passes against R2, the
     /// request supersedes R2 at 2 March and answers 200, so the 412 assertion, the "R2 open" assertion, the "no
     /// audit row" assertion and the "no worklist row" assertion (March) all fail.</para>
     /// </summary>
@@ -432,8 +434,8 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
     /// naming a predecessor the caller never saw. The ruled answer is the same 412 "refresh and retry" whose
     /// <c>currentState</c> names R2, and nothing is written.
     /// <para><b>Red conditions.</b> On <c>bb72fea1</c> (identity check absent, backdate guard first) the request
-    /// answers 400 <c>Invalid profile supersession</c>, so the 412 assertion fails. M-49 (the identity check removed)
-    /// reproduces that 400 here.</para>
+    /// answers 400 <c>Invalid profile supersession</c>, so the 412 assertion fails. M-49 (both identity checks removed,
+    /// both version checks kept) reproduces that 400 here; removing the repository's step 2b alone already does.</para>
     /// </summary>
     [Fact]
     public async Task LocalProfileWrite_PredecessorSupersededLaterThanTheRequestDate_Refused412Not400_NothingWritten() =>
