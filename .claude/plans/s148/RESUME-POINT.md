@@ -36,14 +36,7 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
    - TASK-14822 + -T (`6fadd1fe`);
    - the TASK-14823 stack (`90828667`);
    - **TASK-14825 + -T** (`7af9176b`; paperwork `26974e77`: QUAL-184 and QUAL-042 FIXED, the QUAL-148 note, F10; GATE `4a58e603`). Its worktrees are being removed.
-2. **CI-W5a:** draft PR #66 (`ci/s148-w5a`), run **44728481380** at `4a58e603` (head confirmed). A background poll is waiting; if it is reaped, check by hand.
-   - **Its docs job is red** on one PAT-032 item (`DailyNormCalculator.cs:151` was still `shortcut(pending)`; F10 registered but not re-tagged at the merge). **Fixed on master at `14a73d6f`**, logged as a correction; CI-W5 proves it. Judge CI-W5a on build-and-test, smoke and E2E (all green except build-and-test, which is still running at the last check).
-   - **Judge it against `PLAN:715`:**
-     - AC-C13b, -13g, -13t; AC-C13a's split; AC-C2f, -g, -i, -j, -t, -u; AC-C2c's hand-off; AC-PIL-e row (2); AC-C1g; AC-C1o; AC-C1m's overtime half;
-     - PIN-2 (both arms); PIN-1 (the watch item: green with the hydration on);
-     - the timing lines from the trx: CONFIG_PUBLISH_TIMING, TEAMOVERSIGT-TIMING and YEAROVERVIEW-TIMING.
-   - **Also confirm** that the 84 Docker facts re-pointed by TASK-14822-T are green, and that `DatedConfigBoundaryTests` (M-39/M-40) and `TransactionalBlockFailure_…` pass.
-   - **When green:** close PR #66 unmerged, delete the branch, log the figures, and put the CI figures into F9 and F10.
+2. **CI-W5a: judged green on the evidence** (run 44728481380 at `4a58e603`; PR #66 closed unmerged, branch deleted; logged in the sprint log with the PLAN:715 items, the 84 re-pointed facts and the three timing lines; F9 and F10 carry the CI figures). Its docs job was red only on the F10 re-tag, fixed on master at `14a73d6f`; CI-W5 proves it.
 3. **Then the T14b stack** (TASK-14826 → 14826-T → 14827 → 14828 → 14828-T → REGEN → 14829, merged together; NR-P9). The briefs are at draft 2 ("final + 26").
    - **TASK-14828's plan row carries** R8 and R9 (from 14822), C2-R5 (14822), R4 (14825) and N2 (14825 c3).
    - **TASK-14831's plan row carries** R6 (14823, the "Blocks until granted" remark).

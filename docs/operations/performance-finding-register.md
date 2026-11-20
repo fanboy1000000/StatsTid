@@ -340,13 +340,14 @@ waiting its turn. `PayInputsLock.cs:38-46` says "Blocks until granted"; TASK-148
 
 **Size.** Measured locally only (TASK-14823-T, `ConfigPublishTimingTests`; PostgreSQL 16.14 on the development machine,
 `fsync=off`, Debug build, one measured publish after one warm-up): 300 people with four exported months each, 1,200 rows,
-**2,960 ms** of lock hold. Extrapolated (not measured): about 3,000 people with four paid months reach 30 seconds. The CI
-figure from CI-W5a replaces the local one here when it lands.
+**2,960 ms** of publish wall clock (the whole request, an upper bound on the lock hold). Extrapolated (not measured):
+about 3,000 people with four paid months reach 30 seconds. **CI figure (CI-W5a, run 44728481380, 2026-11-20; the same
+fact on GitHub's runner):** `CONFIG_PUBLISH_TIMING persons=300 exportedMonths=4 rowsLanded=1200 publishWallClockMs=2146`,
+so **2,146 ms**; at that rate about 4,200 people with four exported months reach 30 seconds (extrapolated, not measured).
 
 **Disposition: registered, revisit** (TASK-14823 stack Step 5a cycle 1, Fable WARNING 1; ruling R6). Not a correctness
 defect: a timed-out waiter rolls back and writes nothing. Two known closures: set the lock statement's timeout
-deliberately with a designed "busy, retry" answer, or batch the hand-off so the hold stays short. Revisit when CI-W5a's
-figure lands, at TASK-14831 (payroll recordings become waiters on the same statement), and before any institution with
+deliberately with a designed "busy, retry" answer, or batch the hand-off so the hold stays short. Revisit at TASK-14831 (payroll recordings become waiters on the same statement), and before any institution with
 thousands of employees is modelled.
 ## F10 — per-day configuration resolution in the norm calculator (S148, recorded 2026-11-20)
 
@@ -360,7 +361,10 @@ scalar: about 45 lookups, **about 135 configuration reads with a position, 90 wi
 is **about 780 reads**. These are traced from the code, not measured.
 
 **Size.** Local timing lines from TASK-14825-T (throwaway PostgreSQL 16 cluster, not CI evidence): the year overview
-median 895 ms over five reads after a warm-up. CI-W5a's `YEAROVERVIEW-TIMING` line replaces it here when it lands.
+median 895 ms over five reads after a warm-up. **CI figure (CI-W5a, run 44728481380, 2026-11-20):**
+`YEAROVERVIEW-TIMING year=2026 reads_ms=[728,718,737,729,712] median_ms=728`, so **728 ms** median for the year overview.
+The Teamoversigt "before" figure from the same run (N-3; the comparison is TASK-14828-T's at CI-W5): 1,024 ms median for a
+300-person roster, 115 ms for 30.
 
 **Disposition: registered, revisit.** The `shortcut(F10)` comment at `DailyNormCalculator.cs:151` points here.
 TASK-14828 restores reuse per stretch of days with no dated change in agreement, OK version, position, organisation or
