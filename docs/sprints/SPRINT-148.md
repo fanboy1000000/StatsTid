@@ -2407,3 +2407,10 @@ M-40 included [O for the 14 facts of the five classes run].
   - R6 goes to TASK-14831's plan row (the "Blocks until granted" remark).
   - R7 (the profile PUT accepts any OK-version string) and the widespread ADR-018 D9/D8 miscitation are recorded below the floor.
 - **GATE next.**
+
+**GATE green after the TASK-14823 stack merge** (`90828667`, paperwork `b92513c6`).
+- **Build:** `dotnet build StatsTid.sln -m:2 --no-incremental` has 0 errors and 125 warnings, with 113 distinct CA2100 (unchanged).
+- **Suites:** Unit 1763 (+5); DemoSeed 170; Regression `Category!=Docker` 140.
+- **Frontend:** `tsc` and lint pass, and vitest passes 99 files, 1202 tests (+3).
+- All ran one at a time, in the foreground. The Docker facts are CI-pending until CI-W5a.
+- **TASK-14825 next.**
