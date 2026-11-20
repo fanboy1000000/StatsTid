@@ -122,13 +122,11 @@ internal sealed class PayrollHostFactory : WebApplicationFactory<RetroactiveCorr
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Production, as the compose stack runs this host (docker/docker-compose.yml sets no
-        // ASPNETCORE_ENVIRONMENT for `payroll`). WebApplicationFactory defaults to Development, which
-        // turns on DI ValidateOnBuild — and the host registers ConfigResolutionService without the
-        // AgreementConfigRepository / PositionOverrideRepository its constructors need (a dormant,
-        // never-resolved registration: nothing in this host consumes it). Under Development the host
-        // therefore refuses to build at all; under Production (the real deployment) it builds and the
-        // registration is simply never activated. The JWT key is supplied explicitly above, so the
-        // Production fail-fast in AddStatsTidJwtAuth does not fire.
+        // ASPNETCORE_ENVIRONMENT for `payroll`), so every fact here runs the host the way it is deployed.
+        // WebApplicationFactory defaults to Development, which turns on DI ValidateOnBuild; the host now
+        // registers everything ConfigResolutionService needs (QUAL-184, S148 TASK-14825), so it builds under
+        // Development too, and PayrollHostValidateOnBuildTests (AC-C1g) pins that. The JWT key is supplied
+        // explicitly above, so the Production fail-fast in AddStatsTidJwtAuth does not fire.
         builder.UseEnvironment(Environments.Production);
 
         builder.ConfigureTestServices(services =>

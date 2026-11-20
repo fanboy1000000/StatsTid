@@ -120,6 +120,30 @@ public class Sprint12AgreementConfigTests
         }
     }
 
+    // S148 QUAL-042 (TASK-14825): re-pointed from the retired GetCentralConfig. The compiled-value assertions of the
+    // deleted Sprint7ConfigTests that no other fact pins: AC's on-call flag; HK's four supplements, on-call flag and
+    // on-call rate. (AC's overtime / merarbejde / four supplements and HK's overtime / merarbejde stay pinned by
+    // AgreementConfigTests, which reads the same compiled table through AgreementConfigProvider.)
+
+    [Fact]
+    public void CentralConfig_AC_OnCallDutyDisabled()
+    {
+        Assert.False(CentralAgreementConfigs.GetConfig("AC", "OK24").OnCallDutyEnabled);
+    }
+
+    [Fact]
+    public void CentralConfig_HK_SupplementsAndOnCallEnabled_OnCallRateOneThird()
+    {
+        var hkConfig = CentralAgreementConfigs.GetConfig("HK", "OK24");
+
+        Assert.True(hkConfig.EveningSupplementEnabled);
+        Assert.True(hkConfig.NightSupplementEnabled);
+        Assert.True(hkConfig.WeekendSupplementEnabled);
+        Assert.True(hkConfig.HolidaySupplementEnabled);
+        Assert.True(hkConfig.OnCallDutyEnabled);
+        Assert.Equal(0.33m, hkConfig.OnCallDutyRate);
+    }
+
     // ========================================================================
     // 5. AgreementConfigStatus enum values
     // ========================================================================
