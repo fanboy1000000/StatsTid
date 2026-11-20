@@ -244,11 +244,11 @@ public static class ConfigEndpoints
             // 6. Single-transaction profile + audit + outbox + worklist write (ADR-018 D3).
             //    Lock order (Block C): the pay-inputs lock (0) → the open profile row FOR UPDATE
             //    → the worklist rows. The repo's in-transaction overload performs the row lock +
-            //    (close+insert | update-in-place | no-op short-circuit) + (route
-            //    same-day-vs-supersession). The route then checks that the row the repo locked is
-            //    the one step 4 read (6a), inserts the audit row, enqueues the
-            //    LocalAgreementProfileChanged outbox event and lands the worklist hand-off on the
-            //    same conn+tx and commits together — UNLESS the repo reports IsNoOp = true (S23 /
+            //    the check that the locked row is the one step 4 read (6a) + (close+insert |
+            //    update-in-place | no-op short-circuit) + (route same-day-vs-supersession). The
+            //    route then repeats that check with the version (6b), inserts the audit row,
+            //    enqueues the LocalAgreementProfileChanged outbox event and lands the worklist
+            //    hand-off on the same conn+tx and commits together — UNLESS the repo reports IsNoOp = true (S23 /
             //    TASK-2304 same-day no field changes), in which case the audit, the outbox and the
             //    hand-off are skipped (Codex Step 0b cycle-3 P2 fix). On
             //    OptimisticConcurrencyException we surface 412 with the actual current state; on
@@ -277,21 +277,32 @@ public static class ConfigEndpoints
                     // → the open profile row FOR UPDATE → the worklist rows.
                     await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
 
+                    // 6a. The stale predecessor (S148 ruling A9, Case A; TASK-14823 Step 5a ruling R1;
+                    //     auditability). The audit action, the field delta, the alignment validation
+                    //     and PrecedingProfileId all come from step 4's read, made before this
+                    //     transaction. If another save replaced that row while this one waited for the
+                    //     lock, the If-Match check can still pass (a supersession restarts the version
+                    //     at 1), and the audit row and event would describe replacing a row that is no
+                    //     longer there. So the row the repo locks must be the row step 4 read: the same
+                    //     profile id, or both absent. The repo checks that under the lock, right after
+                    //     its version check and before its date checks, so a replaced predecessor
+                    //     answers 412 whatever the dates (a later replacement would otherwise trip the
+                    //     backdate guard's 400 first). It throws OptimisticConcurrencyException, the
+                    //     catch below answers the route's existing 412 and the transaction rolls back,
+                    //     so nothing is written.
                     var saveResult = await profileRepo.SupersedeAndCreateAsync(
-                        conn, tx, expectedCurrentVersion, candidate, ct);
+                        conn, tx, expectedCurrentVersion, candidate,
+                        new ExpectedPredecessor(predecessor?.ProfileId), ct);
                     persistedProfileId = saveResult.ProfileId;
                     persistedVersion = saveResult.Version;
                     persistedIsNoOp = saveResult.IsNoOp;
 
-                    // 6a. The stale predecessor (S148 ruling A9, Case A; auditability). The audit
-                    //     action, the field delta, the alignment validation and PrecedingProfileId all
-                    //     come from step 4's read, made before this transaction. If another save
-                    //     replaced that row while this one waited for the lock, the If-Match check can
-                    //     still pass (a supersession restarts the version at 1), and the audit row and
-                    //     event would describe replacing a row that is no longer there. So the row the
-                    //     repo locked must be the row step 4 read: same profile id and version, or both
-                    //     absent. Otherwise 412, the route's existing answer; the catch below rolls the
-                    //     transaction back, so nothing is written.
+                    // 6b. The second guard: the locked row's id AND version must equal step 4's read.
+                    //     The id half repeats the repo's check above. The version half covers what
+                    //     the repo does not compare: an If-Match naming a version newer than step 4
+                    //     read, met by a same-day edit during the wait, passes the repo's checks with
+                    //     the same profile id, but step 4's delta describes the older version. Same
+                    //     412, same rollback.
                     if (saveResult.LockedPredecessorProfileId != predecessor?.ProfileId
                         || saveResult.LockedPredecessorVersion != predecessor?.Version)
                     {

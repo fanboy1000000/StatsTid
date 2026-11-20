@@ -33,7 +33,7 @@ namespace StatsTid.Infrastructure;
 ///
 /// Optimistic-concurrency token (ADR-018 D7): the row's <c>version BIGINT</c> column is the
 /// ETag. <c>If-Match: "&lt;version&gt;"</c> on the wire (RFC 7232 quoted) carries the
-/// numeric version into <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>'s
+/// numeric version into <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Nullable{ExpectedPredecessor}, System.Threading.CancellationToken)"/>'s
 /// <c>expectedCurrentVersion</c> parameter.
 ///
 /// Pattern follows <see cref="LocalConfigurationRepository"/>: read methods open their own
@@ -43,7 +43,7 @@ namespace StatsTid.Infrastructure;
 /// <see cref="SupersedeAndCreateAsync(System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
 /// owns its own connection and transaction. Returns <c>(profileId, version)</c>.</description></item>
 /// <item><description>In-transaction sibling:
-/// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
+/// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Nullable{ExpectedPredecessor}, System.Threading.CancellationToken)"/>
 /// reuses a caller-supplied connection + transaction so the caller can extend the same
 /// PostgreSQL transaction across outbox + audit-row writes (ADR-018 D3 transactional
 /// outbox contract — no two-phase commit across stores; same database).</description></item>
@@ -176,7 +176,7 @@ public sealed class LocalAgreementProfileRepository
     ///
     /// For cross-store atomicity (outbox + audit + profile in a single transaction —
     /// ADR-018 D3 transactional outbox contract), use the in-transaction sibling overload
-    /// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>.
+    /// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Nullable{ExpectedPredecessor}, System.Threading.CancellationToken)"/>.
     ///
     /// Concurrency contract (ADR-018 D7):
     /// <list type="bullet">
@@ -215,7 +215,7 @@ public sealed class LocalAgreementProfileRepository
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
         try
         {
-            var result = await SupersedeAndCreateAsync(conn, tx, expectedCurrentVersion, newProfile, ct);
+            var result = await SupersedeAndCreateAsync(conn, tx, expectedCurrentVersion, newProfile, ct: ct);
             await tx.CommitAsync(ct);
             return result;
         }
@@ -240,16 +240,22 @@ public sealed class LocalAgreementProfileRepository
     /// transaction's first statement waits for the pay-inputs lock, and under REPEATABLE READ the
     /// snapshot would predate what committed during that wait (PAT-015). The result names the row
     /// this save locked (<see cref="SaveProfileResult.LockedPredecessorProfileId"/>,
-    /// <see cref="SaveProfileResult.LockedPredecessorVersion"/>), so the caller can check it is the
-    /// row it computed its delta against.
+    /// <see cref="SaveProfileResult.LockedPredecessorVersion"/>).
     /// </summary>
+    /// <param name="expectedPredecessor">The open row the caller read before its transaction and
+    /// computed its delta against (S148 ruling A9; TASK-14823 Step 5a ruling R1):
+    /// its profile id, or a <c>null</c> id when it read no open row. When supplied, the locked open
+    /// row must be that row, checked under the lock, after the version check and before any
+    /// date-dependent validation; otherwise <see cref="OptimisticConcurrencyException"/>. A
+    /// supersession restarts the version at 1, so the version check alone can pass against a
+    /// different row. <c>null</c> (not supplied) skips the check.</param>
     /// <returns>The post-write profile id, version, and a no-op flag. See <see cref="SaveProfileResult"/>
     /// for semantics. For first-create + supersession the version is <c>1</c>; for UPDATE-in-place
     /// it is <c>predecessor.Version + 1</c>; for the S23 same-day no-op path it is
     /// <c>predecessor.Version</c> (unchanged) with <see cref="SaveProfileResult.IsNoOp"/> = true.</returns>
     /// <exception cref="OptimisticConcurrencyException">If the precondition encoded in
     /// <paramref name="expectedCurrentVersion"/> does not match the row currently holding the
-    /// active slot.</exception>
+    /// active slot, or that row is not <paramref name="expectedPredecessor"/>.</exception>
     /// <exception cref="InvalidProfileSupersessionException">If
     /// <c>newProfile.EffectiveFrom &lt; predecessor.EffectiveFrom</c>.</exception>
     public async Task<SaveProfileResult> SupersedeAndCreateAsync(
@@ -257,6 +263,7 @@ public sealed class LocalAgreementProfileRepository
         NpgsqlTransaction tx,
         long? expectedCurrentVersion,
         LocalAgreementProfile newProfile,
+        ExpectedPredecessor? expectedPredecessor = null,
         CancellationToken ct = default)
     {
         // 1. Lock the currently-active row (if any) so concurrent supersessions serialize
@@ -271,6 +278,21 @@ public sealed class LocalAgreementProfileRepository
         //    the stored version had advanced. The no-op short-circuit at 3b-noop runs AFTER
         //    this check, NEVER before it.
         ValidatePrecondition(current?.Version, expectedCurrentVersion);
+
+        // 2b. The stale predecessor (S148 ruling A9; TASK-14823 Step 5a ruling R1). The locked
+        //     open row must be the one the caller read before its transaction: the same profile
+        //     id, or both absent. The version check above can pass against a row that replaced
+        //     it during the wait, because a supersession restarts the version at 1. Checked here,
+        //     before the backdate guard (3a) and the same-day branch (3b), so a replaced
+        //     predecessor always answers "refresh and retry" (412 at the PUT route), never a date
+        //     error about a row the caller never saw. Not supplied (null): no check.
+        if (expectedPredecessor is { } expected && current?.ProfileId != expected.ProfileId)
+        {
+            throw new OptimisticConcurrencyException(
+                "The current profile changed after this request read it; refresh and retry.",
+                expectedVersion: expectedCurrentVersion,
+                actualVersion: current?.Version);
+        }
 
         if (current is { } predecessor)
         {
@@ -394,7 +416,7 @@ public sealed class LocalAgreementProfileRepository
     ///
     /// <para>
     /// Returning the full profile (rather than just identity columns) lets
-    /// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>
+    /// <see cref="SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Nullable{ExpectedPredecessor}, System.Threading.CancellationToken)"/>
     /// inspect the overridable-field set during the no-op short-circuit (S23 / TASK-2304)
     /// without a second SELECT. The <c>version</c> column is the optimistic-concurrency
     /// token; the <c>effective_from</c> column drives the first-create / UPDATE-in-place /
@@ -636,10 +658,11 @@ public sealed record SaveProfileResult(Guid ProfileId, long Version, bool IsNoOp
 {
     /// <summary>
     /// The profile id of the open row the save locked (<c>SELECT ... FOR UPDATE</c>) as the one it
-    /// replaces or edits, or <c>null</c> when no open row existed. The PUT route compares it, with
-    /// <see cref="LockedPredecessorVersion"/>, against the row it read before its transaction, and
-    /// answers 412 when they differ (S148 ruling A9): the version alone can match a different row,
-    /// because a supersession restarts the version at 1.
+    /// replaces or edits, or <c>null</c> when no open row existed. The decisive identity check is
+    /// the repository's own, under the lock and before the date checks, when the caller passes
+    /// <see cref="ExpectedPredecessor"/> (S148 ruling A9; TASK-14823 Step 5a ruling R1). The PUT
+    /// route also compares this member and <see cref="LockedPredecessorVersion"/> with the row it
+    /// read before its transaction, as a second guard that adds the version.
     /// </summary>
     public Guid? LockedPredecessorProfileId { get; init; }
 
@@ -659,6 +682,17 @@ public sealed record SaveProfileResult(Guid ProfileId, long Version, bool IsNoOp
         version = Version;
     }
 }
+
+/// <summary>
+/// The open row a caller of the in-transaction
+/// <see cref="LocalAgreementProfileRepository.SupersedeAndCreateAsync(NpgsqlConnection, NpgsqlTransaction, System.Nullable{long}, LocalAgreementProfile, System.Nullable{ExpectedPredecessor}, System.Threading.CancellationToken)"/>
+/// read before its transaction: <see cref="ProfileId"/> is that row's profile id, or <c>null</c> when
+/// the caller read no open row. A supplied value (even with a <c>null</c> id) asks the repository to
+/// refuse with <see cref="OptimisticConcurrencyException"/> when the locked open row is a different
+/// row; an absent value (<c>null</c> of this type) asks for no check (S148 ruling A9; TASK-14823
+/// Step 5a ruling R1).
+/// </summary>
+public readonly record struct ExpectedPredecessor(Guid? ProfileId);
 
 /// <summary>
 /// Thrown by <see cref="LocalAgreementProfileRepository.SupersedeAndCreateAsync(System.Nullable{long}, LocalAgreementProfile, System.Threading.CancellationToken)"/>

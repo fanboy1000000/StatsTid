@@ -684,7 +684,7 @@ public static class BackdateWorklistDerivation
     /// are the rows carrying the write's position (<c>employee_profiles</c>) or organisation
     /// (<c>user_organisations</c>), or <c>null</c> for an agreement-config publish, which matches on the
     /// agreement code alone. Every interval is half-open with a null upper bound meaning open-ended
-    /// (ADR-018 D9); a row that covers no day of the reach contributes nothing.
+    /// (ADR-018 D8); a row that covers no day of the reach contributes nothing.
     ///
     /// <para>
     /// Starts are compared as dates in C# (BC-11): an agreement-code row that began "since always"
@@ -996,7 +996,7 @@ public sealed class HrBackdateWorklistRepository
 
     // S148 T19 — the configuration hand-off's three reads, one per dimension table: every row
     // carrying the write's value that overlaps the reach [@reachStart, @reachEnd) (NULL = open),
-    // half-open [effective_from, effective_to) (ADR-018 D9). No is_active filter: a leaver's paid
+    // half-open [effective_from, effective_to) (ADR-018 D8). No is_active filter: a leaver's paid
     // months can be stale too. Starts are compared only with the reach's real dates here; the
     // clipping is MatchingIntervals', in C#.
     private const string SelectAgreementCodeRowsInReachSql =
