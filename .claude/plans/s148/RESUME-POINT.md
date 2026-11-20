@@ -37,6 +37,7 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
    - the TASK-14823 stack (`90828667`);
    - **TASK-14825 + -T** (`7af9176b`; paperwork `26974e77`: QUAL-184 and QUAL-042 FIXED, the QUAL-148 note, F10; GATE `4a58e603`). Its worktrees are being removed.
 2. **CI-W5a:** draft PR #66 (`ci/s148-w5a`), run **44728481380** at `4a58e603` (head confirmed). A background poll is waiting; if it is reaped, check by hand.
+   - **Its docs job is red** on one PAT-032 item (`DailyNormCalculator.cs:151` was still `shortcut(pending)`; F10 registered but not re-tagged at the merge). **Fixed on master at `14a73d6f`**, logged as a correction; CI-W5 proves it. Judge CI-W5a on build-and-test, smoke and E2E (all green except build-and-test, which is still running at the last check).
    - **Judge it against `PLAN:715`:**
      - AC-C13b, -13g, -13t; AC-C13a's split; AC-C2f, -g, -i, -j, -t, -u; AC-C2c's hand-off; AC-PIL-e row (2); AC-C1g; AC-C1o; AC-C1m's overtime half;
      - PIN-2 (both arms); PIN-1 (the watch item: green with the hydration on);
@@ -66,7 +67,7 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
 - **Helpers** are in `.claude/reviews/S148-session-helpers/`:
   - `msgmatch.js`, which saves the last assistant message containing a marker, plus later messages as an addendum. Use it instead of `lastmsg.js`, which takes only the final message.
   - The Codex run scripts and prompts, for cycles 1 to 3.
-- **No Python on this machine.** `check_docs.py` and `check_openapi_convention.py` run in CI only.
+- **No Python on this machine.** `check_docs.py` and `check_openapi_convention.py` run in CI only. **Every merge GATE runs `node .claude/reviews/S148-session-helpers/shortcut-check.js .`** (a Node mirror of the PAT-032 shortcut check; it must report 0 bad). Re-tag every `shortcut(pending)` in the merge commit itself (merge-checklist item 8).
 - **Getting the counts right:** count CA2100 with a `--no-incremental` build (113 distinct). Read files' line endings with node; Git Bash's `grep -c $'\r'` miscounts.
 - **Standing practice:**
   - Save every review verbatim before acting on it.
