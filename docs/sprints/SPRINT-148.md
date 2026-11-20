@@ -2414,3 +2414,15 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Frontend:** `tsc` and lint pass, and vitest passes 99 files, 1202 tests (+3).
 - All ran one at a time, in the foreground. The Docker facts are CI-pending until CI-W5a.
 - **TASK-14825 next.**
+
+**TASK-14825 returned** (`backend-infrastructure`, Opus 5.5; `4492f100` on `6a13cb82`; report `.claude/reviews/S148-TASK-14825-report.md`).
+- **The lookup:** one dated, fail-closed lookup (`IAgreementConfigLookup`: `ResolveAsync`, `ResolveCentralAsync`; ruling B8). It resolves central, then position, then local, each in force on the day asked.
+  - The compiled fallback is gone, and the three retired wrappers and their tests are deleted.
+  - `ConfigLookupRefusalMiddleware` maps the two refusals to the ruled 503 and named 500, inside the audit logger; the Gate 7 catch census finds nothing that swallows them.
+  - The compensation-choice routes ask the OK version of 1 January (B12), and the calculator resolves per weekday with no cache (B6, one `shortcut(pending)`).
+  - The payroll host registers the lookup and the two repositories (QUAL-184; DV-8: payroll now splits at a published applies-from date but prices on compiled rules until the T14b stack, BC-9).
+- **Gate:** build 0 errors, 125 warnings, 113 CA2100. Unit 1742 + 1, the one being the named red `ScreenParityTests.Fraction0811_…`, which TASK-14825-T repairs (20 cases deleted with the wrappers). DemoSeed 170 and Regression non-Docker 140 are green.
+- **Docker census:** no existing fact is expected red. The B12 compensation census confirms every seeded pair is `AFSPADSERING`, with the choice flag false for AC and true for HK and PROSA on both OK versions.
+- **Found, not fixed:** stale remarks at `BalanceEndpoints.cs:805`, `HrBackdateWorklistRepository.cs:1467-1468`, and `PeriodCalculationService.cs:189` and `:2487` (TASK-14827's, B10). Seven test-comment spans go to 14825-T.
+- **Test seam:** the handlers still inject the concrete `ConfigResolutionService`; only the calculator takes the interface. The fail-closed facts must replace the concrete type (told to 14825-T).
+- **TASK-14825-T dispatched** (`test-qa`, base `4492f100`), with T-BC-10 (b), the census of every call form, and the local-cluster pre-check, including PIN-2 and AC-C1g if they can run.
