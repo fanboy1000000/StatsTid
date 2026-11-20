@@ -802,7 +802,10 @@ public static class BalanceEndpoints
             // and the current PartTimeFraction (S145 / TASK-14509, R11: DayNorm.ForWeekday × 5, the
             // per-day amount the Rule Engine judges each weekday with — so a 30-hour week shows
             // 5 × 6.00 = 30.00, as the payslip computes it, not the whole-week 37 × 0.811 = 30.01);
-            // null if no dated profile/config (graceful per ADR-023 D3 — a profile-less employee renders).
+            // null when no dated employment profile covers today, or the profile has no covering agreement
+            // row (graceful per ADR-023 D3 — a profile-less employee renders). A configuration-lookup refusal
+            // is not graceful: it fails the whole read through the Backend's one mapping, a 503 or the named
+            // 500 config_not_in_force (P-13).
             decimal? weeklyNormHours = null;
             EmploymentProfile? todayProfile;
             try

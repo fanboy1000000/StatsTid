@@ -8,8 +8,9 @@ namespace StatsTid.Infrastructure;
 /// <summary>
 /// The agreement configuration in force on a day (ADR-014, ADR-017 D3, ADR-043 D12): the one dated,
 /// fail-closed lookup every configuration read goes through. Both hosts register it as the same singleton
-/// as <see cref="ConfigResolutionService"/>, which implements it; callers and their Unit fixtures depend on
-/// this interface.
+/// as <see cref="ConfigResolutionService"/>, which implements it. Of the production callers only
+/// <c>DailyNormCalculator</c> takes this interface (so a Unit fixture can fake the lookup); the Backend
+/// handlers that read a configuration themselves inject the concrete class.
 /// </summary>
 public interface IAgreementConfigLookup
 {
@@ -30,8 +31,9 @@ public interface IAgreementConfigLookup
     /// <summary>
     /// The central layer alone, in force on <paramref name="asOf"/>: the same read and the same refusals as
     /// the first layer of <see cref="ResolveAsync"/>, with no override and no profile. For members no
-    /// override or profile column can change (the overtime compensation model and choice) and for days with
-    /// no employment record, which price the central layer only.
+    /// override or profile column can change: today its only callers are the overtime routes, for the
+    /// compensation model and choice. TASK-14828 will also use it for days with no employment record, which
+    /// price the central layer only.
     /// </summary>
     /// <exception cref="ConfigLookupUnavailableException">The read failed with a database error.</exception>
     /// <exception cref="NoConfigInForceException">No published central version is in force on the day.</exception>
@@ -65,7 +67,8 @@ public interface IAgreementConfigLookup
 /// version is <see cref="NoConfigInForceException"/>, and the lookup logs each refusal once. The tables
 /// compiled into SharedKernel's configuration classes are never this lookup's answer (ADR-014; init.sql
 /// seeds the database). The Backend answers both refusals through one mapping
-/// (<c>ConfigLookupRefusalMiddleware</c>); payroll maps them itself.</para>
+/// (<c>ConfigLookupRefusalMiddleware</c>). Payroll registers the lookup but does not call it yet, so it
+/// maps neither; TASK-14827 adds payroll's own mapping, a 503 and a 422 (wave-5 batch-C ruling 12).</para>
 ///
 /// <para>No cache, no <c>(conn, tx)</c> overload and no lock: each read opens its own connection, so a caller
 /// may call the lookup before or inside its own transaction without taking the pay-inputs lock (S148 PIL,
@@ -276,8 +279,8 @@ public sealed class ConfigResolutionService : IAgreementConfigLookup
 /// <summary>
 /// A read of the agreement configuration failed with a database error (P-13): the lookup refuses rather
 /// than substitute a compiled value. The original exception is <see cref="Exception.InnerException"/>. The
-/// Backend answers it with a fixed 503 (<c>ConfigLookupRefusalMiddleware</c>); payroll maps it to a 503 of
-/// its own.
+/// Backend answers it with a fixed 503 (<c>ConfigLookupRefusalMiddleware</c>). Payroll does not call the
+/// lookup yet, so it maps nothing; TASK-14827 adds payroll's own 503 (wave-5 batch-C ruling 12).
 /// </summary>
 public sealed class ConfigLookupUnavailableException : Exception
 {
