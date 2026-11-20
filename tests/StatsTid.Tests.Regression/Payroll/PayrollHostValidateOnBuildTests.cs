@@ -35,9 +35,10 @@ namespace StatsTid.Tests.Regression.Payroll;
 ///
 /// <para>
 /// <b>Kind: F (Regression, non-Docker)</b>: the host builds without a database. <b>Red conditions</b>: on the base
-/// (TASK-14825's parent) building the provider throws <c>InvalidOperationException</c> "Unable to resolve service
-/// for type '…AgreementConfigRepository' while attempting to activate '…ConfigResolutionService'" (QUAL-184), so the
-/// build assertion fails. It also fails if any of the lookup's repositories loses its registration
+/// (TASK-14825's parent, run there) building the provider throws <c>AggregateException</c> wrapping
+/// <c>InvalidOperationException</c> "No constructor for type 'StatsTid.Infrastructure.ConfigResolutionService' can be
+/// instantiated using services from the service container and default values" (QUAL-184: neither constructor's
+/// repositories were registered), so the build assertion fails. It also fails if any of the lookup's repositories loses its registration
 /// (<c>AgreementConfigRepository</c>, <c>PositionOverrideRepository</c>, <c>LocalConfigurationRepository</c>,
 /// <c>LocalAgreementProfileRepository</c>).
 /// </para>
