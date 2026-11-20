@@ -39,10 +39,10 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
 2. **CI-W5a: judged green on the evidence** (run 44728481380 at `4a58e603`; PR #66 closed unmerged, branch deleted; logged in the sprint log with the PLAN:715 items, the 84 re-pointed facts and the three timing lines; F9 and F10 carry the CI figures). Its docs job was red only on the F10 re-tag, fixed on master at `14a73d6f`; CI-W5 proves it.
 3. **The T14b stack, in progress** (TASK-14826 → 14826-T → 14827 → 14828 → 14828-T → REGEN → 14829, merged together; NR-P9). The briefs are at draft 2 ("final + 26").
    - **TASK-14826 returned:** `9f621abb` on `bb0677df` (report `.claude/reviews/S148-TASK-14826-report.md`; S1 … S10 checked byte for byte).
-   - **TASK-14826-T dispatched** (`test-qa`) on `9f621abb`.
-   - **TASK-14827 next, on 14826-T's tip.** Carry into its dispatch: (1) the 30 March question (TASK-14826 report, Gate 6: `WeeklyPayrollTests.OkBoundary_April2026_…`; whether payroll joins the context days to the first period piece across 1 April; if so, cut there, item 3); (2) the PCS cites moved (`CallTimelineAsync` posts at about `:4466-4479`, `evaluate` at `:4342-4352`); (3) `PeriodCalculationService.cs:4461-4463` says the engine splits a piece at 1 April, now untrue.
-   - **TASK-14828's plan row carries** R8 and R9 (from 14822), C2-R5 (14822), R4 (14825) and N2 (14825 c3).
-   - **TASK-14831's plan row carries** R6 (14823, the "Blocks until granted" remark).
+   - **TASK-14826-T returned:** tip `df670468` (report `.claude/reviews/S148-TASK-14826-T-report.md`); gate green; 60 local database reds, each for its stated reason (payroll S1/S3 → 14827; compliance S6 → 14828). The 30 March question is refuted: payroll already cuts at 1 April.
+   - **TASK-14827 dispatched** (`payroll-integration`) on `df670468`.
+   - **Carry to TASK-14828-T:** `WeeklyPayrollTests.cs:352-353`'s docstring ("the engine resolves config per day") is untrue now; AC-C1l's arms (2), (3), (5) were not mutation-run one by one (they share `IsOwnConfig`); remove the `WeeklyPipelineOnCoreTests` interim.
+   - **Then** TASK-14828 on 14827's tip.
 4. **Then** 14830 + -T, 14831 + -T, 14846, CI-W5 and CI-M5 (M-9, M-12, M-13, M-15, M-49).
 5. **Owner ruling 2026-11-19 (a):** QUAL-259 is built after S148.
 6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves.

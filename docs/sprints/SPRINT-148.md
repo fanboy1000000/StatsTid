@@ -2513,3 +2513,19 @@ M-40 included [O for the 14 facts of the five classes run].
 - **By design, until the callers land:** the test projects do not compile until TASK-14826-T. Payroll, the Backend, the Orchestrator and smoke are refused until TASK-14827, 14828 and 14828-T.
 - **Carried to TASK-14827's dispatch:** the report says `Payroll/WeeklyPayrollTests.OkBoundary_April2026_…` asserts an April calculation's piece starting 30 March (the context days), which crosses 1 April. The engine refuses such a piece with S4 even with a configuration. TASK-14827's item 3 cuts context pieces at version dates and says an OK version never changes inside the context days, but it does not say whether payroll joins the context days to the period's first piece. TASK-14827 must verify this and cut at the OK-version date if so.
 - **TASK-14826-T dispatched** (`test-qa`) on `9f621abb`.
+
+**TASK-14826-T returned** (`test-qa`; `f1786631`, `9a6fead4`, tip `df670468` on `9f621abb`; report `.claude/reviews/S148-TASK-14826-T-report.md`). It changes 22 test files and nothing under `src/`, `docs/`, the smoke suite or `PayPin/`.
+- **The test tree compiles again** through one shared helper, `TestSupport/EngineConfigRequests.cs`, which is linked into the Unit project. Its configs are `CentralAgreementConfigs.GetConfig`, which is what the deleted class forwarded to, so no expected value moved. `Sprint12AgreementConfigTests.cs:126`'s stale comment is corrected. `WeeklyPipelineOnCoreTests` carries the labelled NR-P9 interim, which TASK-14828-T removes.
+- **The facts:**
+  - AC-C1e (engine and host arm: a 32-hour week in the request gives 32.00, not the table's 37.00);
+  - AC-C1i (five routes refuse a request without rules with the ruled sentence; `evaluate-absence` still answers 200);
+  - AC-C1j (each work end judged by its own date's minimum rest, both directions, plus S10);
+  - AC-C1l (S2, S4, S5, S9);
+  - AC-C1p (the override merge carries every member).
+- **Proved red:** on master, AC-C1i got five 200s, the host arm 37.00, and AC-C1p seven dropped members. M-2 … M-5 each turned exactly one Unit fact red (1749 of 1750).
+- **Gate at the tip:** build 0 errors, 125 warnings, CA2100 113 distinct. Unit 1750, DemoSeed 170, Regression `Category!=Docker` 144, all green.
+- **Gate 6, local cluster run (not CI evidence):** 60 database facts are red for the stated reason.
+  - Payroll's facts carry S1 or S3 and wait for TASK-14827. This includes PIN-1, which is refused with S3 ("Every piece needs a Config.").
+  - The Backend's compliance facts carry S6 and wait for TASK-14828.
+- **The 30 March question is refuted.** Payroll's recorded request already cuts at 1 April (30–31 March, then April), so S4 does not apply. What remains for TASK-14827 to argue is that the fingerprint assertion holds with per-piece configs.
+- **TASK-14827 dispatched** (`payroll-integration`) on `df670468`, with a local pre-check of PIN-1 and the payroll facts expected.
