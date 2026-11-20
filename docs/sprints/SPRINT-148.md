@@ -2498,3 +2498,18 @@ M-40 included [O for the 14 facts of the five classes run].
   - **The Teamoversigt "before" figure (N-3):** 1,024 ms median for a 300-person roster and 115 ms for 30, both for March 2026. TASK-14828-T re-runs it unchanged, and CI-W5 records the "after" figure; the comparison and N-3's disposition belong to the T14b stack.
 - **Registers:** F9 and F10 now carry the CI figures. QUAL-148's B12 note and QUAL-260's AC-C2u are CI-verified, while M-49 waits for CI-M5.
 - **Next: the T14b stack** (TASK-14826 → 14826-T → 14827 → 14828 → 14828-T → REGEN → 14829, merged together; NR-P9), from master.
+
+**TASK-14826 returned** (`rule-engine`, one commit `9f621abb` on `bb0677df`; report `.claude/reviews/S148-TASK-14826-report.md`). It is the first commit of the T14b stack, which is reviewed and merged once at its tip.
+- **What it builds:**
+  - The Rule Engine computes only with the agreement rules each request carries. `evaluate`, `evaluate-flex`, `evaluate-timeline`, `check-compliance` and `check-overtime-governance` take them from the request.
+  - A request without them, with another agreement's or OK version's rules, or with a piece or compliance run across 1 April is refused with one of the ten ruled sentences (400).
+  - Each work end is judged by the minimum rest in force on its own date. `AgreementConfigProvider` is deleted.
+  - The override merge now carries all of its members; the seven it dropped include the minimum rest (QUAL-190, closed at O-17).
+  - The arithmetic, the evaluation marker, `evaluate-absence` and the replay fingerprint are unchanged.
+- **The Orchestrator's checks:**
+  - The ten sentences S1 … S10 in `RuleRegistry.cs` match TASK-14826's brief byte for byte (ruling 6).
+  - The diff touches only the 11 authorized files.
+  - Its three declared deviations go to 5α at the stack's tip: a one-token call change in `RestPeriodRule.cs:211`, a comment in `RuleRegistry.cs`, and the new `AgreementConfigRefusedException` beside the guard.
+- **By design, until the callers land:** the test projects do not compile until TASK-14826-T. Payroll, the Backend, the Orchestrator and smoke are refused until TASK-14827, 14828 and 14828-T.
+- **Carried to TASK-14827's dispatch:** the report says `Payroll/WeeklyPayrollTests.OkBoundary_April2026_…` asserts an April calculation's piece starting 30 March (the context days), which crosses 1 April. The engine refuses such a piece with S4 even with a configuration. TASK-14827's item 3 cuts context pieces at version dates and says an OK version never changes inside the context days, but it does not say whether payroll joins the context days to the period's first piece. TASK-14827 must verify this and cut at the OK-version date if so.
+- **TASK-14826-T dispatched** (`test-qa`) on `9f621abb`.
