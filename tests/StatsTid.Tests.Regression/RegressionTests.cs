@@ -1,4 +1,4 @@
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Integrations.Payroll.Services;
@@ -101,8 +101,8 @@ public class RegressionTests
         var profileOk24 = CreateProfile("HK", "OK24");
         var profileOk26 = CreateProfile("HK", "OK26");
 
-        var configOk24 = AgreementConfigProvider.GetConfig("HK", "OK24");
-        var configOk26 = AgreementConfigProvider.GetConfig("HK", "OK26");
+        var configOk24 = EngineConfigRequests.Config("HK", "OK24");
+        var configOk26 = EngineConfigRequests.Config("HK", "OK26");
 
         var overtimeOk24 = EvaluateOvertime(profileOk24, entriesOk24, Monday, Sunday, configOk24);
         var overtimeOk26 = EvaluateOvertime(profileOk26, entriesOk26, Monday, Sunday, configOk26);
@@ -123,7 +123,7 @@ public class RegressionTests
     public void HistoricalReplay_ProducesSameResult()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = Enumerable.Range(0, 5)
             .Select(i => CreateEntry(Monday.AddDays(i), 7.8m))
             .ToList();
@@ -148,7 +148,7 @@ public class RegressionTests
     public void RetroactiveCorrection_UpdatesCalculation()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
 
         var entries = Enumerable.Range(0, 5)
             .Select(i => CreateEntry(Monday.AddDays(i), 7.4m))
@@ -171,7 +171,7 @@ public class RegressionTests
     public void AC_NeverProducesOvertime()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
         var entries = Enumerable.Range(0, 5)
             .Select(i => CreateEntry(Monday.AddDays(i), 12m))
             .ToList();
@@ -190,7 +190,7 @@ public class RegressionTests
     public void HK_ProducesOvertime_NotMerarbejde()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = Enumerable.Range(0, 5)
             .Select(i => CreateEntry(Monday.AddDays(i), 9m))
             .ToList();
@@ -208,7 +208,7 @@ public class RegressionTests
     public void DeterminismProof_100Iterations_IdenticalResults()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = Enumerable.Range(0, 5)
             .Select(i => CreateEntry(Monday.AddDays(i), 8.5m))
             .ToList();
@@ -249,7 +249,7 @@ public class RegressionTests
     public void PayrollChain_ACEmployee_ProducesMerarbejde_NoOvertime()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
 
         // AC employee works 45 hours in a week (5 days x 9h)
         var entries = Enumerable.Range(0, 5)
@@ -295,7 +295,7 @@ public class RegressionTests
     public void PayrollChain_HKEmployee_ProducesOvertime_WithSupplements()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
 
         // HK employee works 42 hours: 5 days, some with evening hours
         // Mon-Thu: 8h (8:00-16:00), Fri: 10h (8:00-18:00) including evening
@@ -389,7 +389,7 @@ public class RegressionTests
     public void PayrollChain_FlexPayout_ProducesLineItem()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24"); // MaxFlexBalance = 150
+        var config = EngineConfigRequests.Config("AC", "OK24"); // MaxFlexBalance = 150
 
         // AC employee works 45h in a week
         var entries = Enumerable.Range(0, 5)
@@ -422,7 +422,7 @@ public class RegressionTests
     public void PayrollChain_TraceabilityProof_EveryLineItemHasRuleId()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
 
         // HK employee works 42h with evening hours, plus one vacation day absence
         // Mon-Wed: 10h each (8-18), Thu: 12h (10-22, includes evening), Fri: vacation
@@ -505,7 +505,7 @@ public class RegressionTests
 
     private static AgreementRuleConfig CreateOnCallConfig(string agreement, bool enabled, decimal rate = 0.33m)
     {
-        var baseConfig = AgreementConfigProvider.GetConfig(agreement, "OK24");
+        var baseConfig = EngineConfigRequests.Config(agreement, "OK24");
         return new AgreementRuleConfig
         {
             AgreementCode = baseConfig.AgreementCode,
@@ -600,7 +600,7 @@ public class RegressionTests
     public void FlexPayout_ProducesFlexPayoutTimeType()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24"); // MaxFlexBalance = 150
+        var config = EngineConfigRequests.Config("AC", "OK24"); // MaxFlexBalance = 150
 
         // AC employee works 50h in a week (excess will trigger payout)
         var entries = Enumerable.Range(0, 5)

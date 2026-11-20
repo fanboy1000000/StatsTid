@@ -9,7 +9,7 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -378,8 +378,8 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         var call = april.Recorder.Timeline.Single();
         var expectedFingerprint = ConfigFingerprint.Compute(new (string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)[]
         {
-            ("HK", "OK24", null, AgreementConfigProvider.GetConfig("HK", "OK24")),
-            ("HK", "OK26", null, AgreementConfigProvider.GetConfig("HK", "OK26")),
+            ("HK", "OK24", null, EngineConfigRequests.Config("HK", "OK24")),
+            ("HK", "OK26", null, EngineConfigRequests.Config("HK", "OK26")),
         });
         var entryDates = call.EntryHours().Select(e => e.Date).ToList();
 

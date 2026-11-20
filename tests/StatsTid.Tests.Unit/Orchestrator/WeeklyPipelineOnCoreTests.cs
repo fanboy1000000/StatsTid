@@ -7,6 +7,7 @@ using StatsTid.Orchestrator.Services;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
+using StatsTid.Tests.Shared;
 
 namespace StatsTid.Tests.Unit.Orchestrator;
 
@@ -170,7 +171,9 @@ public sealed class WeeklyPipelineOnCoreTests
                 var evaluate = JsonSerializer.Deserialize<EvaluateRequest>(body, Web)!;
                 EvaluatedRuleIds.Add(evaluate.RuleId);
                 var calculation = _registry.Evaluate(
-                    evaluate.RuleId, evaluate.Profile, evaluate.Entries, evaluate.PeriodStart, evaluate.PeriodEnd);
+                    evaluate.RuleId, evaluate.Profile, evaluate.Entries, evaluate.PeriodStart, evaluate.PeriodEnd,
+                    // S148 NR-P9 interim: the pipeline sends its compiled config from TASK-14828; TASK-14828-T removes this
+                    evaluate.Config ?? EngineConfigRequests.ConfigFor(evaluate.Profile));
                 return Json(
                     calculation.Success ? HttpStatusCode.OK : HttpStatusCode.BadRequest,
                     JsonSerializer.Serialize(calculation, Web));

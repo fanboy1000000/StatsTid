@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Tests.Regression.Compliance;
@@ -22,8 +22,9 @@ namespace StatsTid.Tests.Regression.Compliance;
 /// <para>
 /// <b>Harness.</b> <see cref="RestComplianceRealEngineHarness"/> (the real engine host, S148 BC-6).
 /// Every fact is kind <b>F (CI)</b> and names no member the sprint creates (HTTP, SQL and the real
-/// engine only). The severity expectation rests on the composed engine's config: the engine reads
-/// <c>AgreementConfigProvider.GetConfig("HK", "OK24", position)</c>, and each fact asserts first that
+/// engine only). The severity expectation rests on the config the request carries (ADR-043 D12;
+/// the Backend sends the config in force), which for the seeded rows equals
+/// <c>EngineConfigRequests.Config("HK", "OK24", position)</c>, and each fact asserts first that
 /// this returns <c>RestPeriodDerogationAllowed == true</c> for the seeded (null) position.
 /// </para>
 ///
@@ -205,7 +206,7 @@ public sealed class RestFromSkemaIntervalsTests : IAsyncLifetime
     /// <summary>The value the composed engine reads for HK / OK24 (seeded position: none).</summary>
     private static void AssertHkOk24Derogates() =>
         Assert.True(
-            AgreementConfigProvider.GetConfig("HK", "OK24", null).RestPeriodDerogationAllowed,
+            EngineConfigRequests.Config("HK", "OK24", null).RestPeriodDerogationAllowed,
             "the expected WARNING severity rests on HK OK24 allowing derogation");
 
     /// <summary>The real Skema save of one month's work-time days (intervals only, no hours cells).</summary>

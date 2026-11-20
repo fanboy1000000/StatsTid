@@ -1,3 +1,4 @@
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 
@@ -92,7 +93,7 @@ public sealed class LegacyDispatchOnCoreTests
     {
         var entries = WeekdayHours("HK", Sep1, Sep30, 7.40m, (Sep1, Sep4, 8.00m));
 
-        var result = new RuleRegistry().Evaluate("OVERTIME_CALC", Profile("HK"), entries, Sep1, Sep30);
+        var result = new RuleRegistry().Evaluate("OVERTIME_CALC", Profile("HK"), entries, Sep1, Sep30, EngineConfigRequests.ConfigFor(Profile("HK")));
 
         Assert.True(result.Success);
         Assert.Equal("OVERTIME_CALC", result.RuleId);
@@ -116,7 +117,7 @@ public sealed class LegacyDispatchOnCoreTests
     {
         var entries = WeekdayHours("HK", Sep1, Sep30, 7.40m, (Sep1, Sep4, 8.00m), (Sep28, Sep30, 8.00m));
 
-        var result = new RuleRegistry().Evaluate("OVERTIME_CALC", Profile("HK"), entries, Sep1, Sep30);
+        var result = new RuleRegistry().Evaluate("OVERTIME_CALC", Profile("HK"), entries, Sep1, Sep30, EngineConfigRequests.ConfigFor(Profile("HK")));
 
         Assert.True(result.Success);
         var lines = result.LineItems.OrderBy(l => l.Date).ToList();
@@ -141,7 +142,7 @@ public sealed class LegacyDispatchOnCoreTests
         var entries = WeekdayHours("AC", Sep7, Sep13, 7.40m);
         var registry = new RuleRegistry();
 
-        var weekly = registry.Evaluate("NORM_CHECK_WEEKLY", profile, entries, Sep7, Sep13);
+        var weekly = registry.Evaluate("NORM_CHECK_WEEKLY", profile, entries, Sep7, Sep13, EngineConfigRequests.ConfigFor(profile));
         Assert.True(weekly.Success);
         Assert.Equal("NORM_CHECK_WEEKLY", weekly.RuleId);
         Assert.Equal(1, weekly.NormPeriodWeeks);
@@ -149,14 +150,14 @@ public sealed class LegacyDispatchOnCoreTests
         Assert.Equal(37.00m, weekly.ActualHoursTotal);
         Assert.Equal(5, weekly.LineItems.Count(l => l.TimeType == "NORMAL_HOURS"));
 
-        var multiWeek = registry.Evaluate("NORM_CHECK_MULTIWEEK", profile, entries, Sep7, Sep13);
+        var multiWeek = registry.Evaluate("NORM_CHECK_MULTIWEEK", profile, entries, Sep7, Sep13, EngineConfigRequests.ConfigFor(profile));
         Assert.True(multiWeek.Success);
         Assert.Equal("NORM_CHECK_MULTIWEEK", multiWeek.RuleId);
         Assert.Equal(4, multiWeek.NormPeriodWeeks);
         Assert.Equal(37.00m, multiWeek.NormHoursTotal);
         Assert.Equal(37.00m, multiWeek.ActualHoursTotal);
 
-        var legacy = registry.Evaluate("NORM_CHECK_37H", profile, entries, Sep7, Sep13);
+        var legacy = registry.Evaluate("NORM_CHECK_37H", profile, entries, Sep7, Sep13, EngineConfigRequests.ConfigFor(profile));
         Assert.True(legacy.Success);
         Assert.Equal("NORM_CHECK_37H", legacy.RuleId);
         Assert.Equal(4, legacy.NormPeriodWeeks);
@@ -182,14 +183,14 @@ public sealed class LegacyDispatchOnCoreTests
         var entries = WeekdayHours("HK", Sep1, Sep4, 7.40m);
         var registry = new RuleRegistry();
 
-        var annual = registry.Evaluate("NORM_CHECK_ANNUAL", profile, entries, periodStart, periodEnd);
+        var annual = registry.Evaluate("NORM_CHECK_ANNUAL", profile, entries, periodStart, periodEnd, EngineConfigRequests.ConfigFor(profile));
         Assert.True(annual.Success);
         Assert.Equal("NORM_CHECK_ANNUAL", annual.RuleId);
         Assert.Null(annual.NormPeriodWeeks);
         Assert.Equal(384.80m, annual.NormHoursTotal);
         Assert.Equal(29.60m, annual.ActualHoursTotal); // the four entries, nothing else
 
-        var legacy = registry.Evaluate("NORM_CHECK_37H", profile, entries, periodStart, periodEnd);
+        var legacy = registry.Evaluate("NORM_CHECK_37H", profile, entries, periodStart, periodEnd, EngineConfigRequests.ConfigFor(profile));
         Assert.True(legacy.Success);
         Assert.Equal("NORM_CHECK_37H", legacy.RuleId);
         Assert.Equal(1, legacy.NormPeriodWeeks);
