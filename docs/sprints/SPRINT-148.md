@@ -2324,3 +2324,25 @@ M-40 included [O for the 14 facts of the five classes run].
   - the recheck's hint signature drops its unused `(conn, tx)`;
   - QUAL-258 interacts as known: an unchanged retry passes the recheck and answers `payroll-export-conflict`, and a dated revisit note is added at the merge.
 - **Owner question (asked 2026-11-19):** should the replay promise keep its one known exception for wage-type codes? The options are (a) close it after S148, by storing each line's resolved code in the month's proof (the adjudicator's lean); (b) accept it as a known hole; or (c) let payroll record only finished months.
+
+**Owner ruling, 2026-11-19 (the batch-D adjudication § 2): option (a), close the replay gap for wage-type codes after S148.**
+- **The gap:** a month recorded before it ends, with a mapping edit before its tail days, keeps the old codes in its recorded lines. A later replay re-reads the live mapping and shows the new codes without refusing.
+- **What the owner chose:** store each line's resolved wage-type code in the month's proof, so a replay reproduces what was recorded. ADR-020 D1 is amended when this is built.
+- **Recorded as QUAL-259**, OPEN, Medium, "build in the sprint after S148". Plan O-19 and TASK-14831's "Not built" now cite the answer.
+- **What was given up:** nothing in S148. The owner rejected (b), accepting it as a known hole, and (c), recording only finished months.
+
+**Wave-5 batch D, rulings applied** (planner, Opus 5.5; `.claude/reviews/S148-wave5D-briefs-applied-report.md`).
+- **The five briefs are at draft 2, and the plan is at "final + 27":** 147 AC ids and 49 mutation ids (+M-51, +M-52, both local).
+- **Interpretation calls accepted as held:**
+  - "exactly one" `shortcut(pending)` at the recheck, with the implementer reporting its site;
+  - the recording-time exception type sits beside `PayrollExportConflictException`;
+  - AC-PIL-g (1) moves from M-7's argued list to M-52's;
+  - AC-C13r case (4)'s reachability is left to the `ux` agent to report;
+  - the adjudication's own cite slips are corrected (`PLAN:100`; `PeriodCalculationService.cs:2105`).
+
+**TASK-14824 returned** (`ux`; `bb72fea1` on `d8ef347b`; report `.claude/reviews/S148-TASK-14824-report.md`).
+- The three Danish labels are in, byte for byte as ruled.
+- `gen:api` shows no diff, so REGEN is none.
+- Three vitest facts are red first, then green.
+- `tsc`, lint, `typecheck:e2e` and the build pass, and vitest is 99 files and 1202 tests.
+- **The 14823 stack (14823, -T, 14824) is complete. Its merge checklist starts:** 5α on the union, plus 5a with Codex and Fable.
