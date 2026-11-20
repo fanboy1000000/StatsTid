@@ -2426,3 +2426,14 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Found, not fixed:** stale remarks at `BalanceEndpoints.cs:805`, `HrBackdateWorklistRepository.cs:1467-1468`, and `PeriodCalculationService.cs:189` and `:2487` (TASK-14827's, B10). Seven test-comment spans go to 14825-T.
 - **Test seam:** the handlers still inject the concrete `ConfigResolutionService`; only the calculator takes the interface. The fail-closed facts must replace the concrete type (told to 14825-T).
 - **TASK-14825-T dispatched** (`test-qa`, base `4492f100`), with T-BC-10 (b), the census of every call form, and the local-cluster pre-check, including PIN-2 and AC-C1g if they can run.
+
+**TASK-14825-T returned** (`test-qa`; `abe24c1d`, `6b5a5b87` on `4492f100`; report `.claude/reviews/S148-TASK-14825-T-report.md`).
+- **AC-C1g:** the payroll host builds under `ValidateOnBuild`, and was red on `6a13cb82`.
+- **The fail-closed facts:** the overtime GET/PUT answer 503 with the ruled body when configuration cannot be read, and the named 500 when none is in force, writing nothing. The Skema month answers the named 500 too. The host replaces the concrete `ConfigResolutionService`.
+- **AC-C1o's dated-screen facts:** the compensation model as of 1 January, with T-BC-10 (b)'s OK24 publish; and a Skema month with each day its own norm, 7.40 to 6.40 from Monday 16 March, and 7.00 for a local profile.
+- **PIN-2:** re-pointed through the lookup with both arms, the merged chain and the override record field by field. Three database mutations each turned it red with a named difference.
+- **Other changes:** `ScreenParityTests` uses a fake lookup, so the named red is fixed. Compiled-value assertions lost with the wrappers are restored where nothing else pinned them.
+- **Local pre-check** (throwaway cluster; not CI evidence): all new Docker facts green on the tip, and all six red on `6a13cb82` for the argued reasons.
+  - Timing lines, local: Teamoversigt median 115 ms at 30 people and 937 ms at 300; year overview 895 ms. They reach the trx.
+- **Gate:** build 0 errors, 125 warnings, 113 CA2100. Unit 1745, DemoSeed 170, Regression non-Docker 141 (+AC-C1g).
+- **Merge checklist started** on `6a13cb82..6b5a5b87`: 5α, Codex (high risk: legal rule logic, the payroll host) and Fable.
