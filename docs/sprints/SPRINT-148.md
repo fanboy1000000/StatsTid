@@ -2472,3 +2472,8 @@ M-40 included [O for the 14 facts of the five classes run].
   - **(c)** The year overview's registered read cost (F10). The local timing was 895 ms median; CI-W5a's figure replaces it.
 - **CI-pending until CI-W5a:** AC-C1m's overtime half, AC-C1o, the per-layer fail-closed facts, the B12 facts, PIN-2 (both arms), PIN-1 with the hydration on, and the two timing lines. AC-C1g is non-Docker and green.
 - **GATE next, then CI-W5a.**
+
+**GATE green after the TASK-14825 merge** (`7af9176b`, paperwork `26974e77`).
+- **Build:** `dotnet build StatsTid.sln -m:2 --no-incremental` has 0 errors and 125 warnings, with 113 distinct CA2100 (unchanged).
+- **Suites:** Unit 1745; DemoSeed 170; Regression `Category!=Docker` 141 (+AC-C1g). All ran one at a time, in the foreground.
+- **CI-W5a next**, before the T14b stack (`PLAN:130`): an evidence-only branch and draft PR.
