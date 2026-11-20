@@ -2346,3 +2346,22 @@ M-40 included [O for the 14 facts of the five classes run].
 - Three vitest facts are red first, then green.
 - `tsc`, lint, `typecheck:e2e` and the build pass, and vitest is 99 files and 1202 tests.
 - **The 14823 stack (14823, -T, 14824) is complete. Its merge checklist starts:** 5α on the union, plus 5a with Codex and Fable.
+
+**TASK-14823 stack 5a cycle 1.** 5α PASS (`.claude/reviews/S148-TASK-14823-5alpha.md`). Codex CHANGES-REQUIRED (`…-5a-codex.md`). Fable APPROVED-WITH-WARNINGS (`…-5a-reviewer.md`). Rulings in `…-5a-rulings-c1.md`, R1–R9.
+- **Both lenses find the design sound:** no deadlock cycle, READ COMMITTED everywhere, a reach that never under-lists, and once per month and year.
+- **R1, the shared finding: the stale-predecessor save answers 400 instead of the ruled 412 in one ordering.**
+  - The case: A is dated before the R2 that superseded R1 during A's wait. The repository's backdate guard then throws before the route's identity comparison.
+  - **Fix:** the identity check moves into the repository, under the lock and before any date-dependent validation. M-49 is re-pointed there.
+  - TASK-14823 fix-up 1 is dispatched on `bb72fea1`.
+- **R2–R4, test additions** (TASK-14823-T fix-up 1, next):
+  - AC-C2u's missed ordering;
+  - a seeded export, so AC-C2u's "no worklist row" line can fail;
+  - Unit facts for the reach rule's two unpinned branches (an OK26 change dated before 1 April; an unknown version);
+  - a fact that a second write appends to an open row.
+- **R6 (Fable W1): a long publish makes other pay-input writers fail after 30 seconds instead of waiting** (Npgsql's default command timeout on the lock statement).
+  - At the local rate, about 3,000 people with four paid months reach the cliff (an extrapolation).
+  - It is registered at O-15 as an F-row with the CI-W5a figure.
+  - TASK-14831's ruled `PayInputsLock.cs` comment edit also corrects "Blocks until granted" (carried into its plan row).
+- **R7:** the profile PUT accepts any OK-version string. Both lenses rate it Low and inherited, and validating it would break the deliberate `OKS119` test key.
+  - Recorded here, below the register floor. Revisit on any change to the profile PUT's validation, alongside the config and override create routes.
+- **R9, `(unproven)`:** months after an OK version ends may depend on the changed months through carried flex balances. This questions refinement A-1's ruled reach, not the code.
