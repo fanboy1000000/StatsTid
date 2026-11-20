@@ -287,6 +287,241 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
             HttpStatusCode.OK, "the bare settlement reversal");
     }
 
+    // ─── row (2) (TASK-14823-T): the six configuration writes wait first and hold nothing else ───
+    //
+    // The actor is a GlobalAdmin (the five configuration routes are GlobalAdminOnly or, for the local profile,
+    // LocalAdminOrAbove). Everything a request needs before its transaction (a published predecessor, a draft, a
+    // deactivation) is done through the real routes BEFORE the test takes the lock; the dates are on or before the
+    // class clock (Thursday 5 March 2026) and a Monday where a Monday-only field could change.
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>POST /api/agreement-configs/{id}/publish</c> (a draft whose Monday-only fields equal its
+    /// predecessor's, date omitted, so today) waits on <c>(148, 1)</c>, holds only its virtual transaction id, and
+    /// answers 200 once the lock is released.
+    /// <para><b>Red conditions (before TASK-14823 no configuration write takes <c>(148, 1)</c>).</b> The publish
+    /// completes 200 while the lock is held, so <c>Assert.True(observed)</c> in <see cref="AssertWaitsFirstAsync"/>
+    /// fails. A publish that took another lock first would fail the granted-locks assertion. The serial premise is
+    /// the class's.</para>
+    /// </summary>
+    [Fact]
+    public async Task AgreementConfigPublish_WaitsFirst_HoldsNothingElse()
+    {
+        var client = GlobalAdminClient(_host);
+        var code = "PILPUB" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var (firstId, firstVersion) = await CreateConfigDraftAsync(client, code, 100m);
+        using (var first = await SendAsync(client, HttpMethod.Post, $"/api/agreement-configs/{firstId}/publish",
+                   new { appliesFrom = "2026-03-02" }, firstVersion))
+            Assert.True(first.StatusCode == HttpStatusCode.OK, $"the predecessor publish: {await first.Content.ReadAsStringAsync()}");
+        var (draftId, draftVersion) = await CreateConfigDraftAsync(client, code, 150m);
+
+        await AssertWaitsFirstAsync(
+            () => SendAsync(client, HttpMethod.Post, $"/api/agreement-configs/{draftId}/publish", body: null, draftVersion),
+            HttpStatusCode.OK, "the agreement-config publish");
+    }
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>POST /api/admin/position-overrides</c> ((AC, OK24, <c>SPECIALIST</c>), <c>maxFlexBalance</c>
+    /// only, date omitted) waits on the lock and answers 201 after the release.
+    /// <para><b>Red conditions.</b> As above: the create completes before it is observed waiting.</para>
+    /// </summary>
+    [Fact]
+    public async Task PositionOverrideCreate_WaitsFirst_HoldsNothingElse()
+    {
+        var client = GlobalAdminClient(_host);
+
+        await AssertWaitsFirstAsync(
+            () => client.PostAsJsonAsync("/api/admin/position-overrides", OverrideBody("SPECIALIST")),
+            HttpStatusCode.Created, "the position-override create");
+    }
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>PUT /api/admin/position-overrides/{id}</c> on the seeded (AC, OK24, <c>RESEARCHER</c>)
+    /// override (<c>maxFlexBalance</c> from none to 150, its real version, date omitted) waits on the lock and
+    /// answers 200 after the release.
+    /// <para><b>Red conditions.</b> As above.</para>
+    /// </summary>
+    [Fact]
+    public async Task PositionOverrideUpdate_WaitsFirst_HoldsNothingElse()
+    {
+        var client = GlobalAdminClient(_host);
+        var (overrideId, version) = await SeededResearcherOverrideAsync();
+
+        await AssertWaitsFirstAsync(
+            () => SendAsync(client, HttpMethod.Put, $"/api/admin/position-overrides/{overrideId}",
+                OverrideBody("RESEARCHER"), version),
+            HttpStatusCode.OK, "the position-override PUT");
+    }
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>POST /api/admin/position-overrides/{id}/deactivate</c> on that override (it sets no weekly
+    /// norm, its real version, date omitted) waits on the lock and answers 200 after the release.
+    /// <para><b>Red conditions.</b> As above.</para>
+    /// </summary>
+    [Fact]
+    public async Task PositionOverrideDeactivate_WaitsFirst_HoldsNothingElse()
+    {
+        var client = GlobalAdminClient(_host);
+        var (overrideId, version) = await SeededResearcherOverrideAsync();
+
+        await AssertWaitsFirstAsync(
+            () => SendAsync(client, HttpMethod.Post, $"/api/admin/position-overrides/{overrideId}/deactivate", body: null, version),
+            HttpStatusCode.OK, "the position-override deactivate");
+    }
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>POST /api/admin/position-overrides/{id}/activate</c> on that override, deactivated beforehand
+    /// (dated Monday 2 March 2026, through the route, before the test takes the lock), its real version, date omitted,
+    /// waits on the lock and answers 200 after the release.
+    /// <para><b>Red conditions.</b> As above.</para>
+    /// </summary>
+    [Fact]
+    public async Task PositionOverrideActivate_WaitsFirst_HoldsNothingElse()
+    {
+        var client = GlobalAdminClient(_host);
+        var (overrideId, version) = await SeededResearcherOverrideAsync();
+        using (var deactivated = await SendAsync(client, HttpMethod.Post, $"/api/admin/position-overrides/{overrideId}/deactivate",
+                   new { appliesFrom = "2026-03-02" }, version))
+            Assert.True(deactivated.StatusCode == HttpStatusCode.OK, $"the set-up deactivation: {await deactivated.Content.ReadAsStringAsync()}");
+        var (_, inactiveVersion) = await SeededResearcherOverrideAsync();
+
+        await AssertWaitsFirstAsync(
+            () => SendAsync(client, HttpMethod.Post, $"/api/admin/position-overrides/{overrideId}/activate", body: null, inactiveVersion),
+            HttpStatusCode.OK, "the position-override activate");
+    }
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>PUT /api/config/STY01/profile/HK/OK24</c> (<c>If-None-Match: *</c>, dated Monday 2 March 2026,
+    /// <c>maxFlexBalance</c> only) waits on the lock and answers 200 after the release.
+    /// <para><b>Red conditions.</b> As above: before TASK-14823 the profile write takes no pay-inputs lock.</para>
+    /// </summary>
+    [Fact]
+    public async Task LocalProfileWrite_WaitsFirst_HoldsNothingElse()
+    {
+        var client = GlobalAdminClient(_host);
+
+        await AssertWaitsFirstAsync(
+            () => PutProfileAsync(client, "STY01", ifMatchVersion: null, "2026-03-02", 30m),
+            HttpStatusCode.OK, "the local-profile write");
+    }
+
+    /// <summary>
+    /// <b>F (CI).</b> AC-C2u case 1 (ruling A9, Case A). A local-profile save whose predecessor is superseded while it
+    /// waits for the pay-inputs lock is refused with the route's existing 412 and writes nothing. R1 of STY01's (HK,
+    /// OK24) profile runs from Monday 5 January 2026 at version 1. The request (<c>If-Match: "1"</c>, dated Monday
+    /// 2 March 2026, <c>maxFlexBalance</c> only) reads R1 before its transaction, then waits for the lock the test
+    /// holds. Once PostgreSQL shows it waiting, the test closes R1 at Monday 2 February 2026 and inserts R2 from that
+    /// date at version 1. On release the request locks R2, whose version also satisfies <c>If-Match: "1"</c> and
+    /// whose start is BEFORE the request's date, so only the comparison of the locked row with the row the request
+    /// read can refuse it: 412 whose <c>currentState</c> names R2, R1 closed and R2 open and no third profile row,
+    /// and no audit row, outbox event or worklist row from the request. One HK person in STY01 has March 2026
+    /// exported, so a save that went through would list March and "no worklist row" can fail.
+    /// <para><b>Red conditions.</b> Before TASK-14823 the local-profile write takes no pay-inputs lock, so the
+    /// request never waits and the "observed waiting" assertion fails. The guard's own RED is M-49 (CI-M5): with BOTH
+    /// identity checks removed (the repository's step 2b and the id half of the route's guard 6b) and both version
+    /// checks kept, the stale <c>If-Match: "1"</c> passes against R2, the
+    /// request supersedes R2 at 2 March and answers 200, so the 412 assertion, the "R2 open" assertion, the "no
+    /// audit row" assertion and the "no worklist row" assertion (March) all fail.</para>
+    /// </summary>
+    [Fact]
+    public async Task LocalProfileWrite_PredecessorSupersededDuringTheWait_Refused412_NothingWritten() =>
+        await RunStalePredecessorCaseAsync(requestDate: "2026-03-02", r2From: new DateOnly(2026, 2, 2));
+
+    /// <summary>
+    /// <b>F (CI).</b> AC-C2u case 2 (the ordering Step 5a cycle 1 found). As case 1, but R2 is inserted from Monday
+    /// 9 March 2026, AFTER the request's date (Monday 2 March 2026): R1 is closed at 9 March and R2 opens that day at
+    /// version 1. The request locks R2, its version passes, and the date it carries is before R2's start, so the
+    /// repository's backdate guard ("a new profile cannot start before its predecessor") would refuse it with a 400
+    /// naming a predecessor the caller never saw. The ruled answer is the same 412 "refresh and retry" whose
+    /// <c>currentState</c> names R2, and nothing is written.
+    /// <para><b>Red conditions.</b> On <c>bb72fea1</c> (identity check absent, backdate guard first) the request
+    /// answers 400 <c>Invalid profile supersession</c>, so the 412 assertion fails. M-49 (both identity checks removed,
+    /// both version checks kept) reproduces that 400 here; removing the repository's step 2b alone already does.</para>
+    /// </summary>
+    [Fact]
+    public async Task LocalProfileWrite_PredecessorSupersededLaterThanTheRequestDate_Refused412Not400_NothingWritten() =>
+        await RunStalePredecessorCaseAsync(requestDate: "2026-03-02", r2From: new DateOnly(2026, 3, 9));
+
+    private async Task RunStalePredecessorCaseAsync(string requestDate, DateOnly r2From)
+    {
+        const string org = "STY01";
+        var r1 = Guid.NewGuid();
+        var r2 = Guid.NewGuid();
+        await ExecProfileSqlAsync(
+            """
+            INSERT INTO local_agreement_profiles
+                (profile_id, org_id, agreement_code, ok_version, effective_from, effective_to, max_flex_balance, created_by, version)
+            VALUES (@id, 'STY01', 'HK', 'OK24', @from, NULL, 20, 'seed_r1', 1)
+            """, ("id", r1), ("from", new DateOnly(2026, 1, 5)));
+        // March 2026 is exported for one HK person of STY01: a save that reached the hand-off would list it.
+        var person = await SeedPersonAsync(Cs, org, "HK");
+        await ExecProfileSqlAsync(
+            """
+            INSERT INTO payroll_export_records
+                (export_id, period_id, employee_id, year, month, original_lines, current_effective_lines, content_hash)
+            VALUES (gen_random_uuid(), NULL, @e, 2026, 3,
+                    '[{"wageType":"SLS_0110","hours":7.4}]'::jsonb, '[{"wageType":"SLS_0110","hours":7.4}]'::jsonb, 'hash-2026-3')
+            """, ("e", person));
+        var client = GlobalAdminClient(_host);
+        const string who = "the local-profile save with a stale predecessor";
+
+        await using var held = await HeldLock.AcquireAsync(Cs);
+        var request = PutProfileAsync(client, org, ifMatchVersion: 1, requestDate, 30m);
+
+        var observed = await PriorMonthExportRaceTests.WaitUntilAsync(
+            async () => (await WaitingPidsAsync()).Count > 0, TimeSpan.FromSeconds(30), () => request.IsCompleted);
+        var early = string.Empty;
+        if (request.IsCompletedSuccessfully)
+        {
+            var answered = await request;
+            early = $" The request already answered {(int)answered.StatusCode}: {await answered.Content.ReadAsStringAsync()}";
+        }
+        Assert.True(observed,
+            $"{who} was never observed waiting on the pay-inputs lock (148, 1) (request status: {request.Status}).{early}" +
+            PriorMonthExportRaceTests.DescribeFault(request));
+        Assert.False(request.IsCompleted, $"{who} finished while the pay-inputs lock was still held.");
+        await AssertHoldsNothingElseAsync(Assert.Single(await WaitingPidsAsync()), who);
+
+        // The other administrator's save, committed while the request waits: R1 closed, R2 opened from the same day.
+        await ExecProfileSqlAsync(
+            "UPDATE local_agreement_profiles SET effective_to = @cut WHERE profile_id = @r1",
+            ("r1", r1), ("cut", r2From));
+        await ExecProfileSqlAsync(
+            """
+            INSERT INTO local_agreement_profiles
+                (profile_id, org_id, agreement_code, ok_version, effective_from, effective_to, max_flex_balance, created_by, version)
+            VALUES (@r2, 'STY01', 'HK', 'OK24', @cut, NULL, 25, 'seed_r2', 1)
+            """, ("r2", r2), ("cut", r2From));
+
+        await held.ReleaseAsync();
+        using var rsp = await request;
+        var body = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.PreconditionFailed,
+            $"{who} should answer 412 once the lock is released, got {(int)rsp.StatusCode}: {body}");
+        // The 412 tells the caller what is current now: R2.
+        using (var json = System.Text.Json.JsonDocument.Parse(body))
+        {
+            var current = json.RootElement.GetProperty("currentState");
+            Assert.Equal(r2, current.GetProperty("profileId").GetGuid());
+        }
+
+        Assert.Equal(2L, await ScalarLongAsync(Cs,
+            "SELECT COUNT(*) FROM local_agreement_profiles WHERE org_id = 'STY01' AND agreement_code = 'HK' AND ok_version = 'OK24'"));
+        Assert.Equal(1L, await ScalarLongAsync(Cs,
+            "SELECT COUNT(*) FROM local_agreement_profiles WHERE profile_id = @r1 AND effective_to = @cut",
+            ("r1", r1), ("cut", r2From)));
+        Assert.Equal(1L, await ScalarLongAsync(Cs,
+            "SELECT COUNT(*) FROM local_agreement_profiles WHERE profile_id = @r2 AND effective_to IS NULL AND version = 1 AND max_flex_balance = 25",
+            ("r2", r2)));
+        Assert.Equal(0L, await ScalarLongAsync(Cs,
+            "SELECT COUNT(*) FROM local_agreement_profile_audit WHERE actor_id = @a", ("a", "ADMIN_S148_ORG")));
+        Assert.Equal(0L, await ScalarLongAsync(Cs,
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = 'local-agreement-profile-STY01-HK-OK24'"));
+        Assert.Equal(0L, await ScalarLongAsync(Cs,
+            "SELECT COUNT(*) FROM audit_projection WHERE actor_id = @a", ("a", "ADMIN_S148_ORG")));
+        Assert.Equal(0L, await ScalarLongAsync(Cs,
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE employee_id = @e", ("e", person)));
+    }
+
     // ─── machinery (private; rows (2) and (3) of AC-PIL-e add their facts to this class) ───
 
     /// <summary>The held lock: a connection and open transaction that ran <c>pg_advisory_xact_lock(148, 1)</c>,
@@ -412,6 +647,107 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
     }
 
     // ─── fixtures ───
+
+    // Row (2)'s request helpers (TASK-14823-T).
+
+    /// <summary>A draft agreement config on (<paramref name="agreementCode"/>, OK24) through the real create route; its id and ETag version.</summary>
+    private static async Task<(Guid Id, long Version)> CreateConfigDraftAsync(
+        HttpClient client, string agreementCode, decimal maxFlexBalance)
+    {
+        using var rsp = await client.PostAsJsonAsync("/api/agreement-configs", new
+        {
+            agreementCode,
+            okVersion = "OK24",
+            description = "S148 pay-inputs lock census",
+            normModel = "WEEKLY_HOURS",
+            weeklyNormHours = 37m,
+            normPeriodWeeks = 1,
+            annualNormHours = 1924m,
+            maxFlexBalance,
+            hasOvertime = true,
+            hasMerarbejde = false,
+            overtimeThreshold50 = 37m,
+            overtimeThreshold100 = 44m,
+            eveningSupplementEnabled = false,
+            nightSupplementEnabled = false,
+            weekendSupplementEnabled = false,
+            holidaySupplementEnabled = false,
+            eveningStart = 17,
+            eveningEnd = 23,
+            nightStart = 23,
+            nightEnd = 6,
+            eveningRate = 1.25m,
+            nightRate = 1.5m,
+            weekendSaturdayRate = 1.5m,
+            weekendSundayRate = 2m,
+            holidayRate = 2m,
+            onCallDutyEnabled = false,
+            onCallDutyRate = 0.33m,
+            callInWorkEnabled = false,
+            callInMinimumHours = 3m,
+            callInRate = 1m,
+            travelTimeEnabled = false,
+            workingTravelRate = 1m,
+            nonWorkingTravelRate = 0.5m,
+            maxDailyHours = 13m,
+            minimumRestHours = 11m,
+            restPeriodDerogationAllowed = false,
+            weeklyMaxHoursReferencePeriod = 17,
+            voluntaryUnsocialHoursAllowed = true,
+        });
+        var text = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.Created, $"the set-up draft create: {(int)rsp.StatusCode}: {text}");
+        var id = System.Text.Json.JsonDocument.Parse(text).RootElement.GetProperty("configId").GetGuid();
+        return (id, long.Parse(rsp.Headers.ETag!.Tag.Trim('"'), CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>An override write body for (AC, OK24, <paramref name="positionCode"/>): <c>maxFlexBalance</c> 150, no weekly norm, date omitted.</summary>
+    private static object OverrideBody(string positionCode) => new
+    {
+        agreementCode = "AC",
+        okVersion = "OK24",
+        positionCode,
+        maxFlexBalance = 150m,
+        normPeriodWeeks = 4,
+        weeklyNormHours = (decimal?)null,
+        description = "S148 pay-inputs lock census",
+    };
+
+    /// <summary>The seeded (AC, OK24, RESEARCHER) override's id and its CURRENT head version.</summary>
+    private async Task<(Guid Id, long Version)> SeededResearcherOverrideAsync()
+    {
+        const string where = "WHERE agreement_code = 'AC' AND ok_version = 'OK24' AND position_code = 'RESEARCHER'";
+        var id = await ScalarStringAsync(Cs, "SELECT override_id::text FROM position_override_configs " + where);
+        var version = await ScalarLongAsync(Cs, "SELECT version FROM position_override_configs " + where);
+        return (Guid.Parse(id!), version);
+    }
+
+    /// <summary>The local-profile PUT for (<paramref name="orgId"/>, HK, OK24) with <c>maxFlexBalance</c> only: <c>If-Match "n"</c>, or <c>If-None-Match: *</c> when null.</summary>
+    private static async Task<HttpResponseMessage> PutProfileAsync(
+        HttpClient client, string orgId, long? ifMatchVersion, string effectiveFrom, decimal maxFlexBalance)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/config/{orgId}/profile/HK/OK24")
+        {
+            Content = JsonContent.Create(new { effectiveFrom, maxFlexBalance }),
+        };
+        if (ifMatchVersion is { } version)
+            req.Headers.TryAddWithoutValidation("If-Match", $"\"{version}\"");
+        else
+            req.Headers.TryAddWithoutValidation("If-None-Match", "*");
+        return await client.SendAsync(req);
+    }
+
+#pragma warning disable CA2100 // each sql is a literal at its call site; values flow through parameters (QUAL-073).
+    private async Task ExecProfileSqlAsync(string sql, params (string Name, object Value)[] parameters)
+    {
+        await using var conn = new NpgsqlConnection(Cs);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        foreach (var (name, value) in parameters)
+            cmd.Parameters.AddWithValue(name, value);
+        await cmd.ExecuteNonQueryAsync();
+    }
+#pragma warning restore CA2100
 
     private Task<long> VersionAsync(string userId) =>
         ScalarLongAsync(Cs, "SELECT version FROM users WHERE user_id = @u", ("u", userId));

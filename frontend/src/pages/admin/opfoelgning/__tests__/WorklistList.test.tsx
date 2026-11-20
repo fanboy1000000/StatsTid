@@ -185,6 +185,48 @@ describe('WorklistList — trigger kind labels', () => {
     await waitFor(() => expect(screen.getByText(/Forrige måned genåbnet — effektiv fra/)).toBeDefined())
     expect(screen.queryByText(/PRIOR_MONTH_REOPENED/)).toBeNull()
   })
+
+  it('a CONFIG_PUBLISHED trigger renders the Danish label, not the raw kind', async () => {
+    const base = exportedMonthRow()
+    mockFetch.mockImplementationOnce(async () =>
+      jsonResponse([exportedMonthRow({
+        triggers: [{ ...(base.triggers[0] as object), kind: 'CONFIG_PUBLISHED' }],
+      })]),
+    )
+
+    render(<WorklistList onResolved={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByText(/Konfigurationsændring — effektiv fra/)).toBeDefined())
+    expect(screen.queryByText(/CONFIG_PUBLISHED/)).toBeNull()
+  })
+
+  it('a ORGANISATION_TRANSFER trigger renders the Danish label, not the raw kind', async () => {
+    const base = exportedMonthRow()
+    mockFetch.mockImplementationOnce(async () =>
+      jsonResponse([exportedMonthRow({
+        triggers: [{ ...(base.triggers[0] as object), kind: 'ORGANISATION_TRANSFER' }],
+      })]),
+    )
+
+    render(<WorklistList onResolved={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByText(/Organisationsskift — effektiv fra/)).toBeDefined())
+    expect(screen.queryByText(/ORGANISATION_TRANSFER/)).toBeNull()
+  })
+
+  it('a EMPLOYMENT_WINDOW_CHANGE trigger renders the Danish label, not the raw kind', async () => {
+    const base = exportedMonthRow()
+    mockFetch.mockImplementationOnce(async () =>
+      jsonResponse([exportedMonthRow({
+        triggers: [{ ...(base.triggers[0] as object), kind: 'EMPLOYMENT_WINDOW_CHANGE' }],
+      })]),
+    )
+
+    render(<WorklistList onResolved={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByText(/Ansættelsesperiode-ændring — effektiv fra/)).toBeDefined())
+    expect(screen.queryByText(/EMPLOYMENT_WINDOW_CHANGE/)).toBeNull()
+  })
 })
 
 describe('WorklistList — a blocked row never shows the run-instruction', () => {

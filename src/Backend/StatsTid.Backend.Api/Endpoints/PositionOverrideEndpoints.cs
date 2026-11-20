@@ -78,6 +78,14 @@ public static class PositionOverrideEndpoints
         // OutboxPublisher drains outbox_events to the canonical event store at-least-
         // once (ADR-018 D4), replacing the pre-S24 post-commit eventStore.AppendAsync
         // shape and closing the silent partial-failure window.
+        //
+        // Every override write (create, PUT, deactivate, activate) runs at READ COMMITTED, stated
+        // explicitly, takes the pay-inputs lock as its first statement, and lists on HR's worklist,
+        // last before its commit, the exported months and settled holiday years it reaches for the
+        // holders of the position (S148 T19, Q-2 = (a)). Lock order (Block C; the TASK-14818 Step 5a
+        // ruling 1.1): pay inputs → the position-override- key lock (in the repository) → the heads
+        // FOR UPDATE → the head write, then the version row → the audit, outbox and projection rows,
+        // then the worklist rows. A transaction holding position-override- takes no other advisory lock.
         app.MapPost("/api/admin/position-overrides", async (
             CreatePositionOverrideRequest body,
             DbConnectionFactory connectionFactory,
@@ -85,6 +93,7 @@ public static class PositionOverrideEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideCreated> createdMapper,
             AuditProjectionRepository auditRepo,
+            HrBackdateWorklistRepository worklistRepo,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -135,9 +144,17 @@ public static class PositionOverrideEndpoints
             {
                 await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                // READ COMMITTED, stated explicitly (PAT-015): the first statement waits for the
+                // pay-inputs lock, and the worklist read after it must see a payroll recording that
+                // committed during the wait.
+                await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement; nothing is held
+                    // before it on this or any other connection. Lock order: pay inputs →
+                    // position-override- → the heads FOR UPDATE → the version row → the worklist rows.
+                    await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                     // The head row and its first version row, dated appliesFrom (NR-P8, NR-P21).
                     created = await repo.CreateReturningAsync(conn, tx, entity, appliesFrom, ct);
                     overrideId = created.OverrideId;
@@ -175,6 +192,13 @@ public static class PositionOverrideEndpoints
                         OccurredAt: new DateTimeOffset(@event.OccurredAt));
                     var auditRow = createdMapper.Map(@event, auditCtx);
                     await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                    // The hand-off (S148 T19), last before the commit: the holders of the position on
+                    // the agreement code, from the override's date (CONFIG_PUBLISHED, flag only).
+                    await worklistRepo.WriteForConfigurationChangeAsync(
+                        conn, tx,
+                        new ConfigurationChange(created.AgreementCode, created.OkVersion, appliesFrom, PositionCode: created.PositionCode),
+                        @event.EventId, actorId, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -224,6 +248,7 @@ public static class PositionOverrideEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideUpdated> updatedMapper,
             AuditProjectionRepository auditRepo,
+            HrBackdateWorklistRepository worklistRepo,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -313,9 +338,16 @@ public static class PositionOverrideEndpoints
             {
                 await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                // READ COMMITTED, stated explicitly (PAT-015), as on the create route.
+                await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement; nothing is held
+                    // before it (the pre-flight read above has finished on its own connection). Lock
+                    // order: pay inputs → position-override- → the heads FOR UPDATE → the version row →
+                    // the worklist rows.
+                    await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                     saveResult = await repo.UpdateAsync(
                         conn, tx, overrideId, expectedVersion, updatedEntity, appliesFrom, actorId, ct);
 
@@ -353,6 +385,16 @@ public static class PositionOverrideEndpoints
                         OccurredAt: new DateTimeOffset(@event.OccurredAt));
                     var auditRow = updatedMapper.Map(@event, auditCtx);
                     await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                    // The hand-off (S148 T19), last before the commit: the holders of the position on
+                    // the agreement code, from the edit's date (CONFIG_PUBLISHED, flag only). The key is
+                    // the written head's, read under the key lock.
+                    await worklistRepo.WriteForConfigurationChangeAsync(
+                        conn, tx,
+                        new ConfigurationChange(
+                            saveResult.Override.AgreementCode, saveResult.Override.OkVersion, appliesFrom,
+                            PositionCode: saveResult.Override.PositionCode),
+                        @event.EventId, actorId, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -401,6 +443,7 @@ public static class PositionOverrideEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideDeactivated> deactivatedMapper,
             AuditProjectionRepository auditRepo,
+            HrBackdateWorklistRepository worklistRepo,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -438,9 +481,16 @@ public static class PositionOverrideEndpoints
             {
                 await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                // READ COMMITTED, stated explicitly (PAT-015), as on the create route.
+                await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement; nothing is held
+                    // before it (the pre-flight read above has finished on its own connection). Lock
+                    // order: pay inputs → position-override- → the heads FOR UPDATE → the version row →
+                    // the worklist rows.
+                    await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                     saveResult = await repo.DeactivateAsync(
                         conn, tx, overrideId, expectedVersion, appliesFrom, actorId, ct);
 
@@ -472,6 +522,15 @@ public static class PositionOverrideEndpoints
                         OccurredAt: new DateTimeOffset(@event.OccurredAt));
                     var auditRow = deactivatedMapper.Map(@event, auditCtx);
                     await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                    // The hand-off (S148 T19), last before the commit: the holders of the position on
+                    // the agreement code, from the date the override stops (CONFIG_PUBLISHED, flag only).
+                    await worklistRepo.WriteForConfigurationChangeAsync(
+                        conn, tx,
+                        new ConfigurationChange(
+                            saveResult.Override.AgreementCode, saveResult.Override.OkVersion, appliesFrom,
+                            PositionCode: saveResult.Override.PositionCode),
+                        @event.EventId, actorId, ct);
 
                     await tx.CommitAsync(ct);
                 }
@@ -530,6 +589,7 @@ public static class PositionOverrideEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PositionOverrideActivated> activatedMapper,
             AuditProjectionRepository auditRepo,
+            HrBackdateWorklistRepository worklistRepo,
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -569,9 +629,16 @@ public static class PositionOverrideEndpoints
             {
                 await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                // READ COMMITTED, stated explicitly (PAT-015), as on the create route.
+                await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // (0) S148 PIL — the pay-inputs lock exclusive, the FIRST statement; nothing is held
+                    // before it (the pre-flight read above has finished on its own connection). Lock
+                    // order: pay inputs → position-override- → the heads FOR UPDATE → the version row →
+                    // the worklist rows.
+                    await PayInputsLock.AcquireExclusiveAsync(conn, tx, ct);
+
                     saveResult = await repo.ActivateAsync(
                         conn, tx, overrideId, expectedVersion, appliesFrom, actorId, ct);
 
@@ -603,6 +670,16 @@ public static class PositionOverrideEndpoints
                         OccurredAt: new DateTimeOffset(@event.OccurredAt));
                     var auditRow = activatedMapper.Map(@event, auditCtx);
                     await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+                    // The hand-off (S148 T19), last before the commit: the holders of the position on
+                    // the agreement code, from the date the override starts again (CONFIG_PUBLISHED,
+                    // flag only).
+                    await worklistRepo.WriteForConfigurationChangeAsync(
+                        conn, tx,
+                        new ConfigurationChange(
+                            saveResult.Override.AgreementCode, saveResult.Override.OkVersion, appliesFrom,
+                            PositionCode: saveResult.Override.PositionCode),
+                        @event.EventId, actorId, ct);
 
                     await tx.CommitAsync(ct);
                 }

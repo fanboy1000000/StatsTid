@@ -462,7 +462,8 @@ public sealed class AgreementConfigRepository
             okVersion = reader.GetString(1);
         }
 
-        // 2. The key lock (ruling B4) — this write's first lock.
+        // 2. The key lock (ruling B4) — the first lock this repository takes (the route took the
+        //    pay-inputs lock before it).
         await LockKeyAsync(conn, tx, agreementCode, okVersion, ct);
 
         // 3. The draft under the lock (its row is one of the key's): status + version, and the values the
@@ -657,11 +658,13 @@ public sealed class AgreementConfigRepository
 
     /// <summary>
     /// The key lock (TASK-14818 item 4.4, ruling B4): every row of (<paramref name="agreementCode"/>,
-    /// <paramref name="okVersion"/>) <c>FOR UPDATE</c>, in id order, as a publish's first lock. Every publish
-    /// of the key takes the same rows in the same order, so they take turns without deadlocking, and a
-    /// waiter wakes holding all of them (a row it waited for still belongs to the key: the key columns never
-    /// change). Its next statement, at READ COMMITTED, sees the publish it waited for. In Block C's order
-    /// (PLAN:282-283) this is "the config row FOR UPDATE"; TASK-14823 puts the pay-inputs lock ahead of it.
+    /// <paramref name="okVersion"/>) <c>FOR UPDATE</c>, in id order, as the first lock this repository takes
+    /// in a publish. Every publish of the key takes the same rows in the same order, so they take turns
+    /// without deadlocking, and a waiter wakes holding all of them (a row it waited for still belongs to the
+    /// key: the key columns never change). Its next statement, at READ COMMITTED, sees the publish it waited
+    /// for. In Block C's lock order (S148 PIL) this is "the config row FOR UPDATE", the publish's second
+    /// lock: the publish route takes the pay-inputs lock (<see cref="PayInputsLock"/>) first, at its
+    /// transaction head, and lands the worklist rows last.
     /// </summary>
     private static async Task LockKeyAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string agreementCode, string okVersion, CancellationToken ct)
