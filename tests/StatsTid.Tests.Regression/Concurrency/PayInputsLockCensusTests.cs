@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
@@ -403,25 +403,43 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
             () => PutProfileAsync(client, "STY01", ifMatchVersion: null, "2026-03-02", 30m),
             HttpStatusCode.OK, "the local-profile write");
     }
-
     /// <summary>
-    /// <b>F (CI).</b> AC-C2u (ruling A9, Case A). A local-profile save whose predecessor is superseded while it waits
-    /// for the pay-inputs lock is refused with the route's existing 412 and writes nothing. R1 of STY01's (HK, OK24)
-    /// profile runs from Monday 5 January 2026 at version 1. The request (<c>If-Match: "1"</c>, dated Monday 2 March
-    /// 2026, <c>maxFlexBalance</c> only) reads R1 before its transaction, then waits for the lock the test holds.
-    /// Once PostgreSQL shows it waiting, the test closes R1 at Monday 2 February 2026 and inserts R2 from that date
-    /// at version 1 (the request holds no row lock yet). On release the request locks R2, whose version also
-    /// satisfies <c>If-Match: "1"</c>, so only the route's comparison of the locked row with the row it read can
-    /// refuse it: 412, R1 closed and R2 open and no third profile row, and no audit row, outbox event or worklist
-    /// row from the request (each read filtered to the request's key and actor).
+    /// <b>F (CI).</b> AC-C2u case 1 (ruling A9, Case A). A local-profile save whose predecessor is superseded while it
+    /// waits for the pay-inputs lock is refused with the route's existing 412 and writes nothing. R1 of STY01's (HK,
+    /// OK24) profile runs from Monday 5 January 2026 at version 1. The request (<c>If-Match: "1"</c>, dated Monday
+    /// 2 March 2026, <c>maxFlexBalance</c> only) reads R1 before its transaction, then waits for the lock the test
+    /// holds. Once PostgreSQL shows it waiting, the test closes R1 at Monday 2 February 2026 and inserts R2 from that
+    /// date at version 1. On release the request locks R2, whose version also satisfies <c>If-Match: "1"</c> and
+    /// whose start is BEFORE the request's date, so only the comparison of the locked row with the row the request
+    /// read can refuse it: 412 whose <c>currentState</c> names R2, R1 closed and R2 open and no third profile row,
+    /// and no audit row, outbox event or worklist row from the request. One HK person in STY01 has March 2026
+    /// exported, so a save that went through would list March and "no worklist row" can fail.
     /// <para><b>Red conditions.</b> Before TASK-14823 the local-profile write takes no pay-inputs lock, so the
-    /// request never waits and the "observed waiting" assertion fails, as in the row-(2) facts above. The guard's own
-    /// RED is M-49 (CI-M5): with the route's identity comparison removed and the repository's version check kept, the
-    /// stale <c>If-Match: "1"</c> passes against R2, the request supersedes R2 at 2 March and answers 200, so the
-    /// 412 assertion, the "R2 open" assertion and the "no audit row" assertion all fail.</para>
+    /// request never waits and the "observed waiting" assertion fails. The guard's own RED is M-49 (CI-M5): with the
+    /// identity check removed and the version check kept, the stale <c>If-Match: "1"</c> passes against R2, the
+    /// request supersedes R2 at 2 March and answers 200, so the 412 assertion, the "R2 open" assertion, the "no
+    /// audit row" assertion and the "no worklist row" assertion (March) all fail.</para>
     /// </summary>
     [Fact]
-    public async Task LocalProfileWrite_PredecessorSupersededDuringTheWait_Refused412_NothingWritten()
+    public async Task LocalProfileWrite_PredecessorSupersededDuringTheWait_Refused412_NothingWritten() =>
+        await RunStalePredecessorCaseAsync(requestDate: "2026-03-02", r2From: new DateOnly(2026, 2, 2));
+
+    /// <summary>
+    /// <b>F (CI).</b> AC-C2u case 2 (the ordering Step 5a cycle 1 found). As case 1, but R2 is inserted from Monday
+    /// 9 March 2026, AFTER the request's date (Monday 2 March 2026): R1 is closed at 9 March and R2 opens that day at
+    /// version 1. The request locks R2, its version passes, and the date it carries is before R2's start, so the
+    /// repository's backdate guard ("a new profile cannot start before its predecessor") would refuse it with a 400
+    /// naming a predecessor the caller never saw. The ruled answer is the same 412 "refresh and retry" whose
+    /// <c>currentState</c> names R2, and nothing is written.
+    /// <para><b>Red conditions.</b> On <c>bb72fea1</c> (identity check absent, backdate guard first) the request
+    /// answers 400 <c>Invalid profile supersession</c>, so the 412 assertion fails. M-49 (the identity check removed)
+    /// reproduces that 400 here.</para>
+    /// </summary>
+    [Fact]
+    public async Task LocalProfileWrite_PredecessorSupersededLaterThanTheRequestDate_Refused412Not400_NothingWritten() =>
+        await RunStalePredecessorCaseAsync(requestDate: "2026-03-02", r2From: new DateOnly(2026, 3, 9));
+
+    private async Task RunStalePredecessorCaseAsync(string requestDate, DateOnly r2From)
     {
         const string org = "STY01";
         var r1 = Guid.NewGuid();
@@ -432,11 +450,20 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
                 (profile_id, org_id, agreement_code, ok_version, effective_from, effective_to, max_flex_balance, created_by, version)
             VALUES (@id, 'STY01', 'HK', 'OK24', @from, NULL, 20, 'seed_r1', 1)
             """, ("id", r1), ("from", new DateOnly(2026, 1, 5)));
+        // March 2026 is exported for one HK person of STY01: a save that reached the hand-off would list it.
+        var person = await SeedPersonAsync(Cs, org, "HK");
+        await ExecProfileSqlAsync(
+            """
+            INSERT INTO payroll_export_records
+                (export_id, period_id, employee_id, year, month, original_lines, current_effective_lines, content_hash)
+            VALUES (gen_random_uuid(), NULL, @e, 2026, 3,
+                    '[{"wageType":"SLS_0110","hours":7.4}]'::jsonb, '[{"wageType":"SLS_0110","hours":7.4}]'::jsonb, 'hash-2026-3')
+            """, ("e", person));
         var client = GlobalAdminClient(_host);
         const string who = "the local-profile save with a stale predecessor";
 
         await using var held = await HeldLock.AcquireAsync(Cs);
-        var request = PutProfileAsync(client, org, ifMatchVersion: 1, "2026-03-02", 30m);
+        var request = PutProfileAsync(client, org, ifMatchVersion: 1, requestDate, 30m);
 
         var observed = await PriorMonthExportRaceTests.WaitUntilAsync(
             async () => (await WaitingPidsAsync()).Count > 0, TimeSpan.FromSeconds(30), () => request.IsCompleted);
@@ -455,24 +482,31 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
         // The other administrator's save, committed while the request waits: R1 closed, R2 opened from the same day.
         await ExecProfileSqlAsync(
             "UPDATE local_agreement_profiles SET effective_to = @cut WHERE profile_id = @r1",
-            ("r1", r1), ("cut", new DateOnly(2026, 2, 2)));
+            ("r1", r1), ("cut", r2From));
         await ExecProfileSqlAsync(
             """
             INSERT INTO local_agreement_profiles
                 (profile_id, org_id, agreement_code, ok_version, effective_from, effective_to, max_flex_balance, created_by, version)
             VALUES (@r2, 'STY01', 'HK', 'OK24', @cut, NULL, 25, 'seed_r2', 1)
-            """, ("r2", r2), ("cut", new DateOnly(2026, 2, 2)));
+            """, ("r2", r2), ("cut", r2From));
 
         await held.ReleaseAsync();
         using var rsp = await request;
+        var body = await rsp.Content.ReadAsStringAsync();
         Assert.True(rsp.StatusCode == HttpStatusCode.PreconditionFailed,
-            $"{who} should answer 412 once the lock is released, got {(int)rsp.StatusCode}: {await rsp.Content.ReadAsStringAsync()}");
+            $"{who} should answer 412 once the lock is released, got {(int)rsp.StatusCode}: {body}");
+        // The 412 tells the caller what is current now: R2.
+        using (var json = System.Text.Json.JsonDocument.Parse(body))
+        {
+            var current = json.RootElement.GetProperty("currentState");
+            Assert.Equal(r2, current.GetProperty("profileId").GetGuid());
+        }
 
         Assert.Equal(2L, await ScalarLongAsync(Cs,
             "SELECT COUNT(*) FROM local_agreement_profiles WHERE org_id = 'STY01' AND agreement_code = 'HK' AND ok_version = 'OK24'"));
         Assert.Equal(1L, await ScalarLongAsync(Cs,
             "SELECT COUNT(*) FROM local_agreement_profiles WHERE profile_id = @r1 AND effective_to = @cut",
-            ("r1", r1), ("cut", new DateOnly(2026, 2, 2))));
+            ("r1", r1), ("cut", r2From)));
         Assert.Equal(1L, await ScalarLongAsync(Cs,
             "SELECT COUNT(*) FROM local_agreement_profiles WHERE profile_id = @r2 AND effective_to IS NULL AND version = 1 AND max_flex_balance = 25",
             ("r2", r2)));
@@ -483,7 +517,7 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
         Assert.Equal(0L, await ScalarLongAsync(Cs,
             "SELECT COUNT(*) FROM audit_projection WHERE actor_id = @a", ("a", "ADMIN_S148_ORG")));
         Assert.Equal(0L, await ScalarLongAsync(Cs,
-            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE created_by = @a", ("a", "ADMIN_S148_ORG")));
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE employee_id = @e", ("e", person)));
     }
 
     // ─── machinery (private; rows (2) and (3) of AC-PIL-e add their facts to this class) ───

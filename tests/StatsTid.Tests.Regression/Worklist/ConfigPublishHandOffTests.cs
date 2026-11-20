@@ -331,6 +331,61 @@ public sealed class ConfigPublishHandOffTests : DatedConfigDockerFixture
             ("s", $"employee-{person}")));
     }
 
+    // ─── R4 (fix-up 1) ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// <b>R (CI) against the stack tip; F against master (<c>5685aa3d</c>, where no save lands a row).</b> Two saves of
+    /// one key reaching the same exported month land ONE row, not two. A person on HK in STY01 with March 2026
+    /// exported; STY01's (HK, OK24) local profile is created dated Monday 2 March 2026 and then saved again
+    /// (<c>If-Match: "1"</c>) dated Monday 9 March 2026, so both reach March. March's worklist row carries two
+    /// <c>CONFIG_PUBLISHED</c> triggers (2026-03-02, then 2026-03-09) and has version 2, and the person's stream holds
+    /// two <c>BackdateWorklistRowCreated</c> events, the first with <c>appended</c> false and the second with
+    /// <c>appended</c> true.
+    /// <para><b>Red conditions.</b> A hand-off that inserted a second row per save fails <c>Assert.Single(rows)</c>; one
+    /// that dropped the second trigger fails the trigger assertion; an upsert that did not bump the version, or an
+    /// event that always said <c>appended: false</c>, fails the version and event assertions. Kind R on the tip
+    /// because the shared upsert already appends; this is the first pin that a configuration save does.</para>
+    /// </summary>
+    [Fact]
+    public async Task TwoSavesReachingOneExportedMonth_OneRowTwoTriggers_SecondEventAppended()
+    {
+        var admin = AdminAt(Clock);
+        var person = await SeedPersonAsync(ConnectionString, "STY01", "HK");
+        await SeedExportRecordAsync(person, 2026, 3);
+
+        using (var first = await PutLocalProfileAsync(admin, "STY01", "HK", "OK24", "2026-03-02"))
+            Assert.True(first.StatusCode == HttpStatusCode.OK,
+                $"first local profile write expected 200, got {(int)first.StatusCode}: {await first.Content.ReadAsStringAsync()}");
+        using (var second = await PutLocalProfileAsync(admin, "STY01", "HK", "OK24", "2026-03-09", ifMatchVersion: 1))
+            Assert.True(second.StatusCode == HttpStatusCode.OK,
+                $"second local profile write expected 200, got {(int)second.StatusCode}: {await second.Content.ReadAsStringAsync()}");
+
+        var rows = await ReadRowsAsync(person);
+        var row = Assert.Single(rows);
+        Assert.Equal(("EXPORTED_MONTH", 2026, 3), (row.Kind, row.Year, row.Month));
+        Assert.Equal(new[] { "2026-03-02", "2026-03-09" },
+            row.Triggers.Select(t => t.GetProperty("effectiveFrom").GetString()).ToArray());
+        Assert.All(row.Triggers, t => Assert.Equal(Kind, t.GetProperty("kind").GetString()));
+        Assert.Equal(2L, await ScalarAsync<long>(
+            "SELECT version FROM hr_backdate_worklist WHERE employee_id = @e", ("e", person)));
+
+        var appended = new List<bool>();
+        await using (var conn = new NpgsqlConnection(ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT (event_payload ->> 'appended')::boolean FROM outbox_events
+                WHERE stream_id = @s AND event_type = 'BackdateWorklistRowCreated' ORDER BY outbox_id
+                """, conn);
+            cmd.Parameters.AddWithValue("s", $"employee-{person}");
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                appended.Add(reader.GetBoolean(0));
+        }
+        Assert.Equal(new[] { false, true }, appended.ToArray());
+    }
+
     // ─── assertions ──────────────────────────────────────────────────────────────
 
     /// <summary>The person's rows are exactly the EXPORTED_MONTH rows for <paramref name="months"/> (any order), each
@@ -480,16 +535,19 @@ public sealed class ConfigPublishHandOffTests : DatedConfigDockerFixture
         await ExecAsync("UPDATE users SET primary_org_id = @o WHERE user_id = @u", ("u", employeeId), ("o", toOrg));
     }
 
-    /// <summary>The local-profile first create (<c>If-None-Match: *</c>) with <c>maxFlexBalance</c> only.</summary>
+    /// <summary>The local-profile PUT with <c>maxFlexBalance</c> only: the first create (<c>If-None-Match: *</c>), or <c>If-Match "n"</c> when <paramref name="ifMatchVersion"/> is given.</summary>
     private static async Task<HttpResponseMessage> PutLocalProfileAsync(
-        HttpClient admin, string orgId, string agreementCode, string okVersion, string effectiveFrom)
+        HttpClient admin, string orgId, string agreementCode, string okVersion, string effectiveFrom, long? ifMatchVersion = null)
     {
         var request = new HttpRequestMessage(HttpMethod.Put, $"/api/config/{orgId}/profile/{agreementCode}/{okVersion}")
         {
             Content = new StringContent(
                 $$"""{"effectiveFrom":"{{effectiveFrom}}","maxFlexBalance":30.0}""", Encoding.UTF8, "application/json"),
         };
-        request.Headers.TryAddWithoutValidation("If-None-Match", "*");
+        if (ifMatchVersion is { } version)
+            request.Headers.TryAddWithoutValidation("If-Match", $"\"{version}\"");
+        else
+            request.Headers.TryAddWithoutValidation("If-None-Match", "*");
         return await admin.SendAsync(request);
     }
 }
