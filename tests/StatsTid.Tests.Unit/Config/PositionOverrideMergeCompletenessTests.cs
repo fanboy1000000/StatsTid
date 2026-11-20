@@ -91,7 +91,7 @@ public class PositionOverrideMergeCompletenessTests
             .Where(p => !Equals(p.GetValue(baseConfig), p.GetValue(emptied)))
             .Select(p => p.Name)
             .ToList();
-        Assert.Empty(emptyDiffers);
+        Assert.True(emptyDiffers.Count == 0, "An empty override changed: " + string.Join(", ", emptyDiffers));
 
         // A full override changes exactly its three members.
         var full = PositionOverrideConfigs.ApplyOverride(baseConfig, new PositionOverrideConfigs.PositionConfigOverride
@@ -105,6 +105,9 @@ public class PositionOverrideMergeCompletenessTests
             .Select(p => p.Name)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToList();
-        Assert.Equal(OverriddenMembers.OrderBy(n => n, StringComparer.Ordinal).ToList(), changed);
+        var expected = OverriddenMembers.OrderBy(n => n, StringComparer.Ordinal).ToList();
+        Assert.True(
+            expected.SequenceEqual(changed),
+            "A full override must change exactly " + string.Join(", ", expected) + " but changed " + string.Join(", ", changed));
     }
 }
