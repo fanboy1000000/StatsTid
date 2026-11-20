@@ -1,4 +1,4 @@
-# S148 resume point — updated 2026-11-20
+# S148 resume point — updated 2026-11-20 (midday)
 
 The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 24").
 
@@ -31,17 +31,24 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
   - PRs #63, #64 and #65 are closed unmerged, and every `ci/s148-*` branch is deleted.
   - Correction logged: under M-45 the profile PUT answered 200 in CI, not the local 403.
 
-## In flight (wave 5) — 2026-11-20
+## In flight (wave 5) — 2026-11-20 midday
 1. **Merged with GATE green:**
-   - TASK-14822 + -T (`6fadd1fe`; QUAL-258).
-   - **The TASK-14823 stack** (`90828667`; paperwork `b92513c6`: QUAL-260 FIXED, QUAL-261 OPEN, F9, HRP-001; GATE `6a13cb82`). Its five worktrees are being removed.
-2. **TASK-14825 dispatched** (`backend-infrastructure`, worktree, base `6a13cb82`; brief draft 2). Its report begins `## S148 TASK-14825 report`.
-   - **Then:** 14825-T (carry T-BC-10 (b), already in its brief), the merge checklist (5α; Codex and Fable), merge, GATE.
-   - **O-16 at the merge:** QUAL-184 and QUAL-042 closed; the F-row of B6; QUAL-148's note; tell the owner about the interim limits and the English error copy.
-3. **CI-W5a after TASK-14825**, before the T14b stack: `ci/s148-w5a` as an evidence PR; judge against `PLAN:701` and its gained items (AC-C13t, AC-C2t, AC-C2u, AC-C1o, the two timing figures, the PIN-1 watch item).
-4. **All wave-5 briefs are final** (plan "final + 27", plus the M-49 re-point `aabe8ce2`).
-5. **Owner ruling 2026-11-19 (a):** QUAL-259 (the wage-type replay gap) is built after S148.
-6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves remain.
+   - TASK-14822 + -T (`6fadd1fe`);
+   - the TASK-14823 stack (`90828667`);
+   - **TASK-14825 + -T** (`7af9176b`; paperwork `26974e77`: QUAL-184 and QUAL-042 FIXED, the QUAL-148 note, F10; GATE `4a58e603`). Its worktrees are being removed.
+2. **CI-W5a:** draft PR #66 (`ci/s148-w5a`), run **44728481380** at `4a58e603` (head confirmed). A background poll is waiting; if it is reaped, check by hand.
+   - **Judge it against `PLAN:715`:**
+     - AC-C13b, -13g, -13t; AC-C13a's split; AC-C2f, -g, -i, -j, -t, -u; AC-C2c's hand-off; AC-PIL-e row (2); AC-C1g; AC-C1o; AC-C1m's overtime half;
+     - PIN-2 (both arms); PIN-1 (the watch item: green with the hydration on);
+     - the timing lines from the trx: CONFIG_PUBLISH_TIMING, TEAMOVERSIGT-TIMING and YEAROVERVIEW-TIMING.
+   - **Also confirm** that the 84 Docker facts re-pointed by TASK-14822-T are green, and that `DatedConfigBoundaryTests` (M-39/M-40) and `TransactionalBlockFailure_…` pass.
+   - **When green:** close PR #66 unmerged, delete the branch, log the figures, and put the CI figures into F9 and F10.
+3. **Then the T14b stack** (TASK-14826 → 14826-T → 14827 → 14828 → 14828-T → REGEN → 14829, merged together; NR-P9). The briefs are at draft 2 ("final + 26").
+   - **TASK-14828's plan row carries** R8 and R9 (from 14822), C2-R5 (14822), R4 (14825) and N2 (14825 c3).
+   - **TASK-14831's plan row carries** R6 (14823, the "Blocks until granted" remark).
+4. **Then** 14830 + -T, 14831 + -T, 14846, CI-W5 and CI-M5 (M-9, M-12, M-13, M-15, M-49).
+5. **Owner ruling 2026-11-19 (a):** QUAL-259 is built after S148.
+6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves.
 
 ## After that
 - **Wave 5** ends with **TASK-14846** (`ux`; the edit drawer locks one's own refused fields, with the contract Danish note).
