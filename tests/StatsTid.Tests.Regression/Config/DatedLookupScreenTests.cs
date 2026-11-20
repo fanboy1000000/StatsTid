@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using StatsTid.Tests.Regression.Contracts;
 using StatsTid.Tests.Regression.TestSupport;
@@ -27,7 +28,8 @@ namespace StatsTid.Tests.Regression.Config;
 /// Employees are seeded with <see cref="RegressionSeed"/> (every dated row from <c>0001-01-01</c>) AFTER the host's
 /// first <c>CreateClient()</c> (the boot-order rule on <c>StatsTidWebApplicationFactory.WithFixedToday</c>). The
 /// employee's own requests go through the same host with the employee's token. Each fact builds its own world on a
-/// fresh database. Docker-gated: CI-verified, never locally green.
+/// fresh database. Docker-gated: CI-pending until CI-W5a. A run on a throwaway local PostgreSQL 16 cluster is a
+/// pre-check, not CI evidence.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -45,6 +47,13 @@ public sealed class DatedLookupScreenTests : DatedConfigDockerFixture
     /// central read that ignored its day and took the newest OK24 version would answer <c>"UDBETALING"</c>. GET
     /// <c>?periodYear=2027</c> answers <c>"UDBETALING"</c>: OK26 governs on Friday 1 January 2027 and the
     /// November version is in force that day (discriminating against "always the seed").
+    ///
+    /// <para>
+    /// <b>What it does not pin:</b> the employee's live OK label is OK26, the same as the OK version of 2027, so a
+    /// route that asked the live label instead of the day's own OK version would pass. That choice (B12) is pinned by
+    /// <see cref="OvertimeModel_LiveLabelOk24_ReadsTheOk26VersionOfThe2027YearStart"/> and
+    /// <see cref="OvertimeChoiceWrite_LiveLabelOk24_RefusedByTheOk26VersionOfThe2027YearStart"/>.
+    /// </para>
     ///
     /// <para>
     /// <b>Kind: F (CI).</b> <b>Red conditions</b> (argued against TASK-14825's base): the base reads the ACTIVE row of
@@ -79,6 +88,82 @@ public sealed class DatedLookupScreenTests : DatedConfigDockerFixture
 
         Assert.Equal(("AFSPADSERING", "config_default"), y2026);
         Assert.Equal(("UDBETALING", "config_default"), y2027);
+    }
+
+    /// <summary>
+    /// B12, the GET route. An HK employee whose LIVE OK label is OK24, and one published version beyond the seeds:
+    /// HK / OK26 with <c>defaultCompensationModel</c> <c>"UDBETALING"</c>, dated Monday 2 November 2026. GET
+    /// <c>?periodYear=2027</c> answers <c>"UDBETALING"</c>, source <c>"config_default"</c>: the route asks the OK
+    /// version in force on Friday 1 January 2027 (OK26), not the employee's label, and the November version is in
+    /// force that day. A route that asked the live label would read the HK / OK24 seed and answer
+    /// <c>"AFSPADSERING"</c>.
+    ///
+    /// <para>
+    /// <b>Kind: N (the mutation below), also F (CI).</b> <b>Red conditions</b>: replacing
+    /// <c>OkVersionResolver.ResolveVersion(periodYearStart)</c> with the user's live OK version in the GET route (and
+    /// the PUT route) answers <c>"AFSPADSERING"</c> and fails the assertion. TASK-14825's base asked the live label
+    /// too, but a compile-level revert is not the evidence; the named mutation is.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task OvertimeModel_LiveLabelOk24_ReadsTheOk26VersionOfThe2027YearStart()
+    {
+        using var admin = AdminAt(Monday9Nov2026);
+        var hk26 = await SeedVersionIdAsync("HK", Ok26);
+
+        var (id26, v26) = await CloneDraftAsync(admin, hk26);
+        await ExecAsync(
+            "UPDATE agreement_configs SET default_compensation_model = 'UDBETALING' WHERE config_id = @id AND status = 'DRAFT'",
+            ("id", id26));
+        await PublishOkAsync(admin, id26, v26, "2026-11-02");
+
+        await RegressionSeed.SeedEmployeeAsync(ConnectionString, "t825ds_l24", "T825DS", "HK", Ok24);
+
+        var y2027 = await GetCompensationChoiceAsync(admin, "t825ds_l24", "T825DS", 2027);
+
+        Assert.Equal(("UDBETALING", "config_default"), y2027);
+    }
+
+    /// <summary>
+    /// B12, the PUT route. The same employee (live label OK24) and an HK / OK26 version dated Monday 2 November 2026,
+    /// equal to the seed except <c>employeeCompensationChoice</c> false (the HK / OK24 seed keeps it true). PUT
+    /// <c>{ periodYear: 2027, compensationModel: "UDBETALING" }</c> answers 400 with the route's "not enabled" body
+    /// and writes no <c>overtime_balances</c> row: the route asks OK26 as of 1 January 2027, where the choice is off.
+    /// A route that asked the live label would read the OK24 seed, where the choice is on, and answer 200.
+    ///
+    /// <para>
+    /// <b>Kind: N (the mutation named above), also F (CI).</b> <b>Red conditions</b>: under that mutation the PUT
+    /// answers 200 and writes a row; the status assertion fails first.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task OvertimeChoiceWrite_LiveLabelOk24_RefusedByTheOk26VersionOfThe2027YearStart()
+    {
+        using var admin = AdminAt(Monday9Nov2026);
+        var hk26 = await SeedVersionIdAsync("HK", Ok26);
+
+        var (id26, v26) = await CloneDraftAsync(admin, hk26);
+        await ExecAsync(
+            "UPDATE agreement_configs SET employee_compensation_choice = FALSE WHERE config_id = @id AND status = 'DRAFT'",
+            ("id", id26));
+        await PublishOkAsync(admin, id26, v26, "2026-11-02");
+
+        await RegressionSeed.SeedEmployeeAsync(ConnectionString, "t825ds_p24", "T825DS", "HK", Ok24);
+
+        var request = new HttpRequestMessage(HttpMethod.Put, "/api/overtime/t825ds_p24/compensation-choice")
+        {
+            Content = JsonContent.Create(new { periodYear = 2027, compensationModel = "UDBETALING" }),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", EmployeeToken("t825ds_p24", "T825DS"));
+        using var response = await admin.SendAsync(request);
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("""{"error":"Employee compensation choice is not enabled for this agreement"}""", text);
+        Assert.Equal(0L, await CountAsync(
+            "SELECT COUNT(*) FROM overtime_balances WHERE employee_id = @e AND period_year = @y",
+            ("e", "t825ds_p24"), ("y", 2027)));
     }
 
     /// <summary>

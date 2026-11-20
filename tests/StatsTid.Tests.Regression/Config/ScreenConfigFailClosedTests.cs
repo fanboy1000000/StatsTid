@@ -30,8 +30,10 @@ namespace StatsTid.Tests.Regression.Config;
 /// the per-day calculator reaches the same singleton through <c>IAgreementConfigLookup</c>, so one replacement of
 /// <c>ConfigResolutionService</c> in the test host reaches every site. The replacement is the REAL class built over
 /// repositories on an unreachable connection (opening it throws a <c>DbException</c>, which the lookup turns into
-/// its "unavailable" outcome); everything else in the host runs on the fixture's real database. Docker-gated:
-/// CI-verified, never locally green.
+/// its "unavailable" outcome); everything else in the host runs on the fixture's real database. The two per-layer
+/// facts build the same service with a WORKING central repository and the one other layer's repository on the
+/// unreachable connection. Docker-gated: CI-pending until CI-W5a. A run on a throwaway local PostgreSQL 16 cluster
+/// is a pre-check, not CI evidence.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -169,7 +171,86 @@ public sealed class ScreenConfigFailClosedTests : DatedConfigDockerFixture
         Assert.DoesNotContain("dailyNorm", text);
     }
 
+    /// <summary>
+    /// Fail-closed per layer (service level). The central read works (the HK / OK26 seed, in force on Monday 9 November
+    /// 2026) and only the named layer's repository is on the unreachable connection: <c>ResolveAsync</c> throws
+    /// <see cref="ConfigLookupUnavailableException"/> whose <c>Layer</c> is that layer, and returns no configuration.
+    /// A position is given, so the override layer is read; the local layer is read on every call.
+    ///
+    /// <para>
+    /// <b>Kind: F (CI); the <c>local agreement profile</c> case is also N.</b> <b>Red conditions</b>: the mutation
+    /// that restores the old local read's <c>catch (Exception) { return config; }</c> around the profile read makes
+    /// the local case return the central configuration instead of throwing, so <c>ThrowsAsync</c> fails. The override
+    /// case is red under the same swallow applied to the override read.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("position override")]
+    [InlineData("local agreement profile")]
+    public async Task ResolveAsync_OnlyOneLayerUnreadable_ThrowsNamingThatLayer(string failingLayer)
+    {
+        var service = LayerFailingService(failingLayer);
+
+        var ex = await Assert.ThrowsAsync<ConfigLookupUnavailableException>(() =>
+            service.ResolveAsync(Org, "HK", Ok26, "T825POS", Monday9Nov2026));
+
+        Assert.Equal(failingLayer, ex.Layer);
+    }
+
+    /// <summary>
+    /// Fail-closed per layer (route level). An HK / OK26 employee reads their own Skema month, <c>GET
+    /// /api/skema/{id}/month?year=2026&amp;month=3</c>, which asks the lookup once per weekday. The central read works
+    /// and only one other layer's repository is unreachable: the position override (the employee holds position
+    /// <c>T825POS</c>) or the local profile (no position, so only the local read can fail). Either answers 503 with
+    /// exactly the unavailable body and no <c>dailyNorm</c> member.
+    ///
+    /// <para>
+    /// <b>Kind: F (CI); the <c>local agreement profile</c> case is also N.</b> <b>Red conditions</b>: under the
+    /// mutation named on <see cref="ResolveAsync_OnlyOneLayerUnreadable_ThrowsNamingThatLayer"/> the local case
+    /// answers 200 with the central norms and the status assertion fails; the override case is red under the same
+    /// swallow applied to the override read.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("position override", "T825POS")]
+    [InlineData("local agreement profile", null)]
+    public async Task SkemaMonth_OnlyOneLayerUnreadable_Errors(string failingLayer, string? position)
+    {
+        var host = Factory.WithFixedToday(Monday9Nov2026).WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<ConfigResolutionService>();
+                services.AddSingleton(_ => LayerFailingService(failingLayer));
+            }));
+        using var employee = S120ContractAssert.EmployeeClient(host, "t825fc_ly", Org); // boots the host first
+        await RegressionSeed.SeedEmployeeAsync(
+            ConnectionString, "t825fc_ly", Org, "HK", Ok26, position: position);
+
+        using var response = await employee.GetAsync("/api/skema/t825fc_ly/month?year=2026&month=3");
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(UnavailableBody, text);
+        Assert.DoesNotContain("dailyNorm", text);
+    }
+
     // ── The failing-read host ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The real <see cref="ConfigResolutionService"/> with a working central repository (the fixture's database) and
+    /// the repository of <paramref name="failingLayer"/> ("position override" or "local agreement profile", the
+    /// service's own layer names) on the unreachable connection.
+    /// </summary>
+    private ConfigResolutionService LayerFailingService(string failingLayer)
+    {
+        var broken = new DbConnectionFactory(Unreachable);
+        return new ConfigResolutionService(
+            new AgreementConfigRepository(Db),
+            new LocalConfigurationRepository(Db),
+            new PositionOverrideRepository(failingLayer == "position override" ? broken : Db),
+            new LocalAgreementProfileRepository(failingLayer == "local agreement profile" ? broken : Db),
+            NullLogger<ConfigResolutionService>.Instance);
+    }
 
     /// <summary>
     /// A derived host (clock pinned to UTC midnight of <paramref name="today"/>) whose
