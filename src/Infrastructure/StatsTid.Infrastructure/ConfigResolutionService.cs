@@ -7,7 +7,9 @@ namespace StatsTid.Infrastructure;
 
 /// <summary>
 /// The agreement configuration in force on a day (ADR-014, ADR-017 D3, ADR-043 D12): the one dated,
-/// fail-closed lookup every configuration read goes through. Both hosts register it as the same singleton
+/// fail-closed lookup every configuration read goes through, except the two month figures (Teamoversigt's
+/// expected norm and the balance summary's month norm), which still read the ACTIVE row until TASK-14828 (the ruled
+/// interim, B-9). Both hosts register it as the same singleton
 /// as <see cref="ConfigResolutionService"/>, which implements it. Of the production callers only
 /// <c>DailyNormCalculator</c> takes this interface (so a Unit fixture can fake the lookup); the Backend
 /// handlers that read a configuration themselves inject the concrete class.
