@@ -2437,3 +2437,14 @@ M-40 included [O for the 14 facts of the five classes run].
   - Timing lines, local: Teamoversigt median 115 ms at 30 people and 937 ms at 300; year overview 895 ms. They reach the trx.
 - **Gate:** build 0 errors, 125 warnings, 113 CA2100. Unit 1745, DemoSeed 170, Regression non-Docker 141 (+AC-C1g).
 - **Merge checklist started** on `6a13cb82..6b5a5b87`: 5α, Codex (high risk: legal rule logic, the payroll host) and Fable.
+
+**TASK-14825 5a cycle 1.** 5α PASS (`.claude/reviews/S148-TASK-14825-5alpha.md`). Codex APPROVED-WITH-WARNINGS (`…-5a-codex.md`). Fable APPROVED-WITH-WARNINGS (`…-5a-reviewer.md`). Rulings in `…-5a-rulings-c1.md`, R1–R6.
+- **Both lenses find the lookup correct:** right day, layer, organisation, OK version and position; no compiled fallback left; the middleware placed and guarded with byte-exact bodies; no pinned figure moves on seed data.
+- **R1 (Fable W1): B12 is not pinned.** The fact passes even if the compensation-choice routes revert to the live OK version, because its employee's live label and the dated version agree.
+  - A new fact uses an employee whose live label is OK24, reading 2027, with only an OK26 version published. For the PUT, that version disallows choice, so the PUT is refused.
+- **R2 (Fable W2): fail-closed is proven for the central layer only.** The failing-read host broke all three layers, so the central read threw first. Per-layer facts follow, with a working central read and a failing override or local read.
+- **R3 (Fable W3; Codex NOTE 1): remarks not true now.** Examples: "payroll maps them itself", where payroll does not call the lookup until TASK-14827; "callers depend on this interface", where the handlers inject the concrete class; and the null/graceful wording where a configuration refusal now answers 503 or 500.
+- **R4 (Codex WARNING): the documented read cost is one calculator pass, not a whole request.** A Skema month read is about 135 configuration reads with a position, not about 66.
+  - The `shortcut(pending)` comment and the O-16 F-row state both figures.
+  - TASK-14828's reuse work covers every repeated caller in a request, and TASK-14828-T measures a whole Skema read and save. This is carried into its plan row.
+- **Fix-ups dispatched in parallel from `6b5a5b87`:** TASK-14825 fix-up 1 (comment only, R3 and R4) and TASK-14825-T fix-up 1 (R1, R2, R5). The files are disjoint, and the Orchestrator combines them.
