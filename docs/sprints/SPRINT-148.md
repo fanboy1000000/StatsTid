@@ -2365,3 +2365,12 @@ M-40 included [O for the 14 facts of the five classes run].
 - **R7:** the profile PUT accepts any OK-version string. Both lenses rate it Low and inherited, and validating it would break the deliberate `OKS119` test key.
   - Recorded here, below the register floor. Revisit on any change to the profile PUT's validation, alongside the config and override create routes.
 - **R9, `(unproven)`:** months after an OK version ends may depend on the changed months through carried flex balances. This questions refinement A-1's ruled reach, not the code.
+
+**TASK-14823 fix-up 1 returned** (`backend-infrastructure`; `11f8e3b8`; report `.claude/reviews/S148-TASK-14823-fix1-report.md`).
+- **R1:** the identity check moves into the repository as step "2b" (`LocalAgreementProfileRepository.cs:289`). It sits after the version check and before the backdate guard, and takes an optional `ExpectedPredecessor` that keeps "not supplied" apart from "expected none".
+  - The route passes its pre-read, and keeps its post-call comparison as a second guard. Its version half covers a same-day edit during the wait against a newer `If-Match`.
+  - A local console check on a throwaway cluster showed the missed ordering now answers 412, where the base answered 400.
+- **R5:** the two half-open citations now read ADR-018 D8.
+- **Gate:** 0 errors, 125 warnings, 113 CA2100. Unit 1759, DemoSeed 170 and Regression non-Docker 140 are green.
+- **Found, not fixed, below the floor:** at least 20 other `src/` lines cite ADR-018 D9 for end-exclusive intervals, where D8 is right. The backend agent definition had the same slip; it is corrected by the Orchestrator (`3e2a735d`).
+- **TASK-14823-T fix-up 1 dispatched** (base `11f8e3b8`): R2, R3, R4, and M-49's local census at its new site, with the expected local-cluster pre-check.
