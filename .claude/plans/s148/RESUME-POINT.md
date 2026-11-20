@@ -1,4 +1,4 @@
-# S148 resume point — updated 2026-11-19 (afternoon)
+# S148 resume point — updated 2026-11-20
 
 The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 24").
 
@@ -31,14 +31,15 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
   - PRs #63, #64 and #65 are closed unmerged, and every `ci/s148-*` branch is deleted.
   - Correction logged: under M-45 the profile PUT answered 200 in CI, not the local 403.
 
-## In flight (wave 5) — stopped at the usage limit, 2026-11-19 afternoon
-1. **TASK-14822 + -T are MERGED** (`6fadd1fe`; paperwork and QUAL-258 `7df487f7`; GATE green `14929a89`). The five worktrees are removed.
-2. **TASK-14823 dispatched** (`backend-infrastructure`, worktree, base `5685aa3d`). Its report begins `## S148 TASK-14823 report`; save it as `.claude/reviews/S148-TASK-14823-report.md`.
-   - **Then:** 14823-T, REGEN (expected none), and 14824 stacked.
-   - **Then the merge checklist:** 5α on the union (14823, -T and 14824); Fable and Codex 5a (high risk: retroactive corrections, concurrency); merge; GATE; O-15 (HRP-001's trigger cell, and the two A9 QUAL rows: Case A FIXED, Case B open, with the next free ids after QUAL-258).
-3. **The batch D planner was re-dispatched** after the earlier stop (none of its files had been written). Its report begins `## S148 wave-5 batch D planner report`; save it as `S148-wave5D-briefs-planner-report.md`. Then adjudicate it with Fable and apply the rulings.
-4. **Briefs ready:** batches A and B ("final + 25"), C ("final + 26", `d473fa6d`). The plan carries R8, R9 and C2-R5 in TASK-14828-T's row.
-5. **Housekeeping:** about 55 stale local `worktree-agent-*` branches with no worktree remain from earlier waves. Delete the merged ones when convenient (`git branch --merged master`).
+## In flight (wave 5) — 2026-11-20
+1. **TASK-14822 + -T are merged** (`6fadd1fe`; QUAL-258; GATE `14929a89`).
+2. **The TASK-14823 stack is built:** `ed94b085` (14823), `d8ef347b` (14823-T: local pre-check 26 of 26; publish timing 300 people in 2.96 s locally), and `bb72fea1` (14824, the three labels). All are in worktree `agent-a624530d84bf3bb30`, which holds a `frontend/node_modules` junction to remove before pruning.
+   - **Merge checklist running on `5685aa3d..bb72fea1`:** 5α (its output begins `## S148 TASK-14823 stack 5α`), Codex (`S148-TASK-14823-5a-codex-c1.raw.md`) and Fable (its output begins `## S148 TASK-14823 stack 5a reviewer`).
+   - **Then:** rulings, the fix-up if any, merge `--no-ff`, GATE, and O-15 (HRP-001's trigger cell; the two A9 QUAL rows, **QUAL-260** Case A FIXED and **QUAL-261** Case B open; and `BackdateWorklistRowCreated.cs`'s remarks gain `CONFIG_PUBLISHED`, per the brief's Same-merge row).
+3. **Next implementation: TASK-14825** (brief draft 2), from master after the 14823 stack's GATE. Carry T-BC-10 (b), which is already in its -T brief.
+4. **All wave-5 briefs are final:** A and B ("final + 25"), C ("final + 26"), D ("final + 27", `049e2c9d`).
+5. **Owner ruling 2026-11-19 (a):** the wage-type replay gap is closed after S148 (QUAL-259).
+6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches with no worktree remain from earlier waves.
 
 ## After that
 - **Wave 5** ends with **TASK-14846** (`ux`; the edit drawer locks one's own refused fields, with the contract Danish note).
