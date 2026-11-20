@@ -153,7 +153,16 @@ builder.Services.AddSingleton<LocalConfigurationRepository>();
 // PeriodCalculationService — when the repository is unregistered (test fixtures), the
 // shim emits no profile-activation boundaries (D9c profile-less callers contract).
 builder.Services.AddSingleton<LocalAgreementProfileRepository>();
+// QUAL-184, ADR-043 D12, DV-8: the dated agreement configs and position overrides, which the configuration
+// lookup requires (one constructor, every repository required), so the host builds under Development's
+// ValidateOnBuild and a dropped registration refuses to build. Registering them also fills
+// PeriodCalculationService's two optional repository parameters: its planner splits a month at a published
+// version's applies-from date (the AgreementConfigPromotion and PositionOverrideEffective boundaries). Each
+// part is still priced on the compiled rules until payroll calls the lookup (the engine switch, T14b).
+builder.Services.AddSingleton<AgreementConfigRepository>();
+builder.Services.AddSingleton<PositionOverrideRepository>();
 builder.Services.AddSingleton<ConfigResolutionService>();
+builder.Services.AddSingleton<IAgreementConfigLookup>(sp => sp.GetRequiredService<ConfigResolutionService>());
 builder.Services.AddSingleton<IdempotencyGuard>();
 
 // JWT minting service (TASK-2010): used by HttpRuleClassificationProvider to mint

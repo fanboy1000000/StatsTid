@@ -88,6 +88,36 @@ public sealed class LocalAgreementProfileRepository
     }
 
     /// <summary>
+    /// The profile in force for the (org, agreement_code, ok_version) triple on <paramref name="day"/>
+    /// (ADR-017 D3, ADR-043 D12): the row with <c>effective_from &lt;= day</c> and (<c>effective_to</c> null or
+    /// <c>&gt; day</c>), end-exclusive (ADR-018 D8). Rows of one triple never overlap, so at most one covers a
+    /// day; <c>null</c> when none does (no local change). The configuration lookup's local layer
+    /// (<see cref="ConfigResolutionService"/>), beside the two other in-force reads
+    /// (<see cref="AgreementConfigRepository.GetInForceAsync"/>, <see cref="PositionOverrideRepository.GetInForceAsync"/>).
+    /// </summary>
+    public async Task<LocalAgreementProfile?> GetInForceAsync(
+        string orgId, string agreementCode, string okVersion, DateOnly day, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT * FROM local_agreement_profiles
+            WHERE org_id = @orgId
+              AND agreement_code = @agreementCode
+              AND ok_version = @okVersion
+              AND effective_from <= @day
+              AND (effective_to IS NULL OR effective_to > @day)
+            """, conn);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        cmd.Parameters.AddWithValue("okVersion", okVersion);
+        cmd.Parameters.AddWithValue("day", day);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? MapReader(reader) : null;
+    }
+
+    /// <summary>
     /// Returns profile activations whose <c>effective_from</c> falls strictly inside
     /// (<paramref name="periodStart"/>, <paramref name="periodEnd"/>] AND that overlap the
     /// period itself (closed predecessors that closed before <paramref name="periodStart"/>

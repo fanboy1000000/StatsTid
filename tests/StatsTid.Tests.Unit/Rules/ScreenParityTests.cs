@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
 using StatsTid.RuleEngine.Api.Rules;
@@ -23,9 +22,10 @@ namespace StatsTid.Tests.Unit.Rules;
 /// </para>
 ///
 /// <para>
-/// <b>Cross-assembly.</b> The left side is the Backend's <c>DailyNormCalculator</c> (the real class, with the real
-/// <c>ConfigResolutionService</c> and no local agreement profile; its repositories point at an unreachable
-/// connection, so the resolver falls back to the static central configuration, as its own tests do). The right
+/// <b>Cross-assembly.</b> The left side is the Backend's <c>DailyNormCalculator</c> (the real class, with no local
+/// agreement profile and a fake <c>IAgreementConfigLookup</c> that answers the compiled HK / OK26 configuration for
+/// any day; the real lookup reads the database and refuses rather than fall back, so a Unit fact cannot use it,
+/// S148 TASK-14825, B8). The right
 /// side is the Rule Engine's <c>WeeklyTimelineCore</c>: one piece Monday 7 - Sunday 13 September 2026 (no public
 /// holiday) at fraction 0.811. Both are asserted against the hand-derived 30.00 as well as against each other, so
 /// the two cannot drift together.
@@ -92,16 +92,23 @@ public sealed class ScreenParityTests
 
     private static DailyNormCalculator CreateScreenCalculator()
     {
-        // Unreachable connection: nothing here opens one that matters. ResolveAsync catches the failed DB read
-        // and falls back to CentralAgreementConfigs; no local agreement profile repository is wired (4-arg ctor).
-        const string unreachable = "Host=localhost;Port=1;Database=na;Username=na;Password=na;Timeout=1;Command Timeout=1";
-        var factory = new DbConnectionFactory(unreachable);
-        var resolver = new ConfigResolutionService(
-            new AgreementConfigRepository(factory),
-            new LocalConfigurationRepository(factory),
-            new PositionOverrideRepository(factory),
-            NullLogger<ConfigResolutionService>.Instance);
-        return new DailyNormCalculator(new NoProfileResolver(), resolver);
+        // S148 TASK-14825 (B8): the lookup is faked, the calculator is real. The compiled HK / OK26 config is the
+        // value the seeds carry (PIN-2), so the screen's per-day norms are derived from the same figures as before.
+        return new DailyNormCalculator(new NoProfileResolver(), new CompiledHkOk26Lookup());
+    }
+
+    /// <summary>Answers the compiled HK / OK26 configuration for any organisation, position and day.</summary>
+    private sealed class CompiledHkOk26Lookup : IAgreementConfigLookup
+    {
+        private static readonly AgreementRuleConfig Config = CentralAgreementConfigs.GetConfig("HK", "OK26");
+
+        public Task<AgreementRuleConfig> ResolveAsync(
+            string orgId, string agreementCode, string okVersion, string? position, DateOnly asOf,
+            CancellationToken ct = default) => Task.FromResult(Config);
+
+        public Task<AgreementRuleConfig> ResolveCentralAsync(
+            string agreementCode, string okVersion, DateOnly asOf, CancellationToken ct = default) =>
+            Task.FromResult(Config);
     }
 
     /// <summary>Not used by <c>ComputeNormForProfileAsync</c> (the profile is handed in).</summary>

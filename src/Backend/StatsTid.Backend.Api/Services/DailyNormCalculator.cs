@@ -19,9 +19,10 @@ namespace StatsTid.Backend.Api.Services;
 ///   <item><description>the dated employment profile for THAT day
 ///     (<see cref="IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>) — so a mid-month
 ///     <c>part_time_fraction</c> change is reflected day-by-day; and</description></item>
-///   <item><description>the merged agreement config
-///     (<see cref="ConfigResolutionService.ResolveAsync"/> → <c>WeeklyNormHours</c> /
-///     <c>NormModel</c>), with the OK version resolved PER DAY via
+///   <item><description>the merged agreement config in force on THAT day
+///     (<see cref="IAgreementConfigLookup.ResolveAsync"/> → <c>WeeklyNormHours</c> /
+///     <c>NormModel</c>; central → position override → the profile of the organisation the dated
+///     record names, ADR-043 D12), with the OK version resolved PER DAY via
 ///     <see cref="OkVersionResolver.ResolveVersion(DateOnly)"/> (NOT <c>year &gt;= 2026</c> — the
 ///     OK24→OK26 switch is 2026-04-01).</description></item>
 /// </list>
@@ -36,11 +37,13 @@ namespace StatsTid.Backend.Api.Services;
 /// </para>
 ///
 /// <para>
-/// <b>Per-request config cache.</b> Config resolution is cached per
-/// <c>okVersion|agreementCode|position|fraction|orgId</c> within a single
-/// <see cref="ComputeRangeAsync"/> call so the merged config is not re-resolved for every
-/// weekday — exactly the cache the inline loop used. The cache is local to each call (no shared
-/// mutable state), so the calculator is registered as a singleton safely.
+/// <b>No configuration crosses days.</b> Every weekday resolves its own configuration through the
+/// dated lookup: a version, override or profile may start on any day, so a configuration resolved
+/// for one day is never used for another. The calculator keeps no cache and no mutable state, so it
+/// is registered as a singleton safely. A lookup refusal
+/// (<see cref="ConfigLookupUnavailableException"/>, <see cref="NoConfigInForceException"/>) is not
+/// caught here: it reaches the caller and the Backend's one mapping of the two
+/// (<c>ConfigLookupRefusalMiddleware</c>).
 /// </para>
 ///
 /// <para>
@@ -52,14 +55,14 @@ namespace StatsTid.Backend.Api.Services;
 public sealed class DailyNormCalculator
 {
     private readonly IEmploymentProfileResolver _profileResolver;
-    private readonly ConfigResolutionService _configResolver;
+    private readonly IAgreementConfigLookup _configLookup;
 
     public DailyNormCalculator(
         IEmploymentProfileResolver profileResolver,
-        ConfigResolutionService configResolver)
+        IAgreementConfigLookup configLookup)
     {
         _profileResolver = profileResolver;
-        _configResolver = configResolver;
+        _configLookup = configLookup;
     }
 
     /// <summary>
@@ -82,9 +85,6 @@ public sealed class DailyNormCalculator
         CancellationToken ct = default)
     {
         var result = new List<DailyNorm>();
-        // Config resolution is cached per (okVersion, agreementCode, position, fraction, orgId)
-        // within this request so we don't re-resolve the merged config for every weekday.
-        var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
 
         for (var day = rangeStart; day <= rangeEnd; day = day.AddDays(1))
         {
@@ -106,7 +106,7 @@ public sealed class DailyNormCalculator
                 continue;
             }
 
-            var hours = await ComputeForProfileAsync(profile, day, fallbackOrgId, normCache, ct);
+            var hours = await ComputeForProfileAsync(profile, day, fallbackOrgId, ct);
             result.Add(new DailyNorm(day, hours));
         }
 
@@ -143,27 +143,22 @@ public sealed class DailyNormCalculator
         EmploymentProfile profile,
         DateOnly day,
         string fallbackOrgId,
-        Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)> normCache,
         CancellationToken ct)
     {
         var okVersion = OkVersionResolver.ResolveVersion(day);
         var orgId = profile.OrgId ?? fallbackOrgId;
-        var cacheKey = $"{okVersion}|{profile.AgreementCode}|{profile.Position}|{profile.PartTimeFraction}|{orgId}";
-        if (!normCache.TryGetValue(cacheKey, out var resolved))
-        {
-            var config = await _configResolver.ResolveAsync(
-                orgId, profile.AgreementCode, okVersion, profile.Position, ct);
-            resolved = (config.WeeklyNormHours, config.NormModel);
-            normCache[cacheKey] = resolved;
-        }
+        // The configuration in force on THIS day; nothing resolved for one day is reused for another.
+        // shortcut(pending): every weekday resolves its own configuration (two reads per lookup, three with a position), once per caller in a request: one Skema month read runs this calculator twice (dailyNorm, consumptionBasis) plus the month-end scalar, about 45 lookups or 135 configuration reads with a position (90 without), and the year overview's month loop about 780 reads with a position (about 520 without); upgrade when one resolution is reused per stretch of days with no dated change in agreement, OK version, position, organisation or any layer's applies-from date, and the reuse covers every repeated caller in a request (TASK-14828)
+        var config = await _configLookup.ResolveAsync(
+            orgId, profile.AgreementCode, okVersion, profile.Position, day, ct);
 
-        if (resolved.NormModel == NormModel.ANNUAL_ACTIVITY)
+        if (config.NormModel == NormModel.ANNUAL_ACTIVITY)
         {
             // Academic annual-activity norm: a per-weekday split is not meaningful.
             return null;
         }
 
-        return DayNorm.ForWeekday(resolved.WeeklyNormHours, profile.PartTimeFraction);
+        return DayNorm.ForWeekday(config.WeeklyNormHours, profile.PartTimeFraction);
     }
 
     /// <summary>
@@ -184,8 +179,7 @@ public sealed class DailyNormCalculator
         if (!DayNorm.IsWeekday(day))
             return 0m;
 
-        var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
-        return await ComputeForProfileAsync(profile, day, fallbackOrgId, normCache, ct);
+        return await ComputeForProfileAsync(profile, day, fallbackOrgId, ct);
     }
 
     /// <summary>
@@ -204,7 +198,9 @@ public sealed class DailyNormCalculator
     /// when the resolver fail-louds on the S34 data-integrity contract
     /// (<see cref="EmployeeProfileNotFoundException"/> — profile row without a covering
     /// agreement-code row). The FE renders the hours headline em-dashed on <c>null</c>; a
-    /// read-only display scalar must never 500 the whole month GET. No second copy of the
+    /// read-only display scalar must never 500 the whole month GET over a data gap in the
+    /// employee's record. A configuration-lookup refusal is not that: it propagates like every
+    /// other read of the configuration, so the screen names it (P-13). No second copy of the
     /// norm formula: this delegates to the same <see cref="ComputeForProfileAsync"/> core as
     /// the range loop and the revaluation path (the S65 one-shared-norm-impl invariant).
     /// </para>
@@ -230,9 +226,8 @@ public sealed class DailyNormCalculator
         if (profile is null)
             return null;
 
-        var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);
         // Deliberately NO weekend short-circuit: the weekday formula applies regardless of
         // where the anchor day falls in the week (R10 "weekend placement irrelevant").
-        return await ComputeForProfileAsync(profile, day, fallbackOrgId, normCache, ct);
+        return await ComputeForProfileAsync(profile, day, fallbackOrgId, ct);
     }
 }

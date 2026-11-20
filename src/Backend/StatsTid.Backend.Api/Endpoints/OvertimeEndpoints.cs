@@ -814,7 +814,8 @@ public static class OvertimeEndpoints
                     Source: "balance"));
             }
 
-            // Fall back to default from config
+            // No balance row for the year: the default model of the agreement configuration in force
+            // on 1 January of the period year.
             var user = await userRepo.GetByIdAsync(employeeId, ct);
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
@@ -830,13 +831,17 @@ public static class OvertimeEndpoints
                 employeeId, periodYearStart, ct);
             var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
 
-            var config = await configService.GetActiveConfigAsync(agreementCode, user.OkVersion, ct);
-            var defaultModel = config?.DefaultCompensationModel ?? "AFSPADSERING";
+            // The central configuration in force on 1 January, asked with that day's own OK version
+            // (ADR-040 D4, ADR-043 D12): no override or profile column changes the compensation model.
+            // Fail-closed (P-13): a refusal leaves the handler for the Backend's one mapping.
+            var config = await configService.ResolveCentralAsync(
+                agreementCode, StatsTid.SharedKernel.Calendar.OkVersionResolver.ResolveVersion(periodYearStart),
+                periodYearStart, ct);
 
             return Results.Ok(new CompensationChoiceResponse(
                 EmployeeId: employeeId,
                 PeriodYear: periodYear,
-                CompensationModel: defaultModel,
+                CompensationModel: config.DefaultCompensationModel,
                 Source: "config_default"));
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<CompensationChoiceResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
@@ -896,8 +901,13 @@ public static class OvertimeEndpoints
                 employeeId, periodYearStart, ct);
             var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
 
-            var config = await configService.GetActiveConfigAsync(agreementCode, user.OkVersion, ct);
-            if (config?.EmployeeCompensationChoice != true)
+            // The central configuration in force on 1 January, asked with that day's own OK version
+            // (ADR-040 D4, ADR-043 D12), read before the upsert: a refusal leaves the handler for the
+            // Backend's one mapping with nothing written (P-13).
+            var config = await configService.ResolveCentralAsync(
+                agreementCode, StatsTid.SharedKernel.Calendar.OkVersionResolver.ResolveVersion(periodYearStart),
+                periodYearStart, ct);
+            if (!config.EmployeeCompensationChoice)
                 return Results.BadRequest(new { error = "Employee compensation choice is not enabled for this agreement" });
 
             // Upsert the balance record with the new compensation model

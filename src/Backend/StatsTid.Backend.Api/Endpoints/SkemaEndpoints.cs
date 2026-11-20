@@ -492,8 +492,11 @@ public static class SkemaEndpoints
             // The employee's WEEKDAY full-day norm (WeeklyNorm × fraction / 5, 2 decimals)
             // resolved via the dated profile + config at the viewed month's LAST day,
             // INDEPENDENT of that day's weekend placement (the calculator applies no
-            // weekend-0 short-circuit here). Null when no dated profile/config covers the
-            // day or for ANNUAL_ACTIVITY — fail-soft, the FE em-dashes the hours headline.
+            // weekend-0 short-circuit here). Null when no dated employment profile covers the
+            // day (or it has no covering agreement row) or for ANNUAL_ACTIVITY — fail-soft, the
+            // FE em-dashes the hours headline. A configuration-lookup refusal is not fail-soft:
+            // it fails the whole month read through the Backend's one mapping, a 503 or the
+            // named 500 config_not_in_force (P-13).
             // PURE READ (P2): dated stores only, no rule-engine call.
             var fullDayNormAtMonthEnd = await dailyNormCalculator.ComputeWeekdayNormAtAsync(
                 employeeId, monthEnd, user.PrimaryOrgId, ct);

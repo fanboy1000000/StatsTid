@@ -1464,8 +1464,8 @@ public sealed class HrBackdateWorklistRepository
     /// path alone, for two different reasons: an AGREEMENT_CODE change moves the wage-type KEY
     /// (which lønart a line books under, ADR-020), not the consumption divisor; and an
     /// EMPLOYMENT_CATEGORY change is not an input to that divisor either — full-day hours come from
-    /// `DailyNormCalculator`, whose config lookup is keyed on (ok-version, agreement code, position,
-    /// fraction, org), and category is not in that key. Category selects
+    /// `DailyNormCalculator`, whose inputs are the day's OK version and the dated agreement code,
+    /// position, part-time fraction and organisation, and category is not among them. Category selects
     /// <c>role_config_overrides</c> instead, which the norm path does not read.
     /// </para>
     ///

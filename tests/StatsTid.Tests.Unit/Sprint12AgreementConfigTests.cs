@@ -83,42 +83,6 @@ public class Sprint12AgreementConfigTests
     }
 
     // ========================================================================
-    // 3. ConfigResolutionService.GetCentralConfig static method
-    // ========================================================================
-
-    [Fact]
-    public void GetCentralConfig_ReturnsConfig_ForKnownPair()
-    {
-        var config = ConfigResolutionService.GetCentralConfig("AC", "OK24");
-
-        Assert.NotNull(config);
-        Assert.Equal("AC", config!.AgreementCode);
-        Assert.Equal("OK24", config.OkVersion);
-    }
-
-    [Fact]
-    public void GetCentralConfig_ReturnsNull_ForUnknownPair()
-    {
-        var config = ConfigResolutionService.GetCentralConfig("UNKNOWN", "OK24");
-
-        Assert.Null(config);
-    }
-
-    [Fact]
-    public void GetCentralConfig_ValuesMatchExpected_AcOk24()
-    {
-        var config = ConfigResolutionService.GetCentralConfig("AC", "OK24");
-
-        Assert.NotNull(config);
-        Assert.Equal(37.0m, config!.WeeklyNormHours);
-        Assert.False(config.HasOvertime);
-        Assert.True(config.HasMerarbejde);
-        Assert.Equal(150.0m, config.MaxFlexBalance);
-        Assert.False(config.OnCallDutyEnabled);
-        Assert.True(config.TravelTimeEnabled);
-    }
-
-    // ========================================================================
     // 4. CentralAgreementConfigs coverage — all 10 configs resolvable
     // ========================================================================
 
@@ -154,6 +118,30 @@ public class Sprint12AgreementConfigTests
             Assert.True(CentralAgreementConfigs.HasConfig(code, "OK26"),
                 $"Missing OK26 for {code}");
         }
+    }
+
+    // S148 QUAL-042 (TASK-14825): re-pointed from the retired GetCentralConfig. The compiled-value assertions of the
+    // deleted Sprint7ConfigTests that no other fact pins: AC's on-call flag; HK's four supplements, on-call flag and
+    // on-call rate. (AC's overtime / merarbejde / four supplements and HK's overtime / merarbejde stay pinned by
+    // AgreementConfigTests, which reads the same compiled table through AgreementConfigProvider.)
+
+    [Fact]
+    public void CentralConfig_AC_OnCallDutyDisabled()
+    {
+        Assert.False(CentralAgreementConfigs.GetConfig("AC", "OK24").OnCallDutyEnabled);
+    }
+
+    [Fact]
+    public void CentralConfig_HK_SupplementsAndOnCallEnabled_OnCallRateOneThird()
+    {
+        var hkConfig = CentralAgreementConfigs.GetConfig("HK", "OK24");
+
+        Assert.True(hkConfig.EveningSupplementEnabled);
+        Assert.True(hkConfig.NightSupplementEnabled);
+        Assert.True(hkConfig.WeekendSupplementEnabled);
+        Assert.True(hkConfig.HolidaySupplementEnabled);
+        Assert.True(hkConfig.OnCallDutyEnabled);
+        Assert.Equal(0.33m, hkConfig.OnCallDutyRate);
     }
 
     // ========================================================================

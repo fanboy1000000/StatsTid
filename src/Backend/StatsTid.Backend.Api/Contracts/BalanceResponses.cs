@@ -127,8 +127,9 @@ public sealed record BalanceSeriesResponse(
     IReadOnlyList<BalanceSeriesItem> Series);
 
 /// <summary>The <c>header</c> member of <see cref="YearOverviewResponse"/>.
-/// <paramref name="WeeklyNormHours"/> is null when no dated profile/config covers today
-/// (graceful, ADR-023 D3).
+/// <paramref name="WeeklyNormHours"/> is null when no dated employment profile covers today, or it
+/// has no covering agreement row (graceful, ADR-023 D3). A configuration-lookup refusal leaves no header to serve: the whole
+/// response is the Backend's 503 or named 500 <c>config_not_in_force</c> (P-13).
 /// <paramref name="FullDayNormHours"/> (S123 / TASK-12302) is the authoritative WEEKDAY full-day
 /// norm as-of today (<c>WeeklyNorm × partTimeFraction / 5</c>, 2dp — the same scalar the Skema
 /// month GET emits as <c>fullDayNormAtMonthEnd</c>): the FE's days↔hours conversion source. Null

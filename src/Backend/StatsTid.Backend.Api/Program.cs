@@ -443,6 +443,7 @@ builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeHrFact
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();
+builder.Services.AddSingleton<IAgreementConfigLookup>(sp => sp.GetRequiredService<ConfigResolutionService>()); // the same singleton: the dated, fail-closed configuration lookup (P-13)
 builder.Services.AddSingleton<StatsTid.Infrastructure.VacationSettlementService>(); // S68 ADR-033 slice 1a — the atomic settlement pass
 // S71 / TASK-7104 (ADR-033 slice 3b) — the reversal surface: the §26 payout-request repository
 // (created by 7104, consumed by the 7102 request endpoint + the reversal's R6 VOID), the ONE
@@ -453,8 +454,9 @@ builder.Services.AddSingleton<StatsTid.Infrastructure.TerminationPayoutRequestRe
 builder.Services.AddSingleton<StatsTid.Infrastructure.EmploymentEndDateLifecycleWriter>();
 builder.Services.AddSingleton<StatsTid.Infrastructure.SettlementReversalService>();
 // S65 / TASK-6502 — shared per-day "Arbejdstid"-norm resolver (extracted from the Skema
-// month read; also consumed by the Balance year-overview read). Stateless: the per-request
-// config cache is local to each ComputeRangeAsync call, so singleton is safe.
+// month read; also consumed by the Balance year-overview read). Stateless: it keeps no
+// cache (each day resolves its own configuration through IAgreementConfigLookup), so
+// singleton is safe.
 builder.Services.AddSingleton<StatsTid.Backend.Api.Services.DailyNormCalculator>();
 // S66 / TASK-6603 — vacation-consumption (feriedage) calculator (ADR-032 D1/D3). Composes the
 // shared DailyNormCalculator (one norm impl, no drift) + the dated profile resolver for the
@@ -630,6 +632,7 @@ app.UseAuthentication();
 app.UseMiddleware<PolicyDenialAuditRowMiddleware>();
 app.UseAuthorization();
 app.UseMiddleware<AuditLoggingMiddleware>();
+app.UseMiddleware<ConfigLookupRefusalMiddleware>(); // the configuration lookup's two refusals → a fixed 503 or named 500 (P-13); inside the audit logger, so its row records the answered status
 
 // ── Health + Endpoint Groups (S111 / TASK-11101: the SAME mapping the --openapi entrypoint uses, so
 //    the generated spec always reflects the exact runtime surface — they can never drift). ──

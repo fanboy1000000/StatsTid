@@ -1181,18 +1181,18 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// for every ANNUAL_ACTIVITY day, and the month aggregation emits null when ANY day is null).
     /// <c>AC_RESEARCH</c> has <c>NormModel = NormModel.ANNUAL_ACTIVITY</c> in
     /// <c>CentralAgreementConfigs</c> (src/SharedKernel/StatsTid.SharedKernel/Config/
-    /// CentralAgreementConfigs.cs:205). <c>ConfigResolutionService.ResolveAsync</c> falls back to
-    /// <c>CentralAgreementConfigs</c> when no DB row exists for the agreement/OK pair, so
-    /// <c>AC_RESEARCH/OK24</c> resolves to <c>ANNUAL_ACTIVITY</c> without any DB entitlement-config
-    /// seed.
+    /// CentralAgreementConfigs.cs:205). <c>ConfigResolutionService.ResolveAsync</c> reads the dated,
+    /// published <c>agreement_configs</c> row and has no fallback to the compiled table (an unknown
+    /// pair is refused by name, S148 TASK-14825); init.sql seeds <c>AC_RESEARCH/OK24</c> (:1663) in force
+    /// from <c>0001-01-01</c>, so it resolves to <c>ANNUAL_ACTIVITY</c> without any test-side seed.
     /// </summary>
     [Fact]
     public async Task AnnualActivity_AcademicProfile_NormHoursNullAllMonths()
     {
         // AC_RESEARCH maps to NormModel.ANNUAL_ACTIVITY in CentralAgreementConfigs.cs:205.
-        // ConfigResolutionService falls back to static CentralAgreementConfigs when no DB
-        // agreement_config row exists for "AC_RESEARCH/OK24" — and none is seeded by the
-        // EntitlementConfigSeeder (which only seeds AC/HK/PROSA per DefaultEntitlementConfigs.cs:12).
+        // ConfigResolutionService reads the published agreement_configs row for "AC_RESEARCH/OK24", which
+        // init.sql seeds from 0001-01-01 (it does not fall back to the compiled table). The entitlement-config
+        // seed is separate (EntitlementConfigSeeder seeds only AC/HK/PROSA per DefaultEntitlementConfigs.cs:12).
         // This gives us ANNUAL_ACTIVITY without modifying src/.
         var employeeId = await CreateEmployeeAsync(Emp001OrgId, "AC_RESEARCH", "OK24");
         await RegressionSeed.SeedEmployeeAsync(
@@ -1315,8 +1315,8 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// read path (<c>ResolveDatedConfigAsync</c>, BalanceEndpoints.cs:710-721) reads the
     /// <c>entitlement_configs</c> table DIRECTLY and tolerates ANY agreement code. But the per-month
     /// <c>normHours</c> path (<c>DailyNormCalculator</c> → <c>ConfigResolutionService.ResolveAsync</c>)
-    /// would THROW <c>InvalidOperationException</c> for an agreement code absent from both
-    /// <c>agreement_configs</c> and <c>CentralAgreementConfigs</c> (ConfigResolutionService.cs:132-134)
+    /// would be REFUSED by name (<c>NoConfigInForceException</c>, the Backend's 500 <c>config_not_in_force</c>)
+    /// for an agreement code with no published <c>agreement_configs</c> version in force
     /// — but ONLY when a dated employee_profiles row covers the day (DailyNormCalculator.cs:93-101:
     /// no profile ⇒ null norm, no ResolveAsync call). So this employee's <c>employee_profiles</c> row
     /// covers ONLY <c>[2026-06-01, ∞)</c> (today + the later ferieår under AC); the earlier months
@@ -1365,7 +1365,7 @@ public sealed class YearOverviewTests : IAsyncLifetime
 
         // employee_profiles covers ONLY [switchDate, ∞): today + the later (AC) ferieår resolve norms
         // under AC; the earlier (fictitious-code) months have NO profile ⇒ null norms ⇒ the
-        // ConfigResolutionService path is never invoked for the fictitious code (no 500). See the
+        // ConfigResolutionService path is never invoked for the fictitious code (no refusal). See the
         // norm-path-safety note in the summary.
         await SeedEmployeeProfileRowAsync(employeeId, fraction: 1.000m,
             effectiveFrom: switchDate, effectiveTo: null, version: 1);
@@ -1461,9 +1461,9 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// back as the quota-25 accrual curve, not nulls). The ONLY way to reach the graceful branch is an
     /// agreement code with no entitlement_configs row at all. Such a code is necessarily also absent
     /// from <c>CentralAgreementConfigs</c>, so the employee MUST be profile-less: otherwise the per-day
-    /// norm path (<c>DailyNormCalculator</c> → <c>ConfigResolutionService.ResolveAsync</c>) would THROW
-    /// <c>InvalidOperationException</c> on the unknown code (ConfigResolutionService.cs:132-134) and the
-    /// endpoint would 500. With NO <c>employee_profiles</c> row, the norm path returns null per day
+    /// norm path (<c>DailyNormCalculator</c> → <c>ConfigResolutionService.ResolveAsync</c>) would be REFUSED by
+    /// name (<c>NoConfigInForceException</c>) on the unknown code and the endpoint would answer the named 500
+    /// <c>config_not_in_force</c>. With NO <c>employee_profiles</c> row, the norm path returns null per day
     /// without ever calling ResolveAsync (DailyNormCalculator.cs:93-101) and the header skips
     /// ResolveAsync (it is gated on a non-null today-profile, BalanceEndpoints.cs:593) — so the unknown
     /// agreement never reaches a config lookup that could throw, and the response is a clean 200. This

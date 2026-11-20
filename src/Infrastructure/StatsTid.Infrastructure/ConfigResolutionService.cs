@@ -1,3 +1,4 @@
+using System.Data.Common;
 using Microsoft.Extensions.Logging;
 using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Models;
@@ -5,64 +6,97 @@ using StatsTid.SharedKernel.Models;
 namespace StatsTid.Infrastructure;
 
 /// <summary>
-/// Merges the central <see cref="AgreementRuleConfig"/> with the
-/// position override and the active local agreement profile per
-/// ADR-010 + ADR-017 D3. The rule engine NEVER loads local configs —
-/// this service performs the merge at the service layer and the rule
-/// engine receives a plain <see cref="AgreementRuleConfig"/>.
+/// The agreement configuration in force on a day (ADR-014, ADR-017 D3, ADR-043 D12): the one dated,
+/// fail-closed lookup the Backend's screen reads of the configuration go through. Two kinds of read do not yet: the two
+/// month figures (Teamoversigt's expected norm and the balance summary's month norm) still read the ACTIVE row until
+/// TASK-14828, and the Rule Engine (and so payroll's pricing) still takes the compiled tables until TASK-14826 and
+/// TASK-14827 send it the configuration resolved here. Both hosts register it as the same singleton
+/// as <see cref="ConfigResolutionService"/>, which implements it. Of the production callers only
+/// <c>DailyNormCalculator</c> takes this interface (so a Unit fixture can fake the lookup); the Backend
+/// handlers that read a configuration themselves inject the concrete class.
+/// </summary>
+public interface IAgreementConfigLookup
+{
+    /// <summary>
+    /// The full chain central → position override → local profile, each layer the one in force on
+    /// <paramref name="asOf"/>. <paramref name="orgId"/> is the organisation the employee belonged to on that
+    /// day (their dated record, C-13), never the live primary organisation; the local layer is always read.
+    /// A null <paramref name="position"/> means no override layer. The OK version is the caller's, never
+    /// derived here: a caller asking about an employee's day passes <c>OkVersionResolver.ResolveVersion(asOf)</c>
+    /// (ADR-040 D4); the organisation's effective-configuration screen passes the organisation's own.
+    /// </summary>
+    /// <exception cref="ConfigLookupUnavailableException">A read of any layer failed with a database error.</exception>
+    /// <exception cref="NoConfigInForceException">No published central version is in force on the day.</exception>
+    Task<AgreementRuleConfig> ResolveAsync(
+        string orgId, string agreementCode, string okVersion, string? position, DateOnly asOf,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// The central layer alone, in force on <paramref name="asOf"/>: the same read and the same refusals as
+    /// the first layer of <see cref="ResolveAsync"/>, with no override and no profile. For members no
+    /// override or profile column can change: today its only callers are the overtime routes, for the
+    /// compensation model and choice. TASK-14828 will also use it for days with no employment record, which
+    /// price the central layer only.
+    /// </summary>
+    /// <exception cref="ConfigLookupUnavailableException">The read failed with a database error.</exception>
+    /// <exception cref="NoConfigInForceException">No published central version is in force on the day.</exception>
+    Task<AgreementRuleConfig> ResolveCentralAsync(
+        string agreementCode, string okVersion, DateOnly asOf, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Resolves the agreement configuration in force on a day and merges its three layers at the service
+/// layer (ADR-014, ADR-017 D3, ADR-043 D12); the rule engine never loads a configuration and receives a
+/// plain <see cref="AgreementRuleConfig"/> (ADR-002).
 ///
-/// <para>Resolution chain (closed pre-commit, ADR-017 D3):</para>
+/// <para>Each layer is the one in force on the day asked for — "in force" has one definition, shared with
+/// the configuration writers' worklist reach (C1):</para>
 /// <list type="number">
-///   <item><description>Central agreement config (from <see cref="AgreementConfigRepository"/>,
-///   with static <see cref="CentralAgreementConfigs"/> as emergency fallback).</description></item>
-///   <item><description>Position override (when <c>position</c> is supplied) — applied via
-///   <see cref="PositionOverrideConfigs.ApplyOverride"/>.</description></item>
-///   <item><description>Local agreement profile (S21) — per-column overlay, NULL means
-///   "inherit the post-position-override value".</description></item>
+///   <item><description><b>Central</b> — <see cref="AgreementConfigRepository.GetInForceAsync"/>: the
+///   published version with the latest applies-from date on or before the day (of two dated the same day,
+///   the one published last, NR-P11). None in force → <see cref="NoConfigInForceException"/>.</description></item>
+///   <item><description><b>Position override</b> (when a position is given) —
+///   <see cref="PositionOverrideRepository.GetInForceAsync"/>: the key's newest version row on or before the
+///   day across every override id (NR-P8); an ACTIVE version applies through
+///   <see cref="PositionOverrideConfigs.ApplyOverride"/>, an INACTIVE one or none means no override
+///   (A-9).</description></item>
+///   <item><description><b>Local profile</b> — <see cref="LocalAgreementProfileRepository.GetInForceAsync"/>:
+///   the organisation's row covering the day, end-exclusive (ADR-018 D8); a per-column overlay where NULL
+///   inherits the post-override value. None → no local change.</description></item>
 /// </list>
 ///
-/// <para>S21: the legacy per-key <see cref="LocalConfigurationRepository"/> patch-bag
-/// path has been retired in favor of the typed
-/// <see cref="LocalAgreementProfileRepository"/>. The legacy repository is still
-/// constructor-injected (read path only) for backward-compatibility but is no
-/// longer consulted by <see cref="ResolveAsync"/>.</para>
+/// <para><b>Fail-closed (P-13; QUAL-184, QUAL-042).</b> No compiled value is ever substituted: a database
+/// error on any layer is <see cref="ConfigLookupUnavailableException"/>, a day with no published central
+/// version is <see cref="NoConfigInForceException"/>, and the lookup logs each refusal once. The tables
+/// compiled into SharedKernel's configuration classes are never this lookup's answer (ADR-014; init.sql
+/// seeds the database). The Backend answers both refusals through one mapping
+/// (<c>ConfigLookupRefusalMiddleware</c>). Payroll registers the lookup but does not call it yet, so it
+/// maps neither; TASK-14827 adds payroll's own mapping, a 503 and a 422 (wave-5 batch-C ruling 12).</para>
+///
+/// <para>No cache, no <c>(conn, tx)</c> overload and no lock: each read opens its own connection, so a caller
+/// may call the lookup before or inside its own transaction without taking the pay-inputs lock (S148 PIL,
+/// rule 3).</para>
+///
+/// <para>The <see cref="LocalConfigurationRepository"/> parameter is stored and never read; it stays
+/// because a Unit fact constructs the service with it.</para>
 /// </summary>
-public sealed class ConfigResolutionService
+public sealed class ConfigResolutionService : IAgreementConfigLookup
 {
     private readonly AgreementConfigRepository _agreementConfigRepo;
     private readonly LocalConfigurationRepository _localConfigRepo;
     private readonly PositionOverrideRepository _positionOverrideRepo;
-    private readonly LocalAgreementProfileRepository? _localAgreementProfileRepo;
+    private readonly LocalAgreementProfileRepository _localAgreementProfileRepo;
     private readonly ILogger<ConfigResolutionService> _logger;
 
     /// <summary>
-    /// Backward-compatible 4-arg constructor (pre-S21 shape). The new
-    /// <see cref="LocalAgreementProfileRepository"/> dependency is set to <c>null</c>,
-    /// which collapses Step 3 of the resolution chain into a no-op (returns the
-    /// post-position-override config). Used by unit tests that construct the service
-    /// without DI; production wiring uses the 5-arg overload below.
+    /// The one constructor: every repository is required, so a host that lost a registration refuses to
+    /// build under <c>ValidateOnBuild</c> instead of silently skipping a layer (QUAL-184).
     /// </summary>
     public ConfigResolutionService(
         AgreementConfigRepository agreementConfigRepo,
         LocalConfigurationRepository localConfigRepo,
         PositionOverrideRepository positionOverrideRepo,
-        ILogger<ConfigResolutionService> logger)
-        : this(agreementConfigRepo, localConfigRepo, positionOverrideRepo,
-               localAgreementProfileRepo: null, logger)
-    {
-    }
-
-    /// <summary>
-    /// S21 production constructor. Accepts the new
-    /// <see cref="LocalAgreementProfileRepository"/> alongside the existing
-    /// dependencies. When <paramref name="localAgreementProfileRepo"/> is
-    /// <c>null</c>, the resolver short-circuits Step 3 (no profile applied).
-    /// </summary>
-    public ConfigResolutionService(
-        AgreementConfigRepository agreementConfigRepo,
-        LocalConfigurationRepository localConfigRepo,
-        PositionOverrideRepository positionOverrideRepo,
-        LocalAgreementProfileRepository? localAgreementProfileRepo,
+        LocalAgreementProfileRepository localAgreementProfileRepo,
         ILogger<ConfigResolutionService> logger)
     {
         _agreementConfigRepo = agreementConfigRepo;
@@ -72,101 +106,80 @@ public sealed class ConfigResolutionService
         _logger = logger;
     }
 
-    /// <summary>
-    /// Resolves the effective config for an org by walking the central → position
-    /// override → local-profile chain (ADR-017 D3). The result is a plain
-    /// <see cref="AgreementRuleConfig"/> the rule engine receives as-is.
-    /// </summary>
+    /// <inheritdoc />
     public async Task<AgreementRuleConfig> ResolveAsync(
-        string orgId, string agreementCode, string okVersion, string? position = null, CancellationToken ct = default)
+        string orgId, string agreementCode, string okVersion, string? position, DateOnly asOf,
+        CancellationToken ct = default)
     {
-        // Step 1 — central config (DB → static fallback).
-        AgreementRuleConfig centralConfig;
-        try
-        {
-            var dbConfig = await _agreementConfigRepo.GetActiveAsync(agreementCode, okVersion, ct);
-            if (dbConfig is not null)
-            {
-                centralConfig = dbConfig.ToRuleConfig();
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "No ACTIVE DB config found for {AgreementCode}/{OkVersion} — falling back to static CentralAgreementConfigs",
-                    agreementCode, okVersion);
-                centralConfig = CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion)
-                    ?? throw new InvalidOperationException(
-                        $"No agreement configuration found for {agreementCode}/{okVersion}");
-            }
-        }
-        catch (Exception ex) when (ex is not InvalidOperationException)
-        {
-            _logger.LogWarning(ex,
-                "Failed to load DB config for {AgreementCode}/{OkVersion} — falling back to static CentralAgreementConfigs",
-                agreementCode, okVersion);
-            centralConfig = CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion)
-                ?? throw new InvalidOperationException(
-                    $"No agreement configuration found for {agreementCode}/{okVersion}");
-        }
+        var request = new LookupRequest(agreementCode, okVersion, position, orgId, asOf);
 
-        // Step 2 — position override (only when an employee position is supplied).
+        // Layer 1 — central, in force on the day.
+        var config = await ReadCentralAsync(request, ct);
+
+        // Layer 2 — the position override in force on the day (only when a position is supplied).
         if (position is not null)
         {
-            PositionOverrideConfigs.PositionConfigOverride? positionOverride;
-            try
-            {
-                var dbOverride = await _positionOverrideRepo.GetActiveAsync(agreementCode, okVersion, position, ct);
-                positionOverride = dbOverride is not null
-                    ? dbOverride.ToPositionConfigOverride()
-                    : PositionOverrideConfigs.TryGetOverride(agreementCode, okVersion, position);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to load DB position override for {AgreementCode}/{OkVersion}/{Position} — falling back to static",
-                    agreementCode, okVersion, position);
-                positionOverride = PositionOverrideConfigs.TryGetOverride(agreementCode, okVersion, position);
-            }
-
+            var positionOverride = await ReadAsync(
+                () => _positionOverrideRepo.GetInForceAsync(agreementCode, okVersion, position, asOf, ct),
+                "position override", request);
             if (positionOverride is not null)
-            {
-                centralConfig = PositionOverrideConfigs.ApplyOverride(centralConfig, positionOverride);
-            }
+                config = PositionOverrideConfigs.ApplyOverride(config, positionOverride.ToPositionConfigOverride());
         }
 
-        // Step 3 — local agreement profile (S21, ADR-017). Per-column overlay; NULL
-        // on a profile column means "inherit the post-position-override value".
-        if (_localAgreementProfileRepo is null)
-        {
-            // No profile repository wired (legacy 4-arg constructor / unit-test path):
-            // skip Step 3. Production callers receive the new 5-arg constructor with
-            // a real repository.
-            return centralConfig;
-        }
+        // Layer 3 — the organisation's local profile in force on the day.
+        var profile = await ReadAsync(
+            () => _localAgreementProfileRepo.GetInForceAsync(orgId, agreementCode, okVersion, asOf, ct),
+            "local agreement profile", request);
+        return profile is null ? config : ApplyProfileOverlay(config, profile, orgId);
+    }
 
-        LocalAgreementProfile? profile;
+    /// <inheritdoc />
+    public Task<AgreementRuleConfig> ResolveCentralAsync(
+        string agreementCode, string okVersion, DateOnly asOf, CancellationToken ct = default) =>
+        ReadCentralAsync(new LookupRequest(agreementCode, okVersion, Position: null, OrgId: null, asOf), ct);
+
+    private async Task<AgreementRuleConfig> ReadCentralAsync(LookupRequest request, CancellationToken ct)
+    {
+        var central = await ReadAsync(
+            () => _agreementConfigRepo.GetInForceAsync(request.AgreementCode, request.OkVersion, request.Day, ct),
+            "central agreement configuration", request);
+        if (central is not null)
+            return central.ToRuleConfig();
+
+        _logger.LogError(
+            "No published agreement configuration is in force for {AgreementCode}/{OkVersion} on {Day} " +
+            "(position {Position}, organisation {OrgId}); refused as config_not_in_force",
+            request.AgreementCode, request.OkVersion, request.Day, request.Position ?? "(none)",
+            request.OrgId ?? "(none)");
+        throw new NoConfigInForceException(request.AgreementCode, request.OkVersion, request.Day);
+    }
+
+    /// <summary>
+    /// Runs one layer's read. A database error (<see cref="DbException"/>, which <c>NpgsqlException</c> is)
+    /// becomes <see cref="ConfigLookupUnavailableException"/> with the original as its inner exception;
+    /// <see cref="OperationCanceledException"/> and every other exception (a defect, not an outage)
+    /// propagate unchanged.
+    /// </summary>
+    private async Task<T?> ReadAsync<T>(Func<Task<T?>> read, string layer, LookupRequest request)
+        where T : class
+    {
         try
         {
-            profile = await _localAgreementProfileRepo.GetCurrentOpenAsync(orgId, agreementCode, okVersion, ct);
+            return await read();
         }
-        catch (Exception ex)
+        catch (DbException ex)
         {
             _logger.LogWarning(ex,
-                "Failed to load local agreement profile for {OrgId}/{AgreementCode}/{OkVersion} — returning post-position-override config",
-                orgId, agreementCode, okVersion);
-            return centralConfig;
+                "The {Layer} read failed for {AgreementCode}/{OkVersion} on {Day} (position {Position}, " +
+                "organisation {OrgId}); refused as unavailable",
+                layer, request.AgreementCode, request.OkVersion, request.Day, request.Position ?? "(none)",
+                request.OrgId ?? "(none)");
+            throw new ConfigLookupUnavailableException(layer, ex);
         }
-
-        if (profile is null)
-        {
-            _logger.LogDebug(
-                "No active local agreement profile for {OrgId}/{AgreementCode}/{OkVersion} — returning post-position-override config",
-                orgId, agreementCode, okVersion);
-            return centralConfig;
-        }
-
-        return ApplyProfileOverlay(centralConfig, profile, orgId);
     }
+
+    private readonly record struct LookupRequest(
+        string AgreementCode, string OkVersion, string? Position, string? OrgId, DateOnly Day);
 
     /// <summary>
     /// Applies the per-column overlay from <paramref name="profile"/> on top of
@@ -264,44 +277,45 @@ public sealed class ConfigResolutionService
             OvertimeRequiresPreApproval = overtimeRequiresPreApproval,
         };
     }
+}
 
-    /// <summary>
-    /// Returns the active config for a given agreement/version from DB, or null if not found.
-    /// Falls back to static CentralAgreementConfigs if DB unavailable.
-    /// </summary>
-    public async Task<AgreementRuleConfig?> GetActiveConfigAsync(
-        string agreementCode, string okVersion, CancellationToken ct = default)
+/// <summary>
+/// A read of the agreement configuration failed with a database error (P-13): the lookup refuses rather
+/// than substitute a compiled value. The original exception is <see cref="Exception.InnerException"/>. The
+/// Backend answers it with a fixed 503 (<c>ConfigLookupRefusalMiddleware</c>). Payroll does not call the
+/// lookup yet, so it maps nothing; TASK-14827 adds payroll's own 503 (wave-5 batch-C ruling 12).
+/// </summary>
+public sealed class ConfigLookupUnavailableException : Exception
+{
+    public ConfigLookupUnavailableException(string layer, Exception innerException)
+        : base($"The {layer} read failed; the agreement configuration is unavailable.", innerException)
     {
-        try
-        {
-            var dbConfig = await _agreementConfigRepo.GetActiveAsync(agreementCode, okVersion, ct);
-            if (dbConfig is not null)
-                return dbConfig.ToRuleConfig();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to load DB config for {AgreementCode}/{OkVersion} — falling back to static",
-                agreementCode, okVersion);
-        }
-
-        return CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion);
+        Layer = layer;
     }
 
-    /// <summary>
-    /// Returns the central config for a given agreement/version from static data.
-    /// Retained as emergency fallback. Prefer GetActiveConfigAsync for normal use.
-    /// </summary>
-    public static AgreementRuleConfig? GetCentralConfig(string agreementCode, string okVersion)
+    /// <summary>The layer whose read failed (server log only).</summary>
+    public string Layer { get; }
+}
+
+/// <summary>
+/// No published central version of (<see cref="AgreementCode"/>, <see cref="OkVersion"/>) is in force on
+/// <see cref="Day"/> (P-13): refused by name, never answered with a compiled value. The members serve the
+/// server log only; no response body carries them (ADR-040 D7). The Backend answers it with a fixed named
+/// 500 (<c>config_not_in_force</c>, <c>ConfigLookupRefusalMiddleware</c>).
+/// </summary>
+public sealed class NoConfigInForceException : Exception
+{
+    public NoConfigInForceException(string agreementCode, string okVersion, DateOnly day)
+        : base($"No published agreement configuration of {agreementCode}/{okVersion} is in force on {day:yyyy-MM-dd}.")
     {
-        return CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion);
+        AgreementCode = agreementCode;
+        OkVersion = okVersion;
+        Day = day;
     }
 
-    /// <summary>
-    /// Returns whether a central config exists for the given agreement/version.
-    /// </summary>
-    public static bool HasCentralConfig(string agreementCode, string okVersion)
-    {
-        return CentralAgreementConfigs.HasConfig(agreementCode, okVersion);
-    }
+    public string AgreementCode { get; }
+
+    public string OkVersion { get; }
+
+    public DateOnly Day { get; }
 }
