@@ -148,7 +148,7 @@ public sealed class DailyNormCalculator
         var okVersion = OkVersionResolver.ResolveVersion(day);
         var orgId = profile.OrgId ?? fallbackOrgId;
         // The configuration in force on THIS day; nothing resolved for one day is reused for another.
-        // shortcut(pending): every weekday resolves its own configuration (two reads per lookup, three with a position), once per caller in a request: one Skema month read runs this calculator twice (dailyNorm, consumptionBasis) plus the month-end scalar, about 45 lookups or 135 configuration reads with a position (90 without), and the year overview's month loop about 780 reads with a position (about 520 without); upgrade when one resolution is reused per stretch of days with no dated change in agreement, OK version, position, organisation or any layer's applies-from date, and the reuse covers every repeated caller in a request (TASK-14828)
+        // shortcut(F10): every weekday resolves its own configuration (two reads per lookup, three with a position), once per caller in a request: one Skema month read runs this calculator twice (dailyNorm, consumptionBasis) plus the month-end scalar, about 45 lookups or 135 configuration reads with a position (90 without), and the year overview's month loop about 780 reads with a position (about 520 without); upgrade when one resolution is reused per stretch of days with no dated change in agreement, OK version, position, organisation or any layer's applies-from date, and the reuse covers every repeated caller in a request (TASK-14828)
         var config = await _configLookup.ResolveAsync(
             orgId, profile.AgreementCode, okVersion, profile.Position, day, ct);
 

@@ -362,7 +362,7 @@ is **about 780 reads**. These are traced from the code, not measured.
 **Size.** Local timing lines from TASK-14825-T (throwaway PostgreSQL 16 cluster, not CI evidence): the year overview
 median 895 ms over five reads after a warm-up. CI-W5a's `YEAROVERVIEW-TIMING` line replaces it here when it lands.
 
-**Disposition: registered, revisit.** The `shortcut(pending)` comment at `DailyNormCalculator.cs:151` points here.
+**Disposition: registered, revisit.** The `shortcut(F10)` comment at `DailyNormCalculator.cs:151` points here.
 TASK-14828 restores reuse per stretch of days with no dated change in agreement, OK version, position, organisation or
 any layer's applies-from date, and the reuse covers every repeated caller in a request (ruling R4, carried into its
 plan row); TASK-14828-T measures a complete Skema month read and save beside the year overview. This row closes when
