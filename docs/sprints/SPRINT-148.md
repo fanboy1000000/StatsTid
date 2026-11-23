@@ -2619,3 +2619,60 @@ M-40 included [O for the 14 facts of the five classes run].
   - the hand-built Docker payroll facts and the `RetroactiveCorrectionManifestTests.cs:297` tightening;
   - the per-half `IsOwnConfig` mutations for AC-C1l's arms (2), (3) and (5);
   - an instruction to pin neither answer of deviations 2 and 8 until the stack review rules on them.
+
+**TASK-14828-T returned** (`test-qa`; commits `ae80ac76`, `256cb195`, `36341040`, `b55a7a96` on `f68ed12a`; report `.claude/reviews/S148-TASK-14828-T-report.md`).
+- **What it proves.** A published agreement configuration now reaches pay and the screens, dated per day:
+  - a 32-hour week from Monday 15 June pays 10 days at 37 h and 12 days at 32 h (150.80);
+  - a position override deactivated before the month stops a Kontorchef's flex cap, so the excess is paid out (one `FLEX_PAYOUT` of 10.00 h);
+  - payroll refuses with the fixed 503 when the configuration database cannot be read, and writes nothing in any of four tables;
+  - the rest check flags 11.5 h of rest under a 12-hour minimum, also through a position override;
+  - Teamoversigt and the balance show 150.80 h and 81.40 h in the 16 March examples.
+  No pinned payslip moved; PIN-1 and both 132.00 h pins are untouched.
+- **Also done:**
+  - Unit's 37 reds are cleared: the hand-built PCS fixtures get a lookup and an organisation, and the failure-logging reflection call passes the config.
+  - `RetroactiveCorrectionManifestTests` `TransactionalBlockFailure…` is tightened to `PostgresException` with SqlState `23503`, so it passes for the right reason.
+  - The `WeeklyPipelineOnCoreTests` interim is removed.
+  - `S120SkemaSpecRuntimeTests` is re-pinned to 18 month keys.
+  - The smoke suite sends a config on its direct engine call and gains three probes: the governance hop, and the Orchestrator's two paths.
+- **R9 and C2-R5 (TASK-14822's), green locally:**
+  - a pure transfer split leaves June's line totals equal;
+  - `/recalculate` after a pure transfer emits nothing, because corrections group by wage type alone (`RetroactiveCorrectionService.ProduceCorrectionLines`).
+- **The Orchestrator's checks:**
+  - The diff from `f68ed12a` touches only `tests/**`: 43 files, 15 added.
+  - The protected pins' diff is empty: `PayPin`, `PartTimeNormExpectedTests`, `TeamOverviewAggregateTests`, `TeamOverviewNormTimingTests`, `YearOverviewTimingTests`. R42's pin `Replay_NeverConsultsTheProfileResolver_ByteIdentical` is not edited; only its fixture's fake resolver gains an organisation.
+  - The shortcut check gives 3 bad: exactly TASK-14828's three `shortcut(pending)` comments, re-tagged at the stack's merge.
+  - The agent stopped with a note that background work was still running. It was checked: no test process or throwaway cluster remained.
+- **Gate, re-run by the Orchestrator at `b55a7a96`:**
+  - Build `-m:2 --no-incremental`: 0 errors, 125 warnings, CA2100 113 distinct.
+  - Unit 1751 green (the 37 reds are gone); DemoSeed 170; Regression `Category!=Docker` 146.
+- **Mutations:**
+  - **M-50** (`evaluate` answers a configless request from the compiled table) turns `PayrollSegmentRequestWithoutConfigTests.RefusedByTheFixedSentence_NothingWritten` and AC-C1i's `evaluate` arm red (`Expected: BadRequest, Actual: OK`); the control arm stays green.
+  - **AC-C1l's halves:** dropping the agreement-code comparison turns arms 1, 3 and 5 red, and dropping the OK-version comparison turns arm 2 red, so every arm is proven.
+  - **M-C1d** (its own): a compiled fallback on an unreadable lookup turns the Unit fail-closed fact red.
+  - M-9, M-12 and M-15 are argued, for CI-M5.
+- **Local cluster run (port 55439; not CI evidence):**
+  - Green: every new payroll, compliance and screen fact except AC-C13k (2); PIN-1; the hand-built payroll classes (`WeeklyPayroll`, `SplitMonthPayroll`, `SkemaCellClearPayroll`, `RetroactiveCorrection*`).
+  - Three `TeamOverviewAggregateTests` facts flaked once on an Npgsql read timeout and passed on rerun.
+  - Timing medians: Teamoversigt 30 people 144 ms and 300 people 1169 ms; year overview 603 ms; Skema month read 117 ms, save 115 ms (R4, the new `Skema/SkemaTimingTests.cs`, no threshold).
+- **Found, not fixed: two production defects, both older than the stack.** Neither file nor input is touched by the stack (checked by diff from `bb0677df`).
+  1. **AC-C13k (2) is red.**
+     - **Expected:** Anna, created on Tuesday 10 November and backdated to Monday 2 November, gets November calculated.
+     - **Observed:** payroll answers 422 `agreement-change-mid-week`.
+     - **Cause:** the backdate writes a second agreement row of the same code (AC 2–9 November, then AC from 10 November). The week check (`PeriodCalculationService.EnsureNoMidWeekAgreementChange`, `:4099`, S145 TASK-14512) counts every row start as an agreement change, even when the code is unchanged.
+     - **Effect:** a person created and then backdated into an earlier week cannot be paid for that month automatically.
+     - **Open choice:** where to fix it. Either the week check ignores a row whose code is unchanged, or the backdate merges the creation-dated row. It goes to the stack review.
+  2. **The Orchestrator's `weekly-calculation` task cannot run through `POST /api/orchestrator/execute`.**
+     - **Cause:** `WeeklyCalculationPipeline.cs:43-45` calls `Convert.ToDecimal` on parameters that arrive as `JsonElement` and throw `InvalidCastException`. This has been so since `0cb4cedc` (2026-03-01), on a path QUAL-145 calls non-of-record.
+     - **Effect:** the ruled probe `Orchestrator_WeeklyCalculationPath_ComposedStack` is expected red in CI (unproven in compose). It goes to the stack review.
+  - The compliance hop's smoke probe forbids only a 503, so it would not catch a 500 `config_not_in_force`.
+  - The Unit `FakeConfigLookup` repeats the Regression helper (separate projects).
+- **Brief contradictions:**
+  - AC-C1d's Unit fact cannot be F (it does not compile on master), so it is proved by M-C1d.
+  - AC-C13k (2) was briefed R but is red (defect 1 above).
+  - L2 is 22 files (17/5).
+- **REGEN** (Orchestrator, `061f8d55`, on `b55a7a96`): `openapi.json` gains the Skema month's `minimumRest` member, +7 lines, additions only, as predicted (`PLAN:185`).
+- **Worktrees:** TASK-14826's, 14826-T's and 14827's worktrees are removed (clean, no `node_modules`; their branches are kept, all contained in the stack's tip).
+- **TASK-14829 dispatched** (`ux`) on `061f8d55`. Its brief is draft 2 and every BC is ruled. The dispatch adds:
+  - the served member's name, type and span as built;
+  - TASK-14828's deviation 8, as a third source of a null day (the null rule treats it alike, so nothing about which days are null is pinned);
+  - the junction rule for `node_modules`.

@@ -44,21 +44,19 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
    - **TASK-14828 returned:** `f68ed12a` on `5873c29c` (report `.claude/reviews/S148-TASK-14828-report.md`). Ten files in scope (`ConfigResolutionService.cs` comment-only, checked). Three `shortcut(pending)` comments to re-tag in the merge commit: `OvertimeEndpoints.cs:122`, `TaskDispatcher.cs:85`, `WeeklyCalculationPipeline.cs:88`. Unit 37 red (TASK-14827's list). Local: the compliance classes green; no seeded figure moved. Reads: Skema month 90 → 14, year overview about 526 → 30.
      - **For the stack review:** deviation 2 (a workless month still sends one compliance run, against ruling 18's letter, because of S6); deviation 8 (an incomplete in-month record serves a null minimum rest); `DatedRecordTimeline` duplicates `EmploymentProfileResolver`'s rules; request-scoped reuse through `HttpContext.Items` in a singleton.
      - **Fix at the stack's merge:** Backend `Program.cs:456-459`'s calculator remark ("keeps no cache") is untrue; `ConfigResolutionService.cs:149-153` logs the ruled `monthEnd + 1` refusal at Error.
-   - **TASK-14828-T dispatched** (`test-qa`) on `f68ed12a`, carrying R9, C2-R5, R8, R4's Skema read and save timing, Unit's 37 reds, the hand-built payroll facts, the `RetroactiveCorrectionManifestTests.cs:297` tightening and the per-half `IsOwnConfig` mutations; it pins neither answer of deviations 2 and 8.
-   - **Carry to TASK-14828-T:**
-     - `WeeklyPayrollTests.cs:352-353`'s docstring ("the engine resolves config per day") is untrue now;
-     - AC-C1l's arms (2), (3), (5) were not mutation-run one by one (they share `IsOwnConfig`);
-     - remove the `WeeklyPipelineOnCoreTests` interim;
-     - the `RuleEngineFailureLoggingTests.cs:79-90` reflection fix (pass a config after `profile`);
-     - L2 is now 22 files (17/5);
-     - `RetroactiveCorrectionManifestTests.cs:297` passes for the wrong reason (the never-silent refusal satisfies `ThrowsAnyAsync<Exception>`);
-     - R9 and C2-R5 (TASK-14822's).
+   - **TASK-14828-T returned:** tip `b55a7a96` on `f68ed12a` (report `.claude/reviews/S148-TASK-14828-T-report.md`). Only `tests/**` changed; every carried item was delivered (the 37 Unit reds cleared, R9 and C2-R5 green locally, M-50 and the AC-C1l halves proven). Orchestrator's gate at `b55a7a96`: Unit 1751, DemoSeed 170, Regression non-Docker 146; CA2100 113.
+     - **Two older production defects found, for the stack review** (the stack touches neither):
+       - AC-C13k (2) is red: the payroll week check (`PeriodCalculationService.cs:4099`) counts a same-code agreement row boundary (a backdated new hire) as a mid-week change, so the month answers 422.
+       - `WeeklyCalculationPipeline.cs:43-45`'s `Convert.ToDecimal` on `JsonElement` makes the Orchestrator's `weekly-calculation` task fail through `/execute` (since March), so the new smoke probe is expected red in CI.
+     - Also for the review: the compliance smoke probe forbids only 503.
+   - **REGEN** `061f8d55` on `b55a7a96`: `openapi.json` +7, the `minimumRest` member only, as predicted.
+   - **TASK-14829 dispatched** (`ux`) on `061f8d55`, with the served member as built and deviation 8 as a third null source.
    - **Carry to TASK-14830:** `EnsureConfigUnchanged`'s remark and text; `ReplayRefusedException.cs:37`; `IOrganisationHistoryReader.cs:12-15`; the `TryResolveDatedProfileAsync` log label.
    - **For the stack's review:** payroll answers an anonymous 500 for `EmployeeProfileNotFoundException` (a record gap or a missing organisation); register coverage `(unproven)`.
-   - **Then** REGEN (the `minimumRest` member), then TASK-14829, then the stack review at the tip.
+   - **Then** the stack review at TASK-14829's tip (5α on the union, Fable reviewer and Codex), with every item above.
 4. **Then** 14830 + -T, 14831 + -T, 14846, CI-W5 and CI-M5 (M-9, M-12, M-13, M-15, M-49).
 5. **Owner ruling 2026-11-19 (a):** QUAL-259 is built after S148.
-6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves.
+6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves. The T14b stack's worktrees for 14826, 14826-T and 14827 are removed (branches kept); 14828's and 14828-T's remain until the merge.
 
 ## After that
 - **Wave 5** ends with **TASK-14846** (`ux`; the edit drawer locks one's own refused fields, with the contract Danish note).
