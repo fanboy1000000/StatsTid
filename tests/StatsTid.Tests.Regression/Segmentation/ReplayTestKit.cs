@@ -384,6 +384,8 @@ internal static class ReplayTestKit
                 EmploymentCategory = "Standard",
                 PartTimeFraction = row.Fraction,
                 Position = row.Position,
+                // S148 TASK-14828-T: a calculating run is refused without an organisation on the dated record.
+                OrgId = "STY01",
             });
         }
     }

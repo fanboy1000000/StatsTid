@@ -90,6 +90,9 @@ internal static class TestFixtures
         OkVersion = okVersion,
         EmploymentCategory = "Standard",
         PartTimeFraction = 1.0m,
+        // S148 TASK-14828-T (TASK-14827's rule): a calculating run is refused without an organisation on the dated record
+        // (the caller's profile where no resolver is wired); these facts are not about which organisation it is.
+        OrgId = "STY01",
     };
 
     /// <summary>
