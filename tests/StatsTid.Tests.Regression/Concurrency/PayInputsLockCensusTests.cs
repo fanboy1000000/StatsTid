@@ -522,6 +522,110 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE employee_id = @e", ("e", person)));
     }
 
+    // ─── row (3) (TASK-14831-T): the two recording routes take the lock SHARED, first, and hold nothing else ───
+    //
+    // Each fact builds a payroll host over this class's container (the class's fixture is unchanged), makes the month ready
+    // through the product's own routes, and only then takes the lock. The class clock is Thursday 5 March 2026, so the month
+    // is February 2026 (it opens on a Sunday, so the months-in-order check needs January APPROVED). A shared waiter shows
+    // mode ShareLock in pg_locks where the writers of rows (1) and (2) show ExclusiveLock.
+
+    private static readonly (DateOnly Start, DateOnly End) January2026 = (new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 31));
+    private static readonly (DateOnly Start, DateOnly End) February2026 = (new DateOnly(2026, 2, 1), new DateOnly(2026, 2, 28));
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>POST /api/payroll/calculate-and-export</c> of February 2026 (January and February APPROVED) is
+    /// started while the test holds <c>(148, 1)</c> exclusive. The calculation runs first (it takes no lock); the export then
+    /// waits on the key, holds only its virtual transaction id, waits in <c>ShareLock</c> mode, and answers 200 once the lock
+    /// is released.
+    /// <para><b>Red conditions (before TASK-14831 the export takes no pay-inputs lock).</b> The request completes 200 while
+    /// the lock is held, so <c>Assert.True(observed)</c> in <see cref="AssertWaitsFirstSharedAsync"/> fails. An export that
+    /// took the lock exclusive would fail the <c>ShareLock</c> assertion; one that took another lock first would fail the
+    /// granted-locks assertion.</para>
+    /// </summary>
+    [Fact]
+    public async Task CalculateAndExport_WaitsFirst_Shared_HoldsNothingElse()
+    {
+        await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
+        await using var payroll = PayInputsLockTestKit.PayrollHost.Start(Cs);
+        var employee = await PayInputsLockTestKit.SeedPayableEmployeeAsync(Cs, "STY01", January2026, February2026);
+
+        await AssertWaitsFirstSharedAsync(
+            () => payroll.ExportAsync(employee, "STY01", February2026.Start, February2026.End),
+            HttpStatusCode.OK, "the export (calculate-and-export)");
+    }
+
+    /// <summary>
+    /// <b>F (CI).</b> <c>POST /api/payroll/recalculate</c> of February 2026, already exported through the route, is started
+    /// while the test holds <c>(148, 1)</c> exclusive. The recalculation runs first; the correction then waits on the key,
+    /// holds only its virtual transaction id, waits in <c>ShareLock</c> mode, and answers 200 once the lock is released.
+    /// <para><b>Red conditions.</b> As above: before TASK-14831 the correction takes no pay-inputs lock, so it completes
+    /// before it is observed waiting.</para>
+    /// </summary>
+    [Fact]
+    public async Task Recalculate_WaitsFirst_Shared_HoldsNothingElse()
+    {
+        await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
+        await using var payroll = PayInputsLockTestKit.PayrollHost.Start(Cs);
+        var employee = await PayInputsLockTestKit.SeedPayableEmployeeAsync(Cs, "STY01", January2026, February2026);
+        using (var first = await payroll.ExportAsync(employee, "STY01", February2026.Start, February2026.End))
+            Assert.True(first.StatusCode == HttpStatusCode.OK, $"the set-up export: {await first.Content.ReadAsStringAsync()}");
+
+        await AssertWaitsFirstSharedAsync(
+            () => payroll.RecalculateAsync(employee, "STY01", February2026.Start, February2026.End, Guid.NewGuid()),
+            HttpStatusCode.OK, "the correction (recalculate)");
+    }
+
+    /// <summary>The wait of <see cref="AssertWaitsFirstAsync"/> for a SHARED taker: one waiter, holding nothing else, in
+    /// <c>ShareLock</c> mode, completing with <paramref name="success"/> after the release.</summary>
+    private async Task AssertWaitsFirstSharedAsync(
+        Func<Task<HttpResponseMessage>> send, HttpStatusCode success, string who)
+    {
+        await using var held = await HeldLock.AcquireAsync(Cs);
+        var request = send();
+
+        var observed = await PriorMonthExportRaceTests.WaitUntilAsync(
+            async () => (await WaitingPidsAsync()).Count > 0, TimeSpan.FromSeconds(30), () => request.IsCompleted);
+        var early = request.IsCompletedSuccessfully
+            ? $" The request already answered {(int)request.Result.StatusCode}: {await request.Result.Content.ReadAsStringAsync()}"
+            : string.Empty;
+        Assert.True(observed,
+            $"{who} was never observed waiting on the pay-inputs lock (148, 1) (request status: {request.Status}). " +
+            $"No recording route takes the lock here, or the request ended before it.{early}" +
+            PriorMonthExportRaceTests.DescribeFault(request));
+        Assert.False(request.IsCompleted, $"{who} finished while the pay-inputs lock was still held.");
+
+        var pid = Assert.Single(await WaitingPidsAsync()); // one waiter: the key is system-wide (ruling 5.6)
+        await AssertHoldsNothingElseSharedAsync(pid, who);
+
+        await held.ReleaseAsync();
+        var rsp = await request;
+        Assert.True(rsp.StatusCode == success,
+            $"{who} should answer {(int)success} once the lock is released, got {(int)rsp.StatusCode}: {await rsp.Content.ReadAsStringAsync()}");
+    }
+
+    /// <summary>As <see cref="AssertHoldsNothingElseAsync"/>, for a shared taker: among the granted locks only
+    /// <c>virtualxid</c>, and exactly one ungranted lock, the pay-inputs key, requested as <c>ShareLock</c>.</summary>
+    private async Task AssertHoldsNothingElseSharedAsync(int pid, string who)
+    {
+        await using var conn = new NpgsqlConnection(Cs);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(HoldsSql, conn);
+        cmd.Parameters.AddWithValue("pid", pid);
+        var granted = new List<string>();
+        var waiting = new List<string>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var row = $"{reader.GetString(0)}/{reader.GetString(1)}/{reader.GetInt64(3)}/{reader.GetInt64(4)}/{reader.GetInt32(5)}";
+            (reader.GetBoolean(2) ? granted : waiting).Add(row);
+        }
+
+        Assert.True(granted.All(g => g.StartsWith("virtualxid/", StringComparison.Ordinal)),
+            $"{who} holds a lock other than its virtual transaction id while waiting for the pay-inputs lock: {string.Join("; ", granted)}");
+        var only = Assert.Single(waiting);
+        Assert.Equal("advisory/ShareLock/148/1/2", only);
+    }
+
     // ─── machinery (private; rows (2) and (3) of AC-PIL-e add their facts to this class) ───
 
     /// <summary>The held lock: a connection and open transaction that ran <c>pg_advisory_xact_lock(148, 1)</c>,

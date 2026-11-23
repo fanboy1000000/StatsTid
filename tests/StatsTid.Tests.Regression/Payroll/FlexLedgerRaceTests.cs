@@ -12,7 +12,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 ///
 /// <para>
 /// <b>Plain language.</b> Every writer of an employee's export records (the three export routes and the correction) takes
-/// one per-employee lock as the FIRST statement of its transaction, so two writers for the same employee are processed
+/// one per-employee lock as the SECOND statement of its transaction (the first is the shared pay-inputs lock, S148 PIL), so two writers for the same employee are processed
 /// one after the other. A month's opening balance is calculated BEFORE that lock, from what is recorded at that moment, so
 /// by the time a request gets the lock the ledger may have moved. Under the lock the same derivation runs again; if the
 /// answer changed the request is refused 409 <c>payroll-ledger-changed</c> ("retry"), and its retry sees the new ledger.
@@ -95,7 +95,7 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
     }
 
     /// <summary>True when at least <paramref name="count"/> backends are waiting on a lock while running the ledger-lock
-    /// statement (the first statement of every writer of an employee's export records).</summary>
+    /// statement (the second statement of every writer of an employee's export records, after the shared pay-inputs lock).</summary>
     private async Task<bool> LedgerWaitersAtLeastAsync(int count)
     {
         await using var conn = new NpgsqlConnection(_fx.ConnectionString);
