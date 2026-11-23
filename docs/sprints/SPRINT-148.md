@@ -3358,3 +3358,22 @@ M-40 included [O for the 14 facts of the five classes run].
   - **Skema's batch anchor is latent:** no seeded type is pro-rated, so it gets a watch note only.
   - **The settlement anchor's legal asOf** (31 December versus the valuation boundary) is a pre-existing open owner item, already marked in the code (`VacationSettlementService.cs:1971-1974`).
 - **Brief contradiction:** `VacationSettlementService` is in Infrastructure, not the Backend.
+
+**Plan "final + 28" applied** (the planner, Opus 5.5; report `.claude/reviews/S148-plan-final28-report.md`; the diff was checked by the Orchestrator).
+- **The TASK-14831 pair's adjudication W1–W13:**
+  - the ledger rows for TASK-14847 and TASK-14847-T;
+  - wave 5's order: the 14831 stack with 14847 + -T stacked and merged as one, then TASK-14846, then CI-W5;
+  - AC-PIL-i, nine parts, owned by 14847-T;
+  - M-53 and M-54 added, and M-52 widened;
+  - figure (4) re-staged with three exports;
+  - the size: 48 dispatch ids + 30 paired = 78 agent tasks, counted by script;
+  - CI-W5 gains AC-PIL-i.
+- **TASK-14846's X7:** TASK-14838's row keeps the picker's disable, its link to the note and its hidden helper.
+- **Counts:** 148 AC ids, 51 mutation ids.
+- **The planner's open points, settled:**
+  - AC-PIL-i sits after AC-PIL-h, in id order.
+  - The new rows' sizes are S and L.
+  - The merge paperwork (QUAL-265, the SEC-066 note, O-19, HRP-015) lives in the sprint log at the merge, not in the plan.
+  - M-7 is re-run only if TASK-14847-T's Part A touches its facts.
+  - `EffectiveDatePicker.tsx` becoming a shared file (TASK-14846 FU-1, possibly TASK-14838) goes to TASK-14838's brief.
+  - Two old stale phrases are left as they are.
