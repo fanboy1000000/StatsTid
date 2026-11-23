@@ -1024,8 +1024,9 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// S146 / TASK-14605 (R-14 "the under-lock recheck"; R-36) — the writing transaction's half: the SAME function
     /// re-run inside the caller's <paramref name="conn"/> + <paramref name="tx"/>, which must already hold the
-    /// employee's ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>, the first
-    /// statement of every writer). Records through the reader's in-transaction surface, read FIRST; windows through
+    /// employee's ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>, the second
+    /// statement of every writer, after the shared pay-inputs lock, <see cref="PayInputsLock.AcquireSharedAsync"/>).
+    /// Records through the reader's in-transaction surface, read FIRST; windows through
     /// <see cref="IEmploymentWindowResolverInTx.GetWindowsAsync(NpgsqlConnection, NpgsqlTransaction, string, DateOnly, DateOnly, CancellationToken)"/>
     /// over the same helper as admission, <see cref="FlexLedgerOpening.WindowsReadRange(DateOnly, DateOnly?)"/> with the
     /// S of the in-transaction records (S147 R-13; null on both reads when no window resolver is wired, R-37).
@@ -1141,6 +1142,29 @@ public sealed class PeriodCalculationService
         };
     }
 
+    /// <summary>
+    /// What <c>/calculate-and-export</c> hands <see cref="PayrollExportService.ExportAsync"/> as
+    /// <see cref="PayrollExportContext.PayInputsRecheck"/> (S148 PIL, B-2; the flex recheck's shape): the pay-inputs
+    /// recheck (<see cref="RecheckPayInputsUnderLockAsync"/>) bound to this service, the caller's
+    /// <paramref name="profile"/> (the one the calculation ran with), the calculation's period and the inputs it froze
+    /// (<see cref="PeriodCalculationOutcome.PlanInputs"/>), for the <see cref="PayInputsRoute.Export"/> route. It takes
+    /// only a cancellation token: its reads run on connections of their own, never in the export's transaction (Block C
+    /// (3)). A successful calculation always froze its inputs, so an outcome without them is a defect in this service,
+    /// refused here, before the export transaction opens.
+    /// </summary>
+    public Func<CancellationToken, Task> PayInputsRecheckFor(EmploymentProfile profile, PeriodCalculationOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(outcome);
+        var used = outcome.PlanInputs
+            ?? throw new InvalidOperationException(
+                $"PeriodCalculationService.PayInputsRecheckFor: the calculation of manifest {outcome.ManifestId} carries " +
+                "no frozen inputs (PlanInputs), so the export cannot recheck what it calculated with. Nothing was written.");
+        var periodStart = outcome.Result.PeriodStart;
+        var periodEnd = outcome.Result.PeriodEnd;
+        return ct => RecheckPayInputsUnderLockAsync(profile, periodStart, periodEnd, used, PayInputsRoute.Export, ct);
+    }
+
     // -------------------------------------------------------------------
     // Evaluation — the two lanes over a plan, its pieces, a cutoff, an opening balance and hours rows
     // -------------------------------------------------------------------
@@ -1209,8 +1233,10 @@ public sealed class PeriodCalculationService
             // ADR-040 D5 / D10 (S137 TASK-13702) — the NOT_EMPLOYED skip point. It runs BEFORE
             // the profile resolution below: callers ask "employed?" before "what profile?" (D10).
             // A post-S136 employee's profile row starts at hire, so resolving a profile for a
-            // pre-hire segment would hit the resolver's fail-closed path
-            // (EmployeeProfileNotFoundException → a real 500).
+            // pre-hire segment would hit the resolver's fail-closed path and refuse the month
+            // falsely (EmployeeProfileNotFoundException → the named 422
+            // payroll-employment-record-gap on both calculating routes; inside the pay-inputs
+            // recheck, 409 payroll-inputs-changed).
             //
             // What a NOT_EMPLOYED segment does NOT do: no profile resolution, no rule evaluation
             // in either lane (no piece of the timeline covers its days, and it makes zero
@@ -1237,6 +1263,7 @@ public sealed class PeriodCalculationService
             }
 
             var segmentProfile = await SegmentProfileAsync(profile, segment.StartDate, plan, histories, ct);
+            await EnsureRecordCoversLastDayAsync(profile, segment.StartDate, segment.EndDate, plan, ct);
             segmentProfiles[s] = segmentProfile;
             pieces.Add(new FrozenPiece(
                 segment.StartDate, segment.EndDate,
@@ -1788,6 +1815,166 @@ public sealed class PeriodCalculationService
                 .ToArray(),
         };
     }
+
+    // -------------------------------------------------------------------
+    // The pay-inputs recheck — S148 PIL (refinement A-3, B-2; the plan's Block C)
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// The writing route a pay-inputs recheck runs for: it selects the sentence of the
+    /// <see cref="PayInputsChangedException"/> 409 (<c>payroll-inputs-changed</c>).
+    /// </summary>
+    public enum PayInputsRoute
+    {
+        /// <summary><c>/calculate-and-export</c>, through <see cref="PayrollExportService.ExportAsync"/>.</summary>
+        Export,
+
+        /// <summary><c>/recalculate</c>, through <see cref="RetroactiveCorrectionService"/>.</summary>
+        Correction,
+    }
+
+    /// <summary>
+    /// The pay-inputs recheck (S148 PIL, refinement B-2): inside a recording's turn on the pay-inputs lock, the
+    /// derivation that produced <paramref name="used"/> runs again, and its result must be the same.
+    ///
+    /// <para>
+    /// <b>Plain language.</b> Payroll calculates a month outside any lock, then records it. A change dated back into the
+    /// month (a configuration version, a position override, a local profile, a transfer, a profile or agreement-code
+    /// correction, an employment date, a profile close) that commits between the two would otherwise be recorded as if it
+    /// had not happened, and nobody would be told. Every such writer takes the pay-inputs lock exclusive before it changes
+    /// anything, and the recording holds it shared while this runs, so what this derives cannot change until the
+    /// recording commits or rolls back. A change that committed first is found here; a recording that commits first is
+    /// found by the change, which lists the month on HR's worklist.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What runs.</b> The calculation's own derivation, by the same code: planning with its histories
+    /// (<see cref="BuildPlanWithHistoriesAsync"/>), then the evaluation inputs (<see cref="DeriveEvaluationInputsAsync"/>: the
+    /// context pieces, each EMPLOYED segment's dated profile with the organisation from the dated record, each piece's
+    /// configuration from the lookup, and the settlement cutoff), frozen by <see cref="FreezePlanInputs"/>. Nothing the
+    /// calculation resolved is reused and nothing is cached. Admission (the approval checks, the week check, the flex
+    /// opening, the hours read) does not run again: each has its own under-lock check, is pinned by event id and digest,
+    /// or changes a piece here (an agreement code moved inside a settled week). No Rule Engine call is made: the rule
+    /// classifications planning asks for were cached by this request's own calculation
+    /// (<see cref="HttpRuleClassificationProvider"/>, held by this singleton).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Outcomes.</b> Equal inputs (<see cref="EnsurePayInputsUnchanged"/>): it returns and the recording goes on. A
+    /// difference, or a day the fresh derivation cannot cover (a record gap, no configuration in force, a planner split
+    /// refusal): <see cref="PayInputsChangedException"/> <c>payroll-inputs-changed</c>, never a pass. A configuration read
+    /// that fails: <see cref="RecordingConfigUnavailableException"/>, the recording-time 503, never a pass. Any other
+    /// failure propagates. The caller's transaction rolls back on each, so nothing is recorded.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Its reads run on connections of their own</b>, outside the caller's transaction, and take no lock (Block C (3)).
+    /// Under READ COMMITTED a statement sees what was committed before it started, inside a transaction or not, and while
+    /// the caller holds the lock shared no writer of a pay input can commit, so these reads see what an in-transaction read
+    /// would. The caller must already hold the lock (<see cref="PayInputsLock.AcquireSharedAsync"/>, the first statement of
+    /// its READ COMMITTED transaction); this method cannot check that.
+    /// </para>
+    /// </summary>
+    public async Task RecheckPayInputsUnderLockAsync(
+        EmploymentProfile profile,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        PlanInputs used,
+        PayInputsRoute route,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(used);
+        var month = FlexLedgerOpening.MonthStart(periodStart);
+
+        PlanInputs fresh;
+        try
+        {
+            // shortcut(SEC-066): the recheck's reads hold up to two further pooled connections while its transaction holds
+            // one (the profile resolver keeps its connection while it reads the agreement code); upgrade when a caller runs
+            // recordings near half the payroll pool at once, or a pool size or timeout is set
+            var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
+            var inputs = await DeriveEvaluationInputsAsync(plan, histories, profile, ct);
+
+            // Only the pieces, their configuration runs and the cutoff of this form are compared. The hours are not read
+            // again (they are pinned by event id and digest), so the frozen form is built with none.
+            fresh = FreezePlanInputs(inputs, new RecordedHours([], []), 0m, null, null);
+        }
+        catch (ConfigLookupUnavailableException ex)
+        {
+            throw new RecordingConfigUnavailableException(ex);
+        }
+        catch (Exception ex) when (ex is EmployeeProfileNotFoundException or NoConfigInForceException
+                                   || ex is PlannerInvariantViolation { IsSplitRefusal: true })
+        {
+            // A day the fresh derivation cannot cover is a difference: never a pass, and never its own answer here. The
+            // refusal is dropped, not wrapped: its message can carry a day of the employment (ADR-040 D7), and its own
+            // log line (employment_record_gap, the lookup's refusal) is the diagnosis. A planner violation that is not a
+            // split refusal is a defect and propagates.
+            throw new PayInputsChangedException(
+                month, PayInputsChangedSentence(route),
+                $"Employee '{profile.EmployeeId}', " +
+                $"{month.ToString(FlexLedgerRefusalException.MonthFormat, System.Globalization.CultureInfo.InvariantCulture)} " +
+                $"({route} route): under the pay-inputs lock the fresh derivation cannot cover a day of the month " +
+                $"({ex.GetType().Name}). Nothing was written.");
+        }
+
+        EnsurePayInputsUnchanged(used, fresh, month, route);
+    }
+
+    /// <summary>
+    /// The comparison of the pay-inputs recheck (AC-PIL-f's seam). <paramref name="used"/>, what the calculation froze, is
+    /// compared with <paramref name="fresh"/>, what the derivation gives now, in the frozen JSON form both serialize to (one
+    /// options object for both sides, compared ordinally; never by reference, because <see cref="AgreementRuleConfig"/> is a
+    /// class): the settlement cutoff, then each piece (its edges, fraction, agreement, position and organisation), then
+    /// each piece's configuration run (its key, and its configuration by value). Equal pieces mean the same runs and
+    /// edges, the same agreement, fraction, position and organisation on every day, and the same EMPLOYED days, which are
+    /// the days the pieces cover. Throws <see cref="PayInputsChangedException"/> at the first difference; its message
+    /// names the member and the piece for the server log, never a value.
+    /// </summary>
+    internal static void EnsurePayInputsUnchanged(PlanInputs used, PlanInputs fresh, DateOnly month, PayInputsRoute route)
+    {
+        ArgumentNullException.ThrowIfNull(used);
+        ArgumentNullException.ThrowIfNull(fresh);
+
+        var difference =
+            (string.Equals(FrozenForm(used.SettlementCutoff), FrozenForm(fresh.SettlementCutoff), StringComparison.Ordinal)
+                ? null
+                : "the settlement cutoff differs")
+            ?? FirstFrozenDifference("piece", used.Pieces, fresh.Pieces)
+            ?? FirstFrozenDifference("configuration run", used.ConfigRuns, fresh.ConfigRuns);
+        if (difference is null)
+            return;
+
+        throw new PayInputsChangedException(
+            month, PayInputsChangedSentence(route),
+            $"{month.ToString(FlexLedgerRefusalException.MonthFormat, System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"({route} route): under the pay-inputs lock the inputs the calculation used changed: {difference}. " +
+            "Nothing was written.");
+    }
+
+    /// <summary>The first difference between two frozen lists, member by member, or <c>null</c> when they are equal.</summary>
+    private static string? FirstFrozenDifference<T>(string member, IReadOnlyList<T>? used, IReadOnlyList<T>? fresh)
+    {
+        if (used is null || fresh is null)
+            return used is null && fresh is null ? null : $"the {member}s are frozen on one side only";
+        if (used.Count != fresh.Count)
+            return $"{used.Count} {member}(s) used, {fresh.Count} now";
+        for (var i = 0; i < used.Count; i++)
+        {
+            if (!string.Equals(FrozenForm(used[i]), FrozenForm(fresh[i]), StringComparison.Ordinal))
+                return $"{member} {i} differs";
+        }
+
+        return null;
+    }
+
+    /// <summary>The JSON form the comparison reads, through the one options object both sides use.</summary>
+    private static string FrozenForm<T>(T value) => JsonSerializer.Serialize(value, JsonOptions);
+
+    private static string PayInputsChangedSentence(PayInputsRoute route) => route == PayInputsRoute.Correction
+        ? PayInputsChangedException.CorrectionSentence
+        : PayInputsChangedException.ExportSentence;
 
     /// <summary>
     /// Event ids in the frozen order: ordinal over the <c>D</c> string form (lowercase, hyphenated) — the
@@ -3655,7 +3842,8 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// S145 / TASK-14512 — one dated resolution of the employee's employment record: the profile in force
     /// (date-resolved OK version applied), or a gap, naming the effective-dated table whose row is missing
-    /// (<c>employee_profiles</c> or <c>user_agreement_codes</c>; never a date).
+    /// (<c>employee_profiles</c>, or <c>user_agreement_codes or user_organisations</c> for the resolver's one exception
+    /// covering both since S148 C-13; never a date).
     /// </summary>
     private sealed record DatedProfile(EmploymentProfile? Profile, string? MissingRecord);
 
@@ -3859,6 +4047,7 @@ public sealed class PeriodCalculationService
         foreach (var edge in edges)
         {
             var piecesProfile = await ResolveProfileAtAsync(callerProfile, from, plan, ct);
+            await EnsureRecordCoversLastDayAsync(callerProfile, from, edge.AddDays(-1), plan, ct);
             pieces.Add(new FrozenPiece(
                 from, edge.AddDays(-1),
                 piecesProfile.PartTimeFraction, piecesProfile.AgreementCode, piecesProfile.Position)
@@ -3951,7 +4140,8 @@ public sealed class PeriodCalculationService
         catch (DbException ex)
         {
             _logger.LogWarning(ex,
-                "The {Source} read failed; the calculation is refused as payroll-config-unavailable", source);
+                "The {Source} read failed; the calculation, or the recording whose pay-inputs recheck made the read, " +
+                "is refused as payroll-config-unavailable", source);
             throw new ConfigLookupUnavailableException(source, ex);
         }
     }
@@ -3973,6 +4163,30 @@ public sealed class PeriodCalculationService
     {
         var dated = await TryResolveDatedProfileAsync(callerProfile, asOf, ct);
         return dated.Profile ?? throw RecordGap(dated.MissingRecord, callerProfile.EmployeeId, plan);
+    }
+
+    /// <summary>
+    /// QUAL-265 — the <c>employment_record_gap</c> refusal (<see cref="RecordGap"/>) for a piece of evaluated days,
+    /// <paramref name="from"/> to <paramref name="to"/> inclusive, whose employment record covers its first day but not
+    /// its last. The case: HR closes a profile inside the month while the person stays employed (the close ends the
+    /// profile, not the employment), so the last days are EMPLOYED with no profile; resolved on the first day alone, they
+    /// would be paid on the ended profile, a guessed record. Why the last day is enough: every row start of
+    /// <c>employee_profiles</c>, <c>user_agreement_codes</c> and <c>user_organisations</c> inside the evaluated days is a
+    /// piece edge (the planner's boundary sources and the context-piece edges), so no row starts inside a piece, and a gap
+    /// that begins inside one lasts to its last day. The resolver also reports a profile row with no agreement-code or
+    /// organisation row as a gap, so one resolution covers all three tables. A one-day piece was resolved on its first
+    /// day and is not read again. It only refuses: the piece keeps its first day's record, so a covered piece is unchanged.
+    /// A replay never comes here (it derives nothing, <see cref="FrozenEvaluationInputs"/>).
+    /// </summary>
+    private async Task EnsureRecordCoversLastDayAsync(
+        EmploymentProfile callerProfile, DateOnly from, DateOnly to, PlannedCalculation plan, CancellationToken ct)
+    {
+        if (to <= from)
+            return;
+
+        var dated = await TryResolveDatedProfileAsync(callerProfile, to, ct);
+        if (dated.Profile is null)
+            throw RecordGap(dated.MissingRecord, callerProfile.EmployeeId, plan);
     }
 
     /// <summary>
@@ -4105,13 +4319,17 @@ public sealed class PeriodCalculationService
         // TASK-14512: a gap planning recorded at a segment start is refused here too, at the same
         // point in the calculation as before — after the planner and admission.)
         //
-        // The diagnostics carry only the employee id, the replay-stable manifest id, and the CALLER'S
-        // OWN period — nothing date-shaped that describes the employment itself.
+        // The diagnostics carry only the employee id, the plan's id, and the CALLER'S OWN period —
+        // nothing date-shaped that describes the employment itself. The plan's id is never a stored
+        // manifest's: a refused calculation stores no manifest, and the pay-inputs recheck derives on
+        // a plan of its own, so the logged id is not the recorded calculation's manifest id.
         _logger.LogError(
             "employment_record_gap: no effective-dated employment record ({MissingRecord}) covers " +
-            "this calculation segment for employee {EmployeeId} manifest {ManifestId} period " +
-            "{PeriodStart}-{PeriodEnd}. The calculation is REFUSED and no payroll figure is " +
-            "produced for this period — a figure derived from a guessed employment record would " +
+            "a day this period's derivation must evaluate, for employee {EmployeeId}, plan {ManifestId} " +
+            "(this derivation's own plan; no manifest is stored under it), period " +
+            "{PeriodStart}-{PeriodEnd}. The period is REFUSED: a calculation produces no payroll " +
+            "figure, and a recording whose pay-inputs recheck made this derivation records nothing " +
+            "— a figure derived from a guessed employment record would " +
             "be worse than none. This is a data gap, not a server fault: the employee should " +
             "appear on the HR follow-up 'cannot register' list (HRP-015), which names the missing " +
             "record and whether a scheduled one will close the gap, and an HR administrator " +

@@ -48,7 +48,9 @@ public static class PayInputsLock
     /// <summary>
     /// Takes the pay-inputs lock SHARED: the first statement of the payroll export's and the
     /// correction's READ COMMITTED transactions, so recordings run side by side and wait only for a
-    /// writer. No caller yet; its first caller is TASK-14831.
+    /// writer. Its two callers are <c>PayrollExportService.ExportAsync</c> and
+    /// <c>RetroactiveCorrectionService.RecalculateAsync</c> (payroll), each followed by the
+    /// <c>payroll-ledger-</c> lock and then payroll's rechecks.
     /// </summary>
     public static async Task AcquireSharedAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct = default)

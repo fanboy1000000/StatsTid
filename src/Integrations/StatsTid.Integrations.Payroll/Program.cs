@@ -449,6 +449,16 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // calculated, written or exported. Fixed 422; the lookup logged the agreement, OK version and day.
         return ConfigNotInForce();
     }
+    catch (StatsTid.SharedKernel.Exceptions.EmployeeProfileNotFoundException)
+    {
+        // No employment record (profile, agreement code or organisation) covers a day the month evaluates. The
+        // calculation service throws it (RecordGap) while it derives the month's inputs, before its first rule-engine
+        // call and before the manifest is written; the export transaction opens later. So nothing was calculated,
+        // written or exported. Fixed 422 with no date, table or employee id (ADR-040 D7); the server log line
+        // employment_record_gap names the missing record. (Inside the export transaction the pay-inputs recheck turns
+        // a record gap into payroll-inputs-changed, so this arm never answers for a recording.)
+        return EmploymentRecordGap();
+    }
     catch (ManifestNotPersistedException)
     {
         // S146 TASK-14604 (QUAL-205): the calculation's manifest was not persisted (the commit of its one
@@ -505,6 +515,7 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             PeriodId = approval.PeriodId,
             PriorMonthToRecheck = outcome.PriorMonthApprovalRequired,
             FlexLedger = flexWrite,
+            PayInputsRecheck = calculator.PayInputsRecheckFor(request.Profile, outcome),
             // S146 Step 7a (R-54): the calculation's manifest rides PayrollExportGenerated, so even a record with no
             // lines names it. A committed manifest: this point is past ThrowIfNotProvable and StampAuditContext.
             ManifestId = outcome.ManifestId,
@@ -529,6 +540,22 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             // no export record, no PayrollExportGenerated, no audit row. The calculation's own manifest stays, as
             // with the other export-time rechecks. 409 payroll-ledger-changed: retry.
             return FlexLedgerRefused(flexLedgerLogger, ex, "calculate-and-export export");
+        }
+        catch (PayInputsChangedException ex)
+        {
+            // S148 PIL (B-2): inside the export transaction, under the shared pay-inputs lock and after the flex recheck,
+            // the calculation's derivation ran again and no longer gave the inputs it froze (a pay input dated into the
+            // month changed between the calculation and the recording), or could not cover a day of it. The transaction
+            // rolled back: no export record, no PayrollExportGenerated, no audit row. The calculation's own manifest
+            // stays, as with the other export-time rechecks. 409 payroll-inputs-changed: calculate the month again.
+            return PayInputsChanged(loggerFactory, ex, "calculate-and-export export");
+        }
+        catch (RecordingConfigUnavailableException)
+        {
+            // S148 PIL (B-2): the pay-inputs recheck could not read the agreement configuration; a failed read is never
+            // a pass. The export transaction rolled back, so nothing was exported or recorded; the calculation and its
+            // manifest exist, hence the recording-time sentence. Fixed 503; the lookup logged the detail.
+            return RecordingConfigUnavailable();
         }
         catch (PriorMonthNotApprovedException ex)
         {
@@ -764,6 +791,22 @@ app.MapPost("/api/payroll/recalculate", async (
         // marker (a retry with the same token is not short-circuited). 409 naming the month.
         return FlexLedgerRefused(flexLedgerLogger, ex, "recalculate");
     }
+    catch (PayInputsChangedException ex)
+    {
+        // S148 PIL (B-2): inside the correction transaction, under the shared pay-inputs lock and after the flex
+        // recheck, the recalculation's derivation ran again and no longer gave the inputs it froze, or could not cover a
+        // day of the month. The transaction rolled back: no baseline or balance change, no correction event, no audit
+        // row, no idempotency marker (a retry with the same token is not short-circuited). The recalculation's own
+        // manifest stays. 409 payroll-inputs-changed: run the correction again.
+        return PayInputsChanged(loggerFactory, ex, "recalculate");
+    }
+    catch (RecordingConfigUnavailableException)
+    {
+        // S148 PIL (B-2): the pay-inputs recheck inside the correction transaction could not read the agreement
+        // configuration. The transaction rolled back, so nothing was corrected and the export record is unchanged; the
+        // recalculation and its manifest exist, hence the recording-time sentence, not ConfigUnavailable()'s. Fixed 503.
+        return RecordingConfigUnavailable();
+    }
     catch (RuleClassificationsUnavailableException)
     {
         // S144 TASK-14412 (ruling B1): the rule set could not be fetched. The correction service
@@ -785,6 +828,16 @@ app.MapPost("/api/payroll/recalculate", async (
         // Raised before the correction transaction opens, so nothing was written. Fixed 422, the same body as
         // /calculate-and-export's.
         return ConfigNotInForce();
+    }
+    catch (StatsTid.SharedKernel.Exceptions.EmployeeProfileNotFoundException)
+    {
+        // No employment record (profile, agreement code or organisation) covers a day the month evaluates. The
+        // recalculation throws it (RecordGap) while it derives the month's inputs, before its first rule-engine call and
+        // before the correction transaction opens, so nothing was written: no baseline, correction event, audit row or
+        // idempotency marker. Fixed 422, the same body as /calculate-and-export's; the server log line
+        // employment_record_gap names the missing record. (Inside the correction transaction the pay-inputs recheck
+        // turns a record gap into payroll-inputs-changed, so this arm never answers for a recording.)
+        return EmploymentRecordGap();
     }
     catch (ManifestNotPersistedException)
     {
@@ -851,6 +904,20 @@ static IResult RulesUnavailable() =>
         kind = "payroll-rules-unavailable"
     }, statusCode: 503);
 
+// S148 PIL (B-2; batch-D ruling 4) — the ONE response for "the pay-inputs recheck could not read the agreement
+// configuration while a month was being recorded" (RecordingConfigUnavailableException). The same kind as
+// ConfigUnavailable(), with a sentence true at recording time: the calculation and its manifest exist, but the export's
+// or the correction's transaction rolled back, so nothing was exported, corrected or recorded. 503 because the cause is
+// a dependency outage and the caller should retry. The body is FIXED (contract): no agreement code, no date, no employee
+// id, never the database error (the lookup logs it). Shared by /calculate-and-export and /recalculate.
+static IResult RecordingConfigUnavailable() =>
+    Results.Json(new
+    {
+        success = false,
+        error = "The agreement configuration could not be read while this month was being recorded. Nothing was exported or corrected, and no export record was written or changed. Retry when the configuration database is reachable.",
+        kind = "payroll-config-unavailable"
+    }, statusCode: 503);
+
 // ADR-043 D12 (P-13; wave-5 batch-C ruling 12) — the ONE response for "the agreement configuration lookup could not
 // read the configuration database" (ConfigLookupUnavailableException). 503 because the cause is a dependency outage
 // and the caller should retry. The body is FIXED (contract): no agreement code, no date, no employee id, never the
@@ -875,6 +942,19 @@ static IResult ConfigNotInForce() =>
         success = false,
         error = "No published agreement configuration is in force for a day of this period. Nothing was calculated, written or exported. A configuration administrator must publish one.",
         kind = "payroll-config-not-in-force"
+    }, statusCode: 422);
+
+// The ONE response for "no employment record covers a day of this period" (EmployeeProfileNotFoundException, the
+// calculation service's employment_record_gap refusal; the T14b stack's 5a ruling T13). 422 because the month's own
+// inputs cannot be calculated as they stand, the ConfigNotInForce() precedent. The body is FIXED (contract): no date, no
+// table name and no employee id (ADR-040 D7); the server log line employment_record_gap names the missing record. Both
+// calculating routes raise it before anything is written. Shared by /calculate-and-export and /recalculate.
+static IResult EmploymentRecordGap() =>
+    Results.Json(new
+    {
+        success = false,
+        error = "No employment record covers a day of this period for this employee. Nothing was calculated, written or exported. An HR administrator must repair the employment record.",
+        kind = "payroll-employment-record-gap"
     }, statusCode: 422);
 
 // S146 TASK-14604 (QUAL-205; rulings R-22, R-27) — the ONE response for "the calculation's manifest was not
@@ -1086,6 +1166,26 @@ static IResult FlexLedgerRefused(ILogger logger, FlexLedgerRefusalException ex, 
         success = false,
         error = ex.ErrorSentence,
         kind = ex.Kind,
+        month = ex.MonthText
+    }, statusCode: 409);
+}
+
+// S148 PIL (B-2; batch-D ruling 3) — the ONE response for a refusal of the pay-inputs recheck (PayInputsChangedException):
+// the inputs a calculation used changed while it was being recorded, so the export or the correction rolled back. 409
+// because a retry resolves it: it calculates on the new inputs. The body carries the recorded month as yyyy-MM (a pay
+// month, never an employment date or a value) and the route's fixed sentence (contract), no employee id and no date.
+// Logged first as a Warning with the kind, the route, the month and the diagnostic (the first difference), which never
+// reaches the response (the R-56 precedent above). Shared by /calculate-and-export's export and /recalculate.
+static IResult PayInputsChanged(ILoggerFactory loggerFactory, PayInputsChangedException ex, string route)
+{
+    loggerFactory.CreateLogger("StatsTid.Integrations.Payroll.PayInputs").LogWarning(
+        ex, "Pay-inputs recheck refusal {Kind} on {Route}, month {Month}: {Diagnostic}",
+        PayInputsChangedException.KindValue, route, ex.MonthText, ex.Message);
+    return Results.Json(new
+    {
+        success = false,
+        error = ex.ErrorSentence,
+        kind = PayInputsChangedException.KindValue,
         month = ex.MonthText
     }, statusCode: 409);
 }

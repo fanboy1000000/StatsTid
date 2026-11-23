@@ -367,6 +367,8 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
         ActorRole = "GlobalAdmin",
         ResolvedTargetOrgId = OrgId,
         FlexLedger = LedgerWrite(employeeId, year, month),
+        // A calculating context carries the pay-inputs recheck (ExportAsync refuses one without it); this fact is not about it, so it is a no-op (PIL, B-2).
+        PayInputsRecheck = _ => Task.CompletedTask,
         ManifestId = manifestId,
     };
 

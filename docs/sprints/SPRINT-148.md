@@ -3406,3 +3406,42 @@ M-40 included [O for the 14 facts of the five classes run].
   - 5α (`## S148 TASK-14831 stack 5α c2`);
   - Fable (`## S148 TASK-14831 stack 5a reviewer c2`);
   - Codex (`codex-14831-c2-run.ps1` → `S148-TASK-14831-5a-codex-c2.raw.md`).
+
+**The TASK-14831 stack reviewed, cycle 2** (`80d51054..8572b0a0`, delta `f493bb32..8572b0a0`; saved verbatim):
+- **5α** (`S148-TASK-14831-5alpha-c2.md`): **PASS**.
+  - Every file authorized and the two `src` hunks outside the fences.
+  - `shortcut(SEC-066)` byte for byte, and 15 lock calls.
+  - Every changed existing-test line is the ruled repair or a ruled edit.
+  - Notes: the race class's header still said "every fact is F"; the BC-5 fact's kind sits at class level.
+- **Codex** (`S148-TASK-14831-5a-codex-c2.raw.md`): **APPROVED**; its BLOCKER and WARNING are closed.
+  - The coverage premise holds, valid timelines are untouched, and the refusals write nothing.
+  - **NOTE:** the export 503 fact's docstring explains M-53 wrongly: the export route gives an anonymous 500.
+- **Fable** (`S148-TASK-14831-5a-reviewer-c2.md`): **APPROVED-WITH-WARNINGS**; all its cycle-1 findings are closed.
+  - It could not defeat the last-day rule. It tried a contiguous replacement, a retired zero-length row, a one-day piece, a context piece, a leaver, a mid-month starter and an override deactivation.
+  - **WARNING 1:** a past record gap that HR has since moved past keeps the month refused, but HRP-015's list (gaps covering today) does not show the person, and `RecordGap`'s log says it should.
+  - **NOTEs:** the M-53 docstring; three stale doc comments; a CI-W5 watch list (figure (4) is most likely to be slow); a leaver's same-day close (unproven); QUAL-265 must land in the merge.
+- **Ruled by the Orchestrator, without an adjudicator** (Codex APPROVED and Fable's warning comes with its own remedy, which nothing contradicts):
+  - Fable WARNING 1 is registered as **QUAL-266** (M, OPEN): the log sentence is reworded and an HR pointer added in a later payroll task. HRP-015 is re-read.
+  - The docstring and comment NOTEs are fixed in the merge commit, comment only.
+  - The leaver case is recorded as unproven.
+  - The watch list is carried to CI-W5.
+
+**The TASK-14831 stack merged** (`--no-ff` of `8572b0a0` into master, this commit). It holds TASK-14831 + -T and TASK-14847 + -T, two review cycles, and the adjudication `S148-TASK-14831-5a-adjudication-c1.md` (W1–W13).
+- **What the owner gets, in plain words:**
+  - Payroll records (exports or corrects) a month only in its turn on a system-wide lock that every HR change dated into a month also takes.
+  - In its turn it re-derives the month's inputs, and refuses by name (409 `payroll-inputs-changed`) if anything changed. Either order is safe: a change that wins makes the retry pay the new values, and a recording that wins is found by the change and listed on HR's worklist.
+  - A month in which an employment record stops covering a day (for example a profile closed while the person stays employed) is refused by name (422 `payroll-employment-record-gap`) instead of paid on the ended record (QUAL-265).
+  - A record gap at calculation time answers a named 422, not an anonymous 500.
+- **In the merge commit (Orchestrator, docs and comments only):**
+  - **Registers:** QUAL-265 (H, FIXED, CI-pending; the stale-profile payment) and QUAL-266 (M, OPEN; no HR pointer for a past gap). QUAL-258's S148 revisit. SEC-066's dated note for the payroll variant: up to three connections per recording, so a stall from about half the pool, a 15 s lock hold, the trigger already reachable, the re-staged figure (4) and the closures.
+  - **HR follow-up register:** an S148 update section on HRP-015.
+  - **O-19:** ADR-034 D4's note of 2026-11-23, drafted by the planner and applied by the Orchestrator. It records the pay-inputs lock, its key `(148, 1)` and full lock order; the writers outside it, each with its reason; the extra connections; the four figures (local, CI at CI-W5); the test-only overload; and the last-day rule. The D4 note of 2026-10-24 is marked: the ledger lock is the second statement since S148.
+  - **Comment fixes:** `PeriodCalculationService.cs`'s `DatedProfile` doc names three tables; the race class header; the M-53 docstring per route; one speculative red condition.
+  - The shortcut check gives 20 found, 0 bad.
+- **Told to the owner (told, not asked):**
+  1. **A month in which HR closed a profile while the person stays employed is now refused by name.** The calculation answers 422 ("An HR administrator must repair the employment record"); a recording racing the close answers 409. Before, such a month was paid silently, the remaining days on the ended profile.
+  2. **The accepted cost is restated.** A recording holds up to three database connections at its peak, not two, so recordings could stall from about half the payroll pool at once (availability only; nothing is written). It is registered under SEC-066 with its closures.
+  3. **A past record gap is refused without an HR pointer** (QUAL-266): HR's list shows only today's gaps. A later payroll task adds the pointer.
+- **The W12 trace** found no Backend reader sharing QUAL-265 unruled. The balance's closed-profile stand-in is already QUAL-226 and N-2.
+- **CI-W5 watch list gains:** `ConcurrentExports_SmallPayrollPool_Recorded` (most likely slow); the two recording-time 503 facts; AC-PIL-i (6)–(9); the race class (11 facts); the census (20); and the M-52, M-53 and M-54 Docker effects (argued).
+- **Next:** the GATE on master, the TASK-14846 merge (`0a3a3d7c`), the GATE, then CI-W5 and CI-M5.

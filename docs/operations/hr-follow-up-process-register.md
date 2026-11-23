@@ -420,3 +420,11 @@ same day as everything else in this register's read family.
 
 **Still owed, unchanged:** nobody has ruled *by when* a registration-blocking data gap must be fixed. The gap is now visible and
 legible; its deadline is still unstated.
+
+## S148 update — HRP-015 and payroll's record-gap refusal
+
+**Re-read at the TASK-14831 stack's merge (2026-11-23; the pair's 5a adjudication, merge paperwork).** Payroll's refusal for a missing employment record now also fires for a record that **ends inside a month** while the person stays employed (QUAL-265, fixed by TASK-14847): the calculation answers 422 `payroll-employment-record-gap` ("An HR administrator must repair the employment record"), and a recording racing the change answers 409 `payroll-inputs-changed`. Before, such a month was paid silently on the ended profile.
+
+- **What HRP-015's list shows:** people with no record covering *today*. A gap that is still open today shows there, and payroll's refusal and the list agree.
+- **What it does not show (QUAL-266, M, OPEN):** a gap in the past that HR has since moved past (a new profile starting later). The month stays refused, and the list is empty for the person. Payroll's log line currently says the employee "should appear" on this list; that is reworded with QUAL-266.
+- **Still owed, unchanged:** nobody has ruled *by when* a registration-blocking data gap must be fixed.

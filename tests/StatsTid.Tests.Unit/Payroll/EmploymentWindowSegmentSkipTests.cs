@@ -421,7 +421,7 @@ public sealed class EmploymentWindowSegmentSkipTests
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>The pre-hire-500 path is dead: for a starter plan, the profile resolver is
-    /// asked ONLY about the employed segment's start date — never about the pre-hire span.
+    /// asked ONLY about the employed segment's first and last day — never about the pre-hire span.
     /// Drives the FULL legacy shim (window hydration → typed plan → skip) through a fake
     /// window resolver, i.e. the exact production chain a hired-mid-month employee takes.</summary>
     [Fact]
@@ -442,8 +442,11 @@ public sealed class EmploymentWindowSegmentSkipTests
 
         Assert.True(outcome.Result.Success);
 
-        // D10: exactly one profile lookup, at the hire date — none at 03-01 (pre-hire).
-        Assert.Equal(new[] { hire }, profileResolver.AsOfDates);
+        // D10: the profile is asked on the hire date and nowhere before it (none at 03-01, pre-hire). The second date is
+        // the employed segment's LAST day: payroll checks that a complete dated record covers each piece's last day as
+        // well as its first (TASK-14847, QUAL-265), so 31 March is asked beside the hire date.
+        Assert.Equal(new[] { hire, Mar31 }, profileResolver.AsOfDates);
+        Assert.All(profileResolver.AsOfDates, d => Assert.True(d >= hire, $"the profile was asked on {d}, before the hire {hire}."));
 
         // D7: the window was read server-side for the calculation period.
         // S146 R-28: and once more for [P.start, M.end] = (1 Feb, 31 Mar): the flex-ledger derivation reading the

@@ -25,7 +25,8 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// balances (<c>opening_balance</c>, <c>closing_balance</c>, <c>balance_provenance</c>; all null or all set). This
 /// type owns their reads and writes: <see cref="ReadFlexLedgerRecordsAsync"/> (the ledger read behind
 /// <see cref="IFlexLedgerReader"/>, self-managed or in-transaction), <see cref="AcquireFlexLedgerLocksAsync"/> (the
-/// per-employee ledger lock every writer of this table takes as the FIRST statement of its transaction),
+/// per-employee ledger lock every writer of this table takes as the SECOND statement of its transaction, right after
+/// the shared pay-inputs lock, <see cref="PayInputsLock.AcquireSharedAsync"/>),
 /// <see cref="TryReadRecordForUpdateAsync"/> (the correction's locked baseline, now with the balances, reviewer c3
 /// N4) and <see cref="UpdateCorrectedRecordAsync"/> (the correction's baseline update, now with the balances).
 /// </para>
@@ -155,7 +156,9 @@ public sealed class PayrollExportRecordRepository
     /// <c>payroll_export_records</c> (<c>/calculate-and-export</c> through
     /// <see cref="PayrollExportService.ExportAsync"/>, and <c>/recalculate</c> through
     /// <see cref="RetroactiveCorrectionService"/>; the raw export routes were writers too until S147 TASK-14716
-    /// retired them) calls this as the FIRST statement of its writing transaction, before any row lock. Transaction-scoped (<c>pg_advisory_xact_lock</c>): held to commit or rollback.
+    /// retired them) calls this as the SECOND statement of its READ COMMITTED writing transaction, right after the shared
+    /// pay-inputs lock (<see cref="PayInputsLock.AcquireSharedAsync"/>; S148 PIL, Block C) and before any row lock.
+    /// Transaction-scoped (<c>pg_advisory_xact_lock</c>): held to commit or rollback.
     ///
     /// <para>
     /// <b>One statement for several employees, ordered by the KEY</b> (reviewer c3 N2). Both callers pass one employee
@@ -171,7 +174,11 @@ public sealed class PayrollExportRecordRepository
     /// advisory key and starts with the approval-row lock, so it cannot join an advisory cycle). A
     /// cycle among advisory locks alone would need two simultaneous collisions taken in opposite orders; Postgres's
     /// deadlock detector would then cancel one transaction, which is safe because both writers are transactional.
-    /// Payroll transactions lock in one order: advisory, then approval rows, then records.
+    /// Payroll transactions lock in one order: the pay-inputs lock (shared), then this ledger lock, then the rechecks
+    /// (reads), then approval rows, then records. The pay-inputs key lives in PostgreSQL's two-integer key space, apart
+    /// from these hashed keys, so it can never collide with one. No wait cycle forms through it: every exclusive taker
+    /// takes it as its first statement and never takes this ledger lock, so no transaction waits for the ledger lock
+    /// while holding the pay-inputs lock exclusive, and none waits for the pay-inputs lock while holding anything.
     /// </para>
     /// </summary>
     public static async Task AcquireFlexLedgerLocksAsync(
