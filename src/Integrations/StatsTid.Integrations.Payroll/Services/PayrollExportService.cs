@@ -104,7 +104,8 @@ public sealed class PayrollExportService
     /// (<see cref="PayrollExportContext.PeriodId"/>): a context without one (null or <see cref="Guid.Empty"/>) throws
     /// <see cref="InvalidOperationException"/> (<see cref="NoPeriodMessage"/>). Every export comes from an approved
     /// month;</description></item>
-    /// <item><description>with a flex-ledger write, the calculation's manifest is required (S146 Step 7a, R-54);</description></item>
+    /// <item><description>with a flex-ledger write, the calculation's manifest is required (S146 Step 7a, R-54), and so is
+    /// the pay-inputs recheck (<see cref="PayrollExportContext.PayInputsRecheck"/>; S148 PIL);</description></item>
     /// <item><description>a call with no lines and no flex-ledger write (a direct service call only; the one route
     /// always sends a flex-ledger write) has nothing to export: <c>Success = true</c>, no export id, and no connection
     /// is opened.</description></item>
@@ -112,10 +113,15 @@ public sealed class PayrollExportService
     /// </para>
     ///
     /// <para>
-    /// <b>In ONE <c>(conn, tx)</c></b>, in order:
+    /// <b>In ONE READ COMMITTED <c>(conn, tx)</c></b>, in order:
     /// <list type="number">
-    /// <item><description>the employee's flex-ledger lock, the FIRST statement (the flex ledger, below);</description></item>
+    /// <item><description>the pay-inputs lock, SHARED, the FIRST statement (S148 PIL, Block C; <see cref="PayInputsLock"/>):
+    /// recordings run side by side and take turns with every writer of a pay input, which takes it exclusive;</description></item>
+    /// <item><description>the employee's flex-ledger lock, the second (the flex ledger, below);</description></item>
     /// <item><description>with a flex-ledger write, the under-lock recheck of the opening (below);</description></item>
+    /// <item><description>with a pay-inputs recheck (the calculating route), the calculation's derivation run again and
+    /// compared with what it froze; a difference refuses with <see cref="PayInputsChangedException"/>
+    /// <c>payroll-inputs-changed</c>, a failed configuration read with <see cref="RecordingConfigUnavailableException"/>;</description></item>
     /// <item><description>(S145 / TASK-14512 Do 7) when the calculation required the PREVIOUS month to be APPROVED
     /// (<see cref="PayrollExportContext.PriorMonthToRecheck"/>), that is re-asserted under <c>SELECT … FOR SHARE</c>,
     /// before this month's own row lock; a previous month no longer APPROVED aborts the tx with
@@ -145,10 +151,11 @@ public sealed class PayrollExportService
     /// <para>
     /// <b>S146 / TASK-14605 — the flex ledger (QUAL-188; R-3, R-14, R-15, R-16).</b>
     /// <list type="bullet">
-    /// <item><description><b>The ledger lock, first.</b> The FIRST statement of the transaction takes the employee's
-    /// ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>), before the previous
-    /// month's <c>FOR SHARE</c>, the current approval's <c>FOR UPDATE</c> and the record insert. Every export takes it
-    /// (this method is a writer of <c>payroll_export_records</c>).</description></item>
+    /// <item><description><b>The ledger lock, second.</b> The second statement of the transaction, right after the
+    /// shared pay-inputs lock, takes the employee's ledger lock
+    /// (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>), before the previous month's
+    /// <c>FOR SHARE</c>, the current approval's <c>FOR UPDATE</c> and the record insert. Every export takes it (this
+    /// method is a writer of <c>payroll_export_records</c>).</description></item>
     /// <item><description><b>The recheck</b> (calculating route only, <see cref="PayrollExportContext.FlexLedger"/>
     /// set). Right after the lock, the derivation runs again on in-transaction reads
     /// (<see cref="FlexLedgerWrite.RecheckUnderLock"/>); a different (opening, provenance) or a refusal aborts the
@@ -241,6 +248,18 @@ public sealed class PayrollExportService
                 "a recorded closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
         }
 
+        // S148 PIL (B-2): the calculating route's export rechecks its pay inputs under the shared pay-inputs lock. A
+        // calculating context without the recheck would record without it, the silent path the lock exists to close, so
+        // it is refused here, never skipped. A direct service call without a flex-ledger write is unchanged.
+        if (flex is not null && context.PayInputsRecheck is null)
+        {
+            throw new InvalidOperationException(
+                "PayrollExportService.ExportAsync: the calculating route's export carries no pay-inputs recheck " +
+                "(PayrollExportContext.PayInputsRecheck is null). Pass PeriodCalculationService.PayInputsRecheckFor(profile, " +
+                "outcome) beside the flex-ledger write, so the recording checks under the pay-inputs lock that the inputs " +
+                "it calculated with have not changed. Nothing was written.");
+        }
+
         // No lines and no flex-ledger write: nothing to export (a direct service call only; the one route always
         // sends a flex-ledger write). As before, no record and Success = true; since R-G9, without a connection.
         if (monthKey is not { } key)
@@ -265,13 +284,25 @@ public sealed class PayrollExportService
         await using (var conn = _connectionFactory.Create())
         {
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // READ COMMITTED, stated (PAT-015): each statement after the lock sees what committed while this waited.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
 
-            // S146 TASK-14605 (R-15; C3) — the ledger lock is the FIRST statement. It precedes every row lock below
-            // (the previous month's FOR SHARE, the current approval's FOR UPDATE, the record insert's UNIQUE key), so
-            // payroll transactions lock in one order: advisory, then approval rows, then records. Every export takes
-            // it: this is a writer of payroll_export_records, as is the correction (RetroactiveCorrectionService),
-            // which takes the same lock.
+            // S148 PIL (Block C) — the pay-inputs lock, SHARED, is the FIRST statement; the employee's ledger lock is the
+            // second (ADR-034 D4), then the rechecks (reads), then the previous month's FOR SHARE, this month's approval
+            // FOR UPDATE and the record. Recordings hold it side by side; a writer of a pay input waits for them, and
+            // they wait for a writer. No wait cycle can form: every exclusive taker takes it as its first statement and
+            // never takes payroll-ledger- (only payroll does), the two shared takers (this export and the correction)
+            // take it first and payroll-ledger- second, so a transaction waiting for it holds nothing, and two shared
+            // holders never wait for each other on it (they serialize per employee on payroll-ledger-, as before). When
+            // this request asks for it, it holds no lock on any connection: the calculation and its manifest committed
+            // before, and the route's own reads finished on their own connections (Block C (1)).
+            await PayInputsLock.AcquireSharedAsync(conn, tx, ct);
+
+            // S146 TASK-14605 (R-15; C3) — the ledger lock, second. It precedes every row lock below (the previous
+            // month's FOR SHARE, the current approval's FOR UPDATE, the record insert's UNIQUE key), so payroll
+            // transactions lock in one order: advisory locks (pay inputs, then the ledger), then approval rows, then
+            // records. Every export takes it: this is a writer of payroll_export_records, as is the correction
+            // (RetroactiveCorrectionService), which takes the same two locks in the same order.
             await PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync(conn, tx, new[] { key.EmployeeId }, ct);
 
             // S146 TASK-14605 (R-14) — the under-lock recheck. The opening the calculation used was derived before
@@ -283,6 +314,17 @@ public sealed class PayrollExportService
             if (flex is not null)
             {
                 await flex.RecheckUnderLock(conn, tx, ct);
+            }
+
+            // S148 PIL (B-2) — the pay-inputs recheck, after the flex recheck. The calculation's derivation runs again and
+            // must give the inputs it froze; a difference, or a day it cannot cover, throws PayInputsChangedException
+            // payroll-inputs-changed, a failed configuration read RecordingConfigUnavailableException, and the whole
+            // transaction rolls back: no record, no event, no audit row. Its reads run on connections of their own and
+            // never take the pay-inputs lock (Block C (3)); the shared lock this transaction holds is what keeps them
+            // stable. Required on the calculating route (checked before the transaction opened).
+            if (context.PayInputsRecheck is { } payInputsRecheck)
+            {
+                await payInputsRecheck(ct);
             }
 
             // S145 TASK-14512 Do 7 — the PREVIOUS month first. When the calculation's admission required the
@@ -309,8 +351,9 @@ public sealed class PayrollExportService
             // FOR UPDATE re-assert with the four-eyes checkpoint. Only the write is skipped: when the month has no
             // record, nothing is handed off (ADR-034 D3), so no record, event, audit row or envelope. The month stays
             // reopenable, a re-export writes nothing again and /recalculate refuses it as never exported. The read
-            // runs under the ledger lock that every writer of payroll_export_records takes first, so it sees every
-            // record committed before the lock was granted and none can appear until this transaction ends. A month
+            // runs under the ledger lock that every writer of payroll_export_records takes before it touches a record,
+            // so it sees every record committed before the lock was granted and none can appear until this
+            // transaction ends. A month
             // that already HAS a record (case 3b, a re-run) goes on as before: the insert meets the record and the
             // content compare answers 409 "use a correction" when the recorded lines differ.
             var recordLess = untrackedZeroLine && !await MonthHasRecordAsync(conn, tx, key, ct);
@@ -711,8 +754,9 @@ public sealed class PayrollExportService
     /// <summary>
     /// S147 / TASK-14715 (R-17; fix-up 1, R-F1) — whether the month already has a record, read inside the export
     /// transaction after the ledger lock and the approval checks. Asked only for an <c>UNTRACKED</c> month with no
-    /// lines. Every writer of <c>payroll_export_records</c> takes the employee's ledger lock first, so this read sees
-    /// every record committed before the lock was granted, and none can appear until the transaction ends.
+    /// lines. Every writer of <c>payroll_export_records</c> takes the employee's ledger lock before it touches a record
+    /// (the second statement of its transaction, after the shared pay-inputs lock), so this read sees every record
+    /// committed before the lock was granted, and none can appear until the transaction ends.
     /// </summary>
     private static async Task<bool> MonthHasRecordAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, ExportMonthKey key, CancellationToken ct)
@@ -899,6 +943,18 @@ public sealed class PayrollExportContext
     public FlexLedgerWrite? FlexLedger { get; init; }
 
     /// <summary>
+    /// The pay-inputs recheck (S148 PIL, B-2): the calculation's derivation run again and compared with what it froze,
+    /// called inside the export transaction right after the flex recheck, under the shared pay-inputs lock. It throws
+    /// <see cref="PayInputsChangedException"/> (409 <c>payroll-inputs-changed</c>) or
+    /// <see cref="RecordingConfigUnavailableException"/> (503). It takes only a cancellation token because its reads run on
+    /// connections of their own, never in the export's transaction (Block C (3)). Set by <c>/calculate-and-export</c> from
+    /// <see cref="PeriodCalculationService.PayInputsRecheckFor"/>, and required whenever <see cref="FlexLedger"/> is set:
+    /// <see cref="PayrollExportService.ExportAsync"/> refuses a calculating-route export without it before its
+    /// transaction opens, so no calculating export records without the check.
+    /// </summary>
+    public Func<CancellationToken, Task>? PayInputsRecheck { get; init; }
+
+    /// <summary>
     /// S146 Step 7a (R-54; TASK-14610) — the manifest of the calculation whose figures this export stores
     /// (ADR-016 D10), carried onto <see cref="PayrollExportGenerated.ManifestId"/>: calculate-and-export only.
     /// Required whenever <see cref="FlexLedger"/> is set — <see cref="PayrollExportService.ExportAsync"/>
@@ -989,6 +1045,70 @@ public sealed class FlexLedgerWrite
 public sealed class PayrollExportConflictException : Exception
 {
     public PayrollExportConflictException(string message) : base(message) { }
+}
+
+/// <summary>
+/// The pay-inputs recheck refused a recording (S148 PIL, refinement B-2): under the pay-inputs lock, the inputs the
+/// calculation used are no longer what a fresh derivation gives (a pay input dated into the month changed between the
+/// calculation and the recording), or the fresh derivation cannot cover a day of the month. Raised by
+/// <see cref="PeriodCalculationService.RecheckPayInputsUnderLockAsync"/> inside the export's or the correction's
+/// transaction, which rolls back: nothing is recorded, and only the calculation's own manifest stays.
+///
+/// <para><b>The response.</b> Both calculating routes answer 409 <c>{ success:false, error, kind:"payroll-inputs-changed",
+/// month:"yyyy-MM" }</c>: <c>error</c> is the route's fixed sentence (<see cref="ExportSentence"/> or
+/// <see cref="CorrectionSentence"/>; no employee id, no date and no value), <c>month</c> the recorded month, a pay month,
+/// never an employment date (ADR-040 D7). <see cref="Exception.Message"/> is the diagnostic for the server log (the first
+/// difference: which member and which piece) and never reaches a response. It derives from <see cref="Exception"/>
+/// directly, so no other export-time arm can catch it.</para>
+/// </summary>
+public sealed class PayInputsChangedException : Exception
+{
+    /// <summary>The discriminator of the host's 409 body.</summary>
+    public const string KindValue = "payroll-inputs-changed";
+
+    /// <summary>The 409 sentence on <c>/calculate-and-export</c> (contract).</summary>
+    public const string ExportSentence =
+        "The inputs this calculation used changed while it was being recorded; calculate the month again. Nothing was " +
+        "exported and no export record was written.";
+
+    /// <summary>The 409 sentence on <c>/recalculate</c> (contract).</summary>
+    public const string CorrectionSentence =
+        "The inputs this correction used changed while it was being recorded; run the correction again. Nothing was " +
+        "corrected and the export record is unchanged.";
+
+    public PayInputsChangedException(DateOnly month, string errorSentence, string message)
+        : base(message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(errorSentence);
+        Month = new DateOnly(month.Year, month.Month, 1);
+        ErrorSentence = errorSentence;
+    }
+
+    /// <summary>The first day of the month whose recording was refused.</summary>
+    public DateOnly Month { get; }
+
+    /// <summary>The month as the host's 409 body carries it (<c>yyyy-MM</c>).</summary>
+    public string MonthText => Month.ToString(FlexLedgerRefusalException.MonthFormat, CultureInfo.InvariantCulture);
+
+    /// <summary>The route's fixed sentence of the host's 409 body.</summary>
+    public string ErrorSentence { get; }
+}
+
+/// <summary>
+/// The pay-inputs recheck could not read the agreement configuration while a month was being recorded (S148 PIL; the
+/// lookup's <see cref="ConfigLookupUnavailableException"/>, kept as <see cref="Exception.InnerException"/>). A failed read
+/// is never a pass: the export's or the correction's transaction rolls back and nothing is recorded. Both calculating
+/// routes answer it with the recording-time 503 <c>payroll-config-unavailable</c>, whose sentence is true at recording
+/// time (the calculation and its manifest exist). It does not derive from <see cref="ConfigLookupUnavailableException"/>,
+/// so the calculation-time arm, which says nothing was calculated, cannot catch it.
+/// </summary>
+public sealed class RecordingConfigUnavailableException : Exception
+{
+    public RecordingConfigUnavailableException(ConfigLookupUnavailableException innerException)
+        : base("The agreement configuration could not be read by the pay-inputs recheck while a month was being " +
+               "recorded; nothing was recorded.", innerException)
+    {
+    }
 }
 
 /// <summary>

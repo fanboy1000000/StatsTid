@@ -1141,6 +1141,29 @@ public sealed class PeriodCalculationService
         };
     }
 
+    /// <summary>
+    /// What <c>/calculate-and-export</c> hands <see cref="PayrollExportService.ExportAsync"/> as
+    /// <see cref="PayrollExportContext.PayInputsRecheck"/> (S148 PIL, B-2; the flex recheck's shape): the pay-inputs
+    /// recheck (<see cref="RecheckPayInputsUnderLockAsync"/>) bound to this service, the caller's
+    /// <paramref name="profile"/> (the one the calculation ran with), the calculation's period and the inputs it froze
+    /// (<see cref="PeriodCalculationOutcome.PlanInputs"/>), for the <see cref="PayInputsRoute.Export"/> route. It takes
+    /// only a cancellation token: its reads run on connections of their own, never in the export's transaction (Block C
+    /// (3)). A successful calculation always froze its inputs, so an outcome without them is a defect in this service,
+    /// refused here, before the export transaction opens.
+    /// </summary>
+    public Func<CancellationToken, Task> PayInputsRecheckFor(EmploymentProfile profile, PeriodCalculationOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(outcome);
+        var used = outcome.PlanInputs
+            ?? throw new InvalidOperationException(
+                $"PeriodCalculationService.PayInputsRecheckFor: the calculation of manifest {outcome.ManifestId} carries " +
+                "no frozen inputs (PlanInputs), so the export cannot recheck what it calculated with. Nothing was written.");
+        var periodStart = outcome.Result.PeriodStart;
+        var periodEnd = outcome.Result.PeriodEnd;
+        return ct => RecheckPayInputsUnderLockAsync(profile, periodStart, periodEnd, used, PayInputsRoute.Export, ct);
+    }
+
     // -------------------------------------------------------------------
     // Evaluation — the two lanes over a plan, its pieces, a cutoff, an opening balance and hours rows
     // -------------------------------------------------------------------
@@ -1788,6 +1811,165 @@ public sealed class PeriodCalculationService
                 .ToArray(),
         };
     }
+
+    // -------------------------------------------------------------------
+    // The pay-inputs recheck — S148 PIL (refinement A-3, B-2; the plan's Block C)
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// The writing route a pay-inputs recheck runs for: it selects the sentence of the
+    /// <see cref="PayInputsChangedException"/> 409 (<c>payroll-inputs-changed</c>).
+    /// </summary>
+    public enum PayInputsRoute
+    {
+        /// <summary><c>/calculate-and-export</c>, through <see cref="PayrollExportService.ExportAsync"/>.</summary>
+        Export,
+
+        /// <summary><c>/recalculate</c>, through <see cref="RetroactiveCorrectionService"/>.</summary>
+        Correction,
+    }
+
+    /// <summary>
+    /// The pay-inputs recheck (S148 PIL, refinement B-2): inside a recording's turn on the pay-inputs lock, the
+    /// derivation that produced <paramref name="used"/> runs again, and its result must be the same.
+    ///
+    /// <para>
+    /// <b>Plain language.</b> Payroll calculates a month outside any lock, then records it. A change dated back into the
+    /// month (a configuration version, a position override, a local profile, a transfer, a profile or agreement-code
+    /// correction, an employment date, a profile close) that commits between the two would otherwise be recorded as if it
+    /// had not happened, and nobody would be told. Every such writer takes the pay-inputs lock exclusive before it changes
+    /// anything, and the recording holds it shared while this runs, so what this derives cannot change until the
+    /// recording commits or rolls back. A change that committed first is found here; a recording that commits first is
+    /// found by the change, which lists the month on HR's worklist.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What runs.</b> The calculation's own derivation, by the same code: planning with its histories
+    /// (<see cref="BuildPlanWithHistoriesAsync"/>), then the evaluation inputs (<see cref="DeriveEvaluationInputsAsync"/>: the
+    /// context pieces, each EMPLOYED segment's dated profile with the organisation from the dated record, each piece's
+    /// configuration from the lookup, and the settlement cutoff), frozen by <see cref="FreezePlanInputs"/>. Nothing the
+    /// calculation resolved is reused and nothing is cached. Admission (the approval checks, the week check, the flex
+    /// opening, the hours read) does not run again: each has its own under-lock check, is pinned by event id and digest,
+    /// or changes a piece here (an agreement code moved inside a settled week). No Rule Engine call is made: the rule
+    /// classifications planning asks for were cached by this request's own calculation
+    /// (<see cref="HttpRuleClassificationProvider"/>, held by this singleton).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Outcomes.</b> Equal inputs (<see cref="EnsurePayInputsUnchanged"/>): it returns and the recording goes on. A
+    /// difference, or a day the fresh derivation cannot cover (a record gap, no configuration in force, a planner split
+    /// refusal): <see cref="PayInputsChangedException"/> <c>payroll-inputs-changed</c>, never a pass. A configuration read
+    /// that fails: <see cref="RecordingConfigUnavailableException"/>, the recording-time 503, never a pass. Any other
+    /// failure propagates. The caller's transaction rolls back on each, so nothing is recorded.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Its reads run on connections of their own</b>, outside the caller's transaction, and take no lock (Block C (3)).
+    /// Under READ COMMITTED a statement sees what was committed before it started, inside a transaction or not, and while
+    /// the caller holds the lock shared no writer of a pay input can commit, so these reads see what an in-transaction read
+    /// would. The caller must already hold the lock (<see cref="PayInputsLock.AcquireSharedAsync"/>, the first statement of
+    /// its READ COMMITTED transaction); this method cannot check that.
+    /// </para>
+    /// </summary>
+    public async Task RecheckPayInputsUnderLockAsync(
+        EmploymentProfile profile,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        PlanInputs used,
+        PayInputsRoute route,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(used);
+        var month = FlexLedgerOpening.MonthStart(periodStart);
+
+        PlanInputs fresh;
+        try
+        {
+            // shortcut(pending): the recheck borrows a second pooled connection while its transaction holds one (SEC-066);
+            // upgrade when exports can run in parallel or a pool size is set
+            var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
+            var inputs = await DeriveEvaluationInputsAsync(plan, histories, profile, ct);
+
+            // Only the pieces, their configuration runs and the cutoff of this form are compared. The hours are not read
+            // again (they are pinned by event id and digest), so the frozen form is built with none.
+            fresh = FreezePlanInputs(inputs, new RecordedHours([], []), 0m, null, null);
+        }
+        catch (ConfigLookupUnavailableException ex)
+        {
+            throw new RecordingConfigUnavailableException(ex);
+        }
+        catch (Exception ex) when (ex is EmployeeProfileNotFoundException or NoConfigInForceException
+                                   || ex is PlannerInvariantViolation { IsSplitRefusal: true })
+        {
+            // A day the fresh derivation cannot cover is a difference: never a pass, and never its own answer here. The
+            // refusal is dropped, not wrapped: its message can carry a day of the employment (ADR-040 D7), and its own
+            // log line (employment_record_gap, the lookup's refusal) is the diagnosis. A planner violation that is not a
+            // split refusal is a defect and propagates.
+            throw new PayInputsChangedException(
+                month, PayInputsChangedSentence(route),
+                $"Employee '{profile.EmployeeId}', " +
+                $"{month.ToString(FlexLedgerRefusalException.MonthFormat, System.Globalization.CultureInfo.InvariantCulture)} " +
+                $"({route} route): under the pay-inputs lock the fresh derivation cannot cover a day of the month " +
+                $"({ex.GetType().Name}). Nothing was written.");
+        }
+
+        EnsurePayInputsUnchanged(used, fresh, month, route);
+    }
+
+    /// <summary>
+    /// The comparison of the pay-inputs recheck (AC-PIL-f's seam). <paramref name="used"/>, what the calculation froze, is
+    /// compared with <paramref name="fresh"/>, what the derivation gives now, in the frozen JSON form both serialize to (one
+    /// options object for both sides, compared ordinally; never by reference, because <see cref="AgreementRuleConfig"/> is a
+    /// class): the settlement cutoff, then each piece (its edges, fraction, agreement, position and organisation), then
+    /// each piece's configuration run (its key, and its configuration by value). Equal pieces mean the same runs and
+    /// edges, the same agreement, fraction, position and organisation on every day, and the same EMPLOYED days, which are
+    /// the days the pieces cover. Throws <see cref="PayInputsChangedException"/> at the first difference; its message
+    /// names the member and the piece for the server log, never a value.
+    /// </summary>
+    internal static void EnsurePayInputsUnchanged(PlanInputs used, PlanInputs fresh, DateOnly month, PayInputsRoute route)
+    {
+        ArgumentNullException.ThrowIfNull(used);
+        ArgumentNullException.ThrowIfNull(fresh);
+
+        var difference =
+            (string.Equals(FrozenForm(used.SettlementCutoff), FrozenForm(fresh.SettlementCutoff), StringComparison.Ordinal)
+                ? null
+                : "the settlement cutoff differs")
+            ?? FirstFrozenDifference("piece", used.Pieces, fresh.Pieces)
+            ?? FirstFrozenDifference("configuration run", used.ConfigRuns, fresh.ConfigRuns);
+        if (difference is null)
+            return;
+
+        throw new PayInputsChangedException(
+            month, PayInputsChangedSentence(route),
+            $"{month.ToString(FlexLedgerRefusalException.MonthFormat, System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"({route} route): under the pay-inputs lock the inputs the calculation used changed: {difference}. " +
+            "Nothing was written.");
+    }
+
+    /// <summary>The first difference between two frozen lists, member by member, or <c>null</c> when they are equal.</summary>
+    private static string? FirstFrozenDifference<T>(string member, IReadOnlyList<T>? used, IReadOnlyList<T>? fresh)
+    {
+        if (used is null || fresh is null)
+            return used is null && fresh is null ? null : $"the {member}s are frozen on one side only";
+        if (used.Count != fresh.Count)
+            return $"{used.Count} {member}(s) used, {fresh.Count} now";
+        for (var i = 0; i < used.Count; i++)
+        {
+            if (!string.Equals(FrozenForm(used[i]), FrozenForm(fresh[i]), StringComparison.Ordinal))
+                return $"{member} {i} differs";
+        }
+
+        return null;
+    }
+
+    /// <summary>The JSON form the comparison reads, through the one options object both sides use.</summary>
+    private static string FrozenForm<T>(T value) => JsonSerializer.Serialize(value, JsonOptions);
+
+    private static string PayInputsChangedSentence(PayInputsRoute route) => route == PayInputsRoute.Correction
+        ? PayInputsChangedException.CorrectionSentence
+        : PayInputsChangedException.ExportSentence;
 
     /// <summary>
     /// Event ids in the frozen order: ordinal over the <c>D</c> string form (lowercase, hyphenated) — the

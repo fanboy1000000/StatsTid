@@ -138,10 +138,12 @@ public sealed class RetroactiveCorrectionService
     /// <para>
     /// <strong>S146 / TASK-14605 (QUAL-188; R-14, R-15, R-10) — the flex ledger.</strong> No opening balance is
     /// passed: the recalculation's admission derives it from the recorded ledger (and may refuse with
-    /// <see cref="FlexLedgerRefusalException"/> before the transaction opens). The correction transaction takes the
-    /// per-employee ledger lock as its FIRST statement, before the record's <c>FOR UPDATE</c>, then re-runs the
-    /// derivation on in-transaction reads and requires the (opening, provenance) its OWN calculation used
-    /// (<c>payroll-ledger-changed</c> otherwise). It records the month's corrected balances beside
+    /// <see cref="FlexLedgerRefusalException"/> before the transaction opens). The correction transaction (READ COMMITTED)
+    /// takes the shared pay-inputs lock as its FIRST statement and the per-employee ledger lock as its second (S148 PIL,
+    /// Block C), before the record's <c>FOR UPDATE</c>, then re-runs the derivation on in-transaction reads and requires
+    /// the (opening, provenance) its OWN calculation used (<c>payroll-ledger-changed</c> otherwise), and then rechecks its
+    /// pay inputs (<see cref="PeriodCalculationService.RecheckPayInputsUnderLockAsync"/>; <c>payroll-inputs-changed</c>
+    /// otherwise). It records the month's corrected balances beside
     /// <c>current_effective_lines</c>; the event and the result carry the opening used and the closing before and
     /// after; and the next month is named when the closing changed (C4), Sunday or not. Under <c>UNTRACKED</c> (a month
     /// before the ledger start, whose record holds no balance: a case-3a calculating export since S147 TASK-14715, or
@@ -363,11 +365,21 @@ public sealed class RetroactiveCorrectionService
         await using (var conn = _connectionFactory.Create())
         {
             await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            // READ COMMITTED, stated (PAT-015): each statement after the lock sees what committed while this waited.
+            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
 
-            // S146 TASK-14605 (R-15; C3) — the per-employee ledger lock is the FIRST statement, before the record's
-            // FOR UPDATE below, as in every writer of payroll_export_records: a correction of M and an export of M+1
-            // (which reads M's closing) serialize here, whichever comes first.
+            // S148 PIL (Block C) — the pay-inputs lock, SHARED, is the FIRST statement, as in the export: then the
+            // ledger lock, the rechecks (reads) and the record's FOR UPDATE. A writer of a pay input waits for this
+            // correction, and it waits for a writer. No wait cycle can form: every exclusive taker takes it as its first
+            // statement and never takes payroll-ledger- (only payroll does), and the two shared takers take it first and
+            // payroll-ledger- second. When this request asks for it, it holds no lock on any connection: the
+            // recalculation and its manifest committed before, and the route's idempotency probe and this service's
+            // record probe finished on their own connections (Block C (1)).
+            await PayInputsLock.AcquireSharedAsync(conn, tx, ct);
+
+            // S146 TASK-14605 (R-15; C3) — the per-employee ledger lock, second, before the record's FOR UPDATE below,
+            // as in every writer of payroll_export_records: a correction of M and an export of M+1 (which reads M's
+            // closing) serialize here, whichever comes first.
             await PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync(conn, tx, new[] { profile.EmployeeId }, ct);
 
             // S146 TASK-14605 (R-14) — the under-lock recheck: the same function on in-transaction reads must give
@@ -380,6 +392,16 @@ public sealed class RetroactiveCorrectionService
                     conn, tx, profile.EmployeeId, new DateOnly(corrYear, corrMonth, 1), flexOpening,
                     PeriodCalculationService.FlexLedgerRoute.Correction, ct);
             }
+
+            // S148 PIL (B-2) — the pay-inputs recheck, after the flex recheck and always: a month with no EMPLOYED day
+            // too, because an employment-date change can make one employed. The recalculation's derivation runs again and
+            // must give the inputs it froze; otherwise PayInputsChangedException payroll-inputs-changed (or, for a failed
+            // configuration read, RecordingConfigUnavailableException) and the transaction rolls back: no baseline or
+            // balance change, no correction event, no audit row, no idempotency marker. Its reads run on connections of
+            // their own and never take the pay-inputs lock (Block C (3)); the shared lock held here keeps them stable.
+            await _calculationService.RecheckPayInputsUnderLockAsync(
+                profile, periodStart, periodEnd, frozenInputs,
+                PeriodCalculationService.PayInputsRoute.Correction, ct);
 
             // BLOCKER 3 — the authoritative baseline, read + locked inside the tx. A null here means
             // the record vanished between the pre-check probe and this lock (concurrent deletion) →
