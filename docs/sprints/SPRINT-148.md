@@ -3454,3 +3454,22 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Frontend-only merge:** seven files under `frontend/`, and nothing under `src` or `docs`.
 - **The vitest re-run** after the low-memory reap still needs the owner's go-ahead. The merged `frontend/` tree equals FU-1's tip, where vitest ran green (102 files, 1217 tests). CI-W5 runs it too.
 - **Owed:** a manual NVDA or JAWS pass (X3). TASK-14838 keeps the picker's link and disable (X7).
+
+**The GATE after the TASK-14846 merge** (`aadd2b10`): `tsc --noEmit`, lint, `typecheck:e2e` and the build all exit 0. The `frontend/` tree equals FU-1's tip, where vitest ran green (1217). The backend is unchanged since the GATE at `b12a3a79` (Unit 1746, DemoSeed 170, Regression non-Docker 147).
+
+**Wave 5 is fully merged.** In order: TASK-14822 + -T, the TASK-14823 stack, TASK-14825 + -T, CI-W5a, the T14b stack, TASK-14830 + -T, the TASK-14831 stack with TASK-14847 + -T, and TASK-14846.
+
+**CI-W5 started** (run 45280970629, draft PR #67 on `ci/s148-w5` at `aadd2b10`, headSha confirmed). It is evidence only, and is closed unmerged when judged.
+- **It is judged against the plan's CI-W5 row:**
+  - every AC-C1*, the pay halves of AC-C2a, -c and -m, and AC-C2p (3);
+  - AC-C3*, AC-PIL-a … g and AC-PIL-i, AC-C13a, AC-C13k (2) and AC-C13r;
+  - the smoke suite's new and changed probes (governance 200, the weekly task's four results, compliance 200 with its shape);
+  - PIN-1, PIN-2 and PIN-3;
+  - the "after" timing figure, which settles N-3's disposition;
+  - the four lock figures.
+- **The watch lists from this wave's reviews:**
+  - the T14b stack's list (the compliance and governance smoke probes, `ScreenNoRecordDayNormTests`' exact 500 body, the roster, governance and parity facts, and the mid-week refusal facts);
+  - TASK-14830's replay facts;
+  - the TASK-14831 stack's list (figure (4), the 503 facts, AC-PIL-i (6)–(9), the race and census classes).
+- **A red is triaged before anything else (T16).** CI-M5 (M-9, M-12, M-13, M-15, M-49) follows once CI-W5 is green. Wave 6 waits for both.
+- **Housekeeping:** the merged worktrees are pruned. One is still locked by its finished agent and goes later.
