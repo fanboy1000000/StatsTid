@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { Drawer } from '../../../components/ui'
+import { Alert, Drawer } from '../../../components/ui'
 import { useToast } from '../../../components/ui/Toast'
 import { useAuth } from '../../../contexts/AuthContext'
 import { useEntitlementEligibility } from '../../../hooks/useEntitlementEligibility'
@@ -108,7 +108,7 @@ export function PersonDrawer({
 }: PersonDrawerProps) {
   const isNew = !user
   const { toast } = useToast()
-  const { role } = useAuth()
+  const { role, user: authUser } = useAuth()
   const isHr = isHrCapable(role)
 
   const { savePlacement } = usePlacement()
@@ -628,6 +628,11 @@ export function PersonDrawer({
   const title = isNew ? 'Opret medarbejder' : `Redigér ${user?.displayName ?? ''}`.trim()
   const submitLabel = isNew ? 'Opret medarbejder' : 'Gem ændringer'
   const busy = saving || hostLoading || hydrating
+  // The drawer's person is the logged-in user: the server refuses a self actor these changes,
+  // so the inputs it refuses are locked and one note says why. Presentation only; the server
+  // stays the authority. Edit mode only (a create has no person yet).
+  const isSelf = !isNew && authUser != null && authUser.employeeId === user?.userId
+  const selfLockNoteId = isSelf ? 'pd-self-lock-note' : undefined
 
   return (
     <Drawer open={open} onClose={onClose} ariaLabel={title}>
@@ -645,6 +650,14 @@ export function PersonDrawer({
         </div>
 
         <div className={styles.body}>
+          {isSelf && (
+            <div id="pd-self-lock-note" data-testid="pd-self-lock-note">
+              <Alert variant="info">
+                Du kan ikke selv ændre de låste felter, fordi de har betydning for din egen løn eller dine rettigheder. Bed en anden HR-administrator om at gøre dette.
+              </Alert>
+            </div>
+          )}
+
           {(hostLoading || hydrating) && (
             <div className={styles.loading} data-testid="person-drawer-loading">
               Indlæser...
@@ -711,6 +724,7 @@ export function PersonDrawer({
             organizations={organizations}
             userId={isNew ? undefined : user?.userId}
             disabled={busy}
+            selfLockNoteId={selfLockNoteId}
           />
 
           {/* S141 / TASK-14107 — B0: the agreement code is a SECOND dated field
@@ -731,7 +745,7 @@ export function PersonDrawer({
               // instead.
               carryForward={
                 agreementRelation === 'before' && agreementDirty
-                  ? { checked: agreementCarryForward, onChange: setAgreementCarryForward, disabled: busy }
+                  ? { checked: agreementCarryForward, onChange: setAgreementCarryForward, disabled: busy || isSelf }
                   : undefined
               }
               supersedes={agreementRelation === 'covers' ? { writeEffectiveFrom: effectiveFrom } : undefined}
@@ -751,7 +765,7 @@ export function PersonDrawer({
               value={effectiveFrom}
               onChange={setEffectiveFrom}
               today={today}
-              disabled={busy}
+              disabled={busy || isSelf}
               blockedReason={dateBlockedReason}
               coversScheduledNote={coversScheduledNote}
             />
@@ -829,6 +843,7 @@ export function PersonDrawer({
                 hasProfile={live?.profile != null}
                 saveState={INITIAL_SECTION_SAVE}
                 disabled={busy}
+                selfLockNoteId={selfLockNoteId}
               />
 
               {/* S141 / TASK-14107 — B0 + OQ-6 (a) for the profile fields
@@ -843,7 +858,7 @@ export function PersonDrawer({
                   // `supersedes`.
                   carryForward={
                     profileRelation === 'before' && profileDirty
-                      ? { checked: profileCarryForward, onChange: setProfileCarryForward, disabled: busy }
+                      ? { checked: profileCarryForward, onChange: setProfileCarryForward, disabled: busy || isSelf }
                       : undefined
                   }
                   supersedes={profileRelation === 'covers' ? { writeEffectiveFrom: effectiveFrom } : undefined}
@@ -861,6 +876,7 @@ export function PersonDrawer({
                 employmentStartSave={INITIAL_SECTION_SAVE}
                 childSickSave={INITIAL_SECTION_SAVE}
                 disabled={busy}
+                selfLockNoteId={selfLockNoteId}
               />
             </>
           )}

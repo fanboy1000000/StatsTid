@@ -16,6 +16,8 @@ interface ProfileSectionProps {
   hasProfile: boolean
   /** Per-section save outcome (committed/failed) for partial-failure honesty. */
   saveState: SectionSaveState
+  /** Id of the self-lock note: set for the logged-in user's own record; locks the fraction and position (P-26) and points them at the note. */
+  selfLockNoteId?: string
   disabled?: boolean
 }
 
@@ -25,13 +27,14 @@ export function ProfileSection({
   hasProfile,
   saveState,
   disabled = false,
+  selfLockNoteId,
 }: ProfileSectionProps) {
   const setText =
     <K extends keyof ProfileFields>(key: K) =>
     (e: ChangeEvent<HTMLInputElement>) =>
       onChange({ [key]: e.target.value } as Pick<ProfileFields, K>)
 
-  const fieldsDisabled = disabled || !hasProfile
+  const fieldsDisabled = disabled || !hasProfile || !!selfLockNoteId
   const noProfileTitle = !hasProfile ? 'Profil ikke fundet for denne medarbejder' : undefined
 
   return (
@@ -61,6 +64,7 @@ export function ProfileSection({
           value={fields.partTimeFraction}
           onChange={setText('partTimeFraction')}
           disabled={fieldsDisabled}
+          aria-describedby={selfLockNoteId}
           title={noProfileTitle}
           data-testid="ep-part-time"
         />
@@ -78,6 +82,7 @@ export function ProfileSection({
           value={fields.position}
           onChange={setText('position')}
           disabled={fieldsDisabled}
+          aria-describedby={selfLockNoteId}
           title={noProfileTitle}
           placeholder="f.eks. Fuldmægtig"
           data-testid="ep-position"

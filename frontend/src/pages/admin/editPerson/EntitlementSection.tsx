@@ -19,6 +19,8 @@ interface EntitlementSectionProps {
   birthDateSave: SectionSaveState
   employmentStartSave: SectionSaveState
   childSickSave: SectionSaveState
+  /** Id of the self-lock note: set for the logged-in user's own record; locks birth date, start date and CHILD_SICK eligibility and points them at the note. */
+  selfLockNoteId?: string
   disabled?: boolean
 }
 
@@ -31,13 +33,14 @@ export function EntitlementSection({
   employmentStartSave,
   childSickSave,
   disabled = false,
+  selfLockNoteId,
 }: EntitlementSectionProps) {
   const setDate =
     <K extends 'birthDate' | 'employmentStartDate'>(key: K) =>
     (e: ChangeEvent<HTMLInputElement>) =>
       onChange({ [key]: e.target.value } as Pick<EntitlementFields, K>)
 
-  const datesDisabled = disabled || !hasDateVersions
+  const datesDisabled = disabled || !hasDateVersions || !!selfLockNoteId
 
   return (
     <section className={styles.section} aria-labelledby="ep-entitlement-heading">
@@ -72,6 +75,7 @@ export function EntitlementSection({
           value={fields.birthDate}
           onChange={setDate('birthDate')}
           disabled={datesDisabled}
+          aria-describedby={selfLockNoteId}
           title={!hasDateVersions ? 'Kunne ikke indlæse fødselsdato' : undefined}
           data-testid="ep-birth-date"
         />
@@ -91,6 +95,7 @@ export function EntitlementSection({
           value={fields.employmentStartDate}
           onChange={setDate('employmentStartDate')}
           disabled={datesDisabled}
+          aria-describedby={selfLockNoteId}
           title={!hasDateVersions ? 'Kunne ikke indlæse ansættelsesdato' : undefined}
           data-testid="ep-employment-start"
         />
@@ -105,8 +110,9 @@ export function EntitlementSection({
             id="ep-childSick"
             type="checkbox"
             checked={fields.childSickEligible}
-            disabled={disabled}
+            disabled={disabled || !!selfLockNoteId}
             onChange={(e) => onChildSickToggle(e.target.checked)}
+            aria-describedby={selfLockNoteId}
             data-testid="ep-child-sick"
           />
           <span>{TYPE_LABELS.CHILD_SICK} – berettiget</span>
