@@ -2823,3 +2823,45 @@ M-40 included [O for the 14 facts of the five classes run].
   - Every changed line is a comment. TASK-14828's brief gains T2's edits: item 6, ruling 17's "one", and the catch census.
 - **FU-T dispatched** (`test-qa`) on `9f7bc7af`: the facts of T2–T9, T12 and T17 (19 items), AC-C13k (2)'s docstring R → F, each F fact's red at `043c5f35`, and the new Docker facts run on a local cluster.
 - **Housekeeping:** FU-1's and TASK-14828's worktrees are removed (their commits are on FU-2's branch). One empty directory of the latter was held by a process and is left.
+
+**T14b FU-T returned** (`test-qa`; `7ecd5d9a` on `9f7bc7af`; report `.claude/reviews/S148-T14b-FU-T-report.md`).
+- **What the facts now prove (plain words):**
+  - A new hire on a brand-new agreement shows 162.80 h for March on both screens.
+  - A backdated hire's two same-agreement rows are not an agreement change.
+  - The weekly task reads JSON numbers.
+  - The engine refuses a governance profile without `employmentCategory` and accepts it with one.
+  - A down configuration database gives payroll's named refusal, from any of the date reads.
+  - A workless compliance month sends one engine call with one run.
+  - A weekend-only record gap serves a null minimum rest, and a weekday gap still refuses.
+  - A local profile starting mid-month changes Teamoversigt day by day: 10 × 7.40 + 12 × 6.40 = 150.80 h.
+  - The compliance smoke probe demands 200 and the result's shape.
+- **What it built:**
+  - 11 Unit facts: T2 ×4, T3 ×3 by reflection, T4 ×1, T6 as a three-arm theory.
+  - 1 Regression non-Docker fact: T5, on the real engine host.
+  - 10 Docker facts: T2 ×2, T7 ×2, T8 ×2, T12, T17; plus AC-C13k (2)'s docstring, R → F.
+  - The smoke compliance leg.
+  - Every F fact's red at `043c5f35` is quoted. T3's Unit red is structural; its behavioural red is AC-C13k (2) at 422.
+- **Local cluster (port 55445, not CI evidence):** every new Docker fact, `TeamoversigtNormSourcesTests` and the T5 fact pass at the tip. AC-C13k (2) and both T2 arms are red at `043c5f35`.
+- **The Orchestrator's checks:**
+  - The commit touches only `tests/**`.
+  - AC-C13k (2)'s change is docstring only.
+  - The smoke change is the compliance leg's assertions and comment only.
+- **Declared deviation:** the parity fact (T12) overlaps organisation and agreement-code rows, not profile rows.
+- **Found, not fixed:** the two record readers disagree when two profile rows overlap. `EmploymentProfileResolver`'s profile SELECT has no ORDER BY; `DatedRecordTimeline` takes the latest start.
+  - Writers keep profile rows from overlapping, so no screen shows a difference today.
+  - It goes to cycle 2's lenses, and into the T12 QUAL row at the merge.
+- **FU-3 cherry-picked:** `a053b994` became `e1787c56` on `7ecd5d9a`, touching frontend files only. The stack's tip for cycle 2 is `e1787c56`.
+- **The local gate at `e1787c56`, run by the Orchestrator:**
+  - Build 0 errors, 125 warnings, CA2100 113.
+  - Unit 1751 + 11 = 1762. DemoSeed 170. Regression non-Docker 146 + 1 = 147.
+  - The shortcut check shows the three known sites.
+  - `openapi.json` is unchanged (line endings only, reverted).
+  - The frontend's `tsc --noEmit`, lint, `typecheck:e2e` and build all exit 0.
+- **Vitest's re-run was stopped by Claude Code for low memory** (the machine has 8 GB). The cause was the machine, not a test. Two orphaned vitest processes were stopped by PID afterwards.
+  - The frontend tree at `e1787c56` is byte-identical to `a053b994`'s (`git diff` empty). FU-3's vitest run on that tree is green: 101 files, 1213 tests.
+  - The re-run is owed at the merge GATE, with the owner's go-ahead.
+- **AC-C13k (2) on a local cluster:** green at `7ecd5d9a` (FU-T) and at `b2304473` (FU-1). The backend is unchanged since.
+- **Cycle 2 dispatched on `043c5f35..e1787c56`:**
+  - 5α (`constraint-validator`, header `## S148 T14b stack 5α c2`);
+  - the Fable `reviewer` (`## S148 T14b stack 5a reviewer c2`);
+  - Codex (`codex-T14b-c2-run.ps1` → `S148-T14b-5a-codex-c2.raw.md`).
