@@ -1,3 +1,4 @@
+using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -28,7 +29,10 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// <c>EnsurePayInputsUnchanged</c> returns before it compares) must trip arms (1) and (2) and nothing else: arm (3)
 /// goes through the derivation wrapper, which M-7 does not touch, and arm (4) is the control that passes under both.
 /// <b>M-52</b> (the wrapper lets a derivation refusal pass: the catch that turns a day the fresh derivation cannot cover
-/// into the new exception returns instead) must trip arm (3) only; arms (1), (2) and (4) never reach that catch.
+/// into the new exception returns instead) must trip arm (3) and the two wrapper facts below (no configuration in force,
+/// a split refusal); arms (1), (2) and (4) never reach that catch. <b>M-53</b> (the wrapper no longer wraps a failed
+/// configuration read: the <c>ConfigLookupUnavailableException</c> catch is removed) must trip the configuration-read fact
+/// below and nothing else.
 /// Expected values here are the brief's and the plan's: the kind, the month and the two sentences are literals, never read
 /// back from the production constants.
 /// </para>
@@ -234,6 +238,93 @@ public sealed class PayInputsRecheckTests
 
         AssertRefused(ex);
         Assert.Empty(engine.Calls); // the recheck calls no rule: it derives inputs only
+    }
+
+    // ─── the wrapper's other three refusals (TASK-14847-T, W5) ─────────────
+
+    /// <summary>A configuration lookup whose every read throws what the test gives it.</summary>
+    private sealed class ThrowingConfigLookup : IAgreementConfigLookup
+    {
+        private readonly Func<Exception> _make;
+
+        public ThrowingConfigLookup(Func<Exception> make) => _make = make;
+
+        public Task<AgreementRuleConfig> ResolveAsync(
+            string orgId, string agreementCode, string okVersion, string? position, DateOnly asOf, CancellationToken ct = default)
+            => throw _make();
+
+        public Task<AgreementRuleConfig> ResolveCentralAsync(
+            string agreementCode, string okVersion, DateOnly asOf, CancellationToken ct = default)
+            => throw _make();
+    }
+
+    /// <summary>
+    /// <b>N (Unit; M-53).</b> W5: when the configuration database cannot be read while the fresh derivation runs, the recheck
+    /// answers <see cref="RecordingConfigUnavailableException"/> (the recording-time 503), carrying the lookup's exception, and
+    /// never <see cref="PayInputsChangedException"/>: an outage is not "the inputs changed".
+    /// <para><b>Red conditions.</b> M-53 (the <c>ConfigLookupUnavailableException</c> catch of the recheck is removed): the
+    /// lookup's exception propagates as itself, so <c>ThrowsAsync&lt;RecordingConfigUnavailableException&gt;</c> fails on the
+    /// exception type. A catch that turned the outage into <c>PayInputsChangedException</c> fails the same way.</para>
+    /// </summary>
+    [Fact]
+    public async Task ConfigurationReadThatFails_RefusedAsRecordingConfigUnavailable_NeverAsInputsChanged()
+    {
+        var engine = new RecordingRuleEngine();
+        var pcs = BuildPcs(engine, configLookup: new ThrowingConfigLookup(
+            () => new ConfigLookupUnavailableException("central", new InvalidOperationException("the database is down"))));
+
+        var ex = await Assert.ThrowsAsync<RecordingConfigUnavailableException>(() =>
+            pcs.RecheckPayInputsUnderLockAsync(
+                Profile(EmployeeId), Mar01, Mar31, Frozen(), PeriodCalculationService.PayInputsRoute.Export));
+
+        Assert.IsType<ConfigLookupUnavailableException>(ex.InnerException);
+        Assert.Empty(engine.Calls);
+    }
+
+    /// <summary>
+    /// <b>N (Unit; M-52).</b> W5: a day with no published central version in force is a day the fresh derivation cannot
+    /// cover, so the recheck refuses it as <c>payroll-inputs-changed</c> (the same answer as a record gap).
+    /// <para><b>Red conditions.</b> M-52 (the refusal catch returns instead of throwing): the month passes and
+    /// <c>ThrowsAsync</c> fails with "No exception was thrown". Dropping <c>NoConfigInForceException</c> from the catch filter
+    /// fails it with that exception instead.</para>
+    /// </summary>
+    [Fact]
+    public async Task NoConfigurationInForce_RefusedAsInputsChanged()
+    {
+        var engine = new RecordingRuleEngine();
+        var pcs = BuildPcs(engine, configLookup: new ThrowingConfigLookup(
+            () => new NoConfigInForceException("HK", "OK24", Mar01)));
+
+        var ex = await Assert.ThrowsAsync<PayInputsChangedException>(() =>
+            pcs.RecheckPayInputsUnderLockAsync(
+                Profile(EmployeeId), Mar01, Mar31, Frozen(), PeriodCalculationService.PayInputsRoute.Export));
+
+        AssertRefused(ex);
+        Assert.Empty(engine.Calls);
+    }
+
+    /// <summary>
+    /// <b>N (Unit; M-52).</b> W5: a planner split refusal (a whole-window rule that would be evaluated in two EMPLOYED segments)
+    /// is a day-set the fresh derivation cannot plan, so the recheck refuses it as <c>payroll-inputs-changed</c>. The refusal is
+    /// made by the real planner: the rule set is the fixture's <c>OVERTIME_CALC</c> as an AlignedWindow rule, and the period
+    /// 16 March to 15 April 2026 crosses 1 April, the OK24 to OK26 transition, which cuts it into two EMPLOYED segments.
+    /// <para><b>Red conditions.</b> M-52: the month passes and <c>ThrowsAsync</c> fails with "No exception was thrown". Dropping
+    /// the <c>IsSplitRefusal</c> arm of the catch filter lets <see cref="PlannerInvariantViolation"/> propagate, failing it on
+    /// the type.</para>
+    /// </summary>
+    [Fact]
+    public async Task PlannerSplitRefusal_RefusedAsInputsChanged()
+    {
+        var engine = new RecordingRuleEngine();
+        var pcs = BuildPcs(engine, ruleSet: AlignedWindowRuleSet);
+
+        var ex = await Assert.ThrowsAsync<PayInputsChangedException>(() =>
+            pcs.RecheckPayInputsUnderLockAsync(
+                Profile(EmployeeId), Mar16, new DateOnly(2026, 4, 15), Frozen(), PeriodCalculationService.PayInputsRoute.Export));
+
+        Assert.Equal(Mar01, ex.Month); // the month of the period's start
+        Assert.Equal(ExportSentence, ex.ErrorSentence);
+        Assert.Empty(engine.Calls);
     }
 
     // ─── (4) equal inputs: the control arm ────────────────────────────────

@@ -25,14 +25,15 @@ namespace StatsTid.Tests.Regression.Performance;
 /// (2) An HR save of one person's profile holds it while it waits behind a Skema save of the same person: how long does an
 /// unrelated person's recording wait behind that? (3) A burst of profile corrections each opens extra database connections
 /// while holding the lock: what happens when the connection pool is small (SEC-066)? (4) A crowd of recordings each hold
-/// one connection and borrow a second for the recheck: what happens to payroll's own small pool?
+/// one connection and their rechecks borrow up to two more: what happens to payroll's own small pool?
 /// </para>
 ///
 /// <para>
 /// <b>Figure (4) predicts failures, and says so.</b> Each recording holds one pooled connection for its transaction and its
-/// recheck borrows a second (TASK-14831, ruling 1, marked <c>shortcut(pending)</c> in the code), so with as many recordings
-/// in their turn as the pool holds they stall and fail after the connection timeout, writing nothing. The fact does not
-/// judge that; it records it and proves the part that must hold: a failed recording left nothing behind.
+/// recheck borrows up to two more (the profile resolver keeps its connection while it reads the agreement code), three
+/// connections in all (TASK-14831, W9; <c>shortcut(SEC-066)</c> in the code), so with pool size minus one recordings in
+/// their turn they stall and fail after the connection timeout, writing nothing. The fact does not judge that; it records
+/// it and proves the part that must hold: a failed recording left nothing behind.
 /// </para>
 ///
 /// <para>
@@ -78,22 +79,28 @@ public sealed class PayInputsLockTimingTests : DatedConfigDockerFixture, IDispos
 
     /// <summary>One answered request: its status (-1 when the host threw instead of answering), what it threw, and the
     /// milliseconds from the stopwatch's start to its answer.</summary>
-    private sealed record Answer(int Status, string? Threw, long Ms)
+    private sealed record Answer(int Status, string? Threw, long Ms, long? FromSubmissionMs = null)
     {
         public bool Succeeded => Status == 200;
-        public override string ToString() => Threw is null ? $"{Status}@{Ms}ms" : $"threw {Threw}@{Ms}ms";
+        public override string ToString()
+        {
+            var text = Threw is null ? $"{Status}@{Ms}ms" : $"threw {Threw}@{Ms}ms";
+            return FromSubmissionMs is { } fromSubmission ? $"{text} ({fromSubmission}ms from submission)" : text;
+        }
     }
 
-    private static async Task<Answer> AnswerAsync(Task<HttpResponseMessage> request, Stopwatch clock)
+    /// <summary>The request's answer and its time on <paramref name="clock"/>; with <paramref name="fromSubmission"/> the time
+    /// on that second stopwatch is recorded too.</summary>
+    private static async Task<Answer> AnswerAsync(Task<HttpResponseMessage> request, Stopwatch clock, Stopwatch? fromSubmission = null)
     {
         try
         {
             using var response = await request;
-            return new Answer((int)response.StatusCode, null, clock.ElapsedMilliseconds);
+            return new Answer((int)response.StatusCode, null, clock.ElapsedMilliseconds, fromSubmission?.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
-            return new Answer(-1, ex.GetType().Name, clock.ElapsedMilliseconds);
+            return new Answer(-1, ex.GetType().Name, clock.ElapsedMilliseconds, fromSubmission?.ElapsedMilliseconds);
         }
     }
 
@@ -332,15 +339,20 @@ public sealed class PayInputsLockTimingTests : DatedConfigDockerFixture, IDispos
 
     /// <summary>
     /// <b>R (CI)</b> (ruling 14; SEC-066's payroll variant). A payroll host whose connection string sets
-    /// <c>Maximum Pool Size=4</c>. Four employees each have February and March 2026 APPROVED; the test
-    /// holds <c>(148, 1)</c>, starts their four exports one after the other, and sees each waiting; release. Recorded:
-    /// completions, failures by status (or the exception the host threw) and the longest wait. Asserted only that every
-    /// request answered, and that <b>each failed export left no record, no event and no audit row</b>.
-    /// <para><b>Failures are the predicted outcome.</b> Each recording holds one pooled connection for its transaction and its
-    /// recheck borrows a second (TASK-14831, ruling 1; <c>shortcut(pending)</c> at <c>RecheckPayInputsUnderLockAsync</c>), so
-    /// with as many recordings in their turn as the pool holds, a granted recording needs a connection that the waiting
-    /// recordings hold; it stalls until the connection timeout and its transaction rolls back. This fact records that and does
-    /// not judge it.</para>
+    /// <c>Maximum Pool Size=4</c>. Three employees each have February and March 2026 APPROVED; the test
+    /// holds <c>(148, 1)</c>, starts their three exports one after the other, and <b>asserts</b> each is seen waiting
+    /// (1, then 2, then 3 waiters); release. Recorded: completions, failures by status (or the exception the host threw) and
+    /// the longest wait, each timed from submission and from the release. Asserted: the three waiters, that every request
+    /// answered, and that <b>each failed export left no record, no event and no audit row</b>.
+    /// <para><b>Why three, not four (the three-connection model).</b> A recording holds one pooled connection for its
+    /// transaction, and its recheck borrows up to two more, because the profile resolver keeps its connection while it reads
+    /// the agreement code (TASK-14831, W9; <c>shortcut(SEC-066)</c> at <c>RecheckPayInputsUnderLockAsync</c>). Its calculation,
+    /// before the lock, needs two connections at once. On a pool of 4 three waiters hold three connections and the third's
+    /// calculation still found its two; a fourth export cannot calculate at all (it fails before it reaches the lock), so it
+    /// cannot be a waiter. Pool size minus one is the largest crowd that can be established.</para>
+    /// <para><b>Failures are the predicted outcome.</b> With pool size minus one recordings in their turn, each granted
+    /// recording needs a connection that the others hold; it stalls until the connection timeout and its transaction rolls
+    /// back. This fact records that and does not judge it.</para>
     /// <para><b>Red conditions (kind R).</b> A failed export that had written part of its record (an export row, a
     /// <c>PayrollExportGenerated</c> event or its audit row) fails the "left nothing behind" assertions for that employee.</para>
     /// </summary>
@@ -349,11 +361,12 @@ public sealed class PayInputsLockTimingTests : DatedConfigDockerFixture, IDispos
     {
         await TestFixtures.SeedWageTypeMappingsAsync(Db);
         var people = new List<string>();
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 3; i++)
             people.Add(await SeedPayableEmployeeAsync(ConnectionString, Org, (Feb01, Feb28), (Mar01, Mar31)));
         var payroll = StartPayroll(ConnectionString + ";Maximum Pool Size=4");
 
-        var clock = new Stopwatch();
+        var fromRelease = new Stopwatch();
+        var fromSubmission = Stopwatch.StartNew();
         var requests = new List<Task<HttpResponseMessage>>();
         Answer[] answers;
         await using (var held = await HeldLock.AcquirePayInputsAsync(ConnectionString))
@@ -362,21 +375,14 @@ public sealed class PayInputsLockTimingTests : DatedConfigDockerFixture, IDispos
             {
                 var export = payroll.ExportAsync(person, Org, Mar01, Mar31);
                 requests.Add(export);
-                if (requests.Count == 1)
-                {
-                    await AssertWaitingAsync(ConnectionString, 1, export, "the first export of the crowd");
-                    continue;
-                }
-
-                // A later export can fail before it ever waits (its calculation needs a connection too): record that,
-                // never assert it, and stop waiting for it as soon as it has answered.
-                await WaitForWaitersAsync(ConnectionString, requests.Count, () => export.IsCompleted);
+                await AssertWaitingAsync(ConnectionString, requests.Count, export, $"export {requests.Count} of the crowd");
             }
 
             var waiting = (await WaitingPidsAsync(ConnectionString)).Count;
-            clock.Start();
+            Assert.Equal(people.Count, waiting);
+            fromRelease.Start();
             await held.ReleaseAsync();
-            answers = await Task.WhenAll(requests.Select(r => AnswerAsync(r, clock)));
+            answers = await Task.WhenAll(requests.Select(r => AnswerAsync(r, fromRelease, fromSubmission)));
             _out.WriteLine($"S148 PAY_INPUTS_LOCK_FIGURE_4_WAITING seenWaitingAtRelease={waiting} of {people.Count}");
         }
 
@@ -384,7 +390,7 @@ public sealed class PayInputsLockTimingTests : DatedConfigDockerFixture, IDispos
         _out.WriteLine(
             $"S148 PAY_INPUTS_LOCK_FIGURE_4 maxPoolSize=4 exports={answers.Length} completed={completed} " +
             $"failed={answers.Length - completed} byAnswer=[{string.Join(", ", answers.Select(a => a.ToString()))}] " +
-            $"longestWaitMs={answers.Max(a => a.Ms)}");
+            $"longestWaitFromReleaseMs={answers.Max(a => a.Ms)} longestWaitFromSubmissionMs={answers.Max(a => a.FromSubmissionMs)}");
 
         Assert.Equal(people.Count, answers.Length);
         for (var i = 0; i < people.Count; i++)

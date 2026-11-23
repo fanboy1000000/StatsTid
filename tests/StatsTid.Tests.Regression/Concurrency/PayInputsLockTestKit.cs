@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
@@ -157,6 +158,43 @@ internal static class PayInputsLockTestKit
         Assert.Equal(expectedWaiters, (await WaitingPidsAsync(connectionString)).Count);
     }
 
+    // ─── a configuration lookup that starts failing on command ────────────
+
+    /// <summary>The real configuration lookup of a payroll host, wrapped so that every read throws
+    /// <see cref="ConfigLookupUnavailableException"/> from the moment <see cref="Failing"/> is set. A fact installs it with
+    /// <see cref="Install"/>, lets a request calculate, sees it waiting on the held pay-inputs lock, sets
+    /// <see cref="Failing"/> and releases: the recording's recheck is then the first read that fails.</summary>
+    internal sealed class FailingConfigLookup : IAgreementConfigLookup
+    {
+        private IAgreementConfigLookup? _inner;
+
+        /// <summary>When true, every read throws.</summary>
+        public volatile bool Failing;
+
+        /// <summary>Replaces the host's <see cref="IAgreementConfigLookup"/> with this wrapper over the host's own
+        /// <see cref="ConfigResolutionService"/> (the singleton the host registers it as).</summary>
+        public void Install(IServiceCollection services)
+        {
+            services.RemoveAll<IAgreementConfigLookup>();
+            services.AddSingleton<IAgreementConfigLookup>(sp =>
+            {
+                _inner = sp.GetRequiredService<ConfigResolutionService>();
+                return this;
+            });
+        }
+
+        public Task<AgreementRuleConfig> ResolveAsync(
+            string orgId, string agreementCode, string okVersion, string? position, DateOnly asOf, CancellationToken ct = default) =>
+            Failing ? throw Unavailable() : _inner!.ResolveAsync(orgId, agreementCode, okVersion, position, asOf, ct);
+
+        public Task<AgreementRuleConfig> ResolveCentralAsync(
+            string agreementCode, string okVersion, DateOnly asOf, CancellationToken ct = default) =>
+            Failing ? throw Unavailable() : _inner!.ResolveCentralAsync(agreementCode, okVersion, asOf, ct);
+
+        private static ConfigLookupUnavailableException Unavailable() =>
+            new("central", new InvalidOperationException("the test made the configuration database unreadable"));
+    }
+
     // ─── a payroll host that records what it asks the Rule Engine ─────────
 
     /// <summary>The Rule Engine stand-in of a payroll host: every call is answered by the shared stub
@@ -233,8 +271,10 @@ internal static class PayInputsLockTestKit
         public HttpClient Client { get; }
 
         /// <summary>A payroll host over <paramref name="connectionString"/>. A connection string with a small
-        /// <c>Maximum Pool Size</c> gives the host that pool (its own pool: the pool is keyed by the string).</summary>
-        public static PayrollHost Start(string connectionString)
+        /// <c>Maximum Pool Size</c> gives the host that pool (its own pool: the pool is keyed by the string).
+        /// <paramref name="configureServices"/> runs after the kit's own registrations, for a fact that swaps one service
+        /// (the 503 facts decorate <c>IAgreementConfigLookup</c>).</summary>
+        public static PayrollHost Start(string connectionString, Action<IServiceCollection>? configureServices = null)
         {
             var root = new PayrollHostFactory(connectionString, new RuleRegistry().GetAll());
             var engine = new RecordingEngine();
@@ -242,6 +282,7 @@ internal static class PayInputsLockTestKit
             {
                 services.RemoveAll<IHttpClientFactory>();
                 services.AddSingleton<IHttpClientFactory>(engine);
+                configureServices?.Invoke(services);
             }));
             var client = host.CreateClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());

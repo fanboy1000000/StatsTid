@@ -11,7 +11,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// against a real Postgres, each with its ordering FORCED.
 ///
 /// <para>
-/// <b>Plain language.</b> Every writer of an employee's export records (the three export routes and the correction) takes
+/// <b>Plain language.</b> Every writer of an employee's export records (the calculate-and-export route and the correction, <c>/recalculate</c>) takes
 /// one per-employee lock as the SECOND statement of its transaction (the first is the shared pay-inputs lock, S148 PIL), so two writers for the same employee are processed
 /// one after the other. A month's opening balance is calculated BEFORE that lock, from what is recorded at that moment, so
 /// by the time a request gets the lock the ledger may have moved. Under the lock the same derivation runs again; if the

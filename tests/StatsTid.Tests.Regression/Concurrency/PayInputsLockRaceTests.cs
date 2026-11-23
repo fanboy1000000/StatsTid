@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using StatsTid.Tests.Regression.Config;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -82,13 +83,13 @@ public sealed class PayInputsLockRaceTests : DatedConfigDockerFixture, IDisposab
     /// <summary>Everything a fact starts from: a booted Backend host (a GlobalAdmin client), a payroll host and the employee.</summary>
     private sealed record Scene(HttpClient Admin, PayrollHost Payroll, string Employee);
 
-    private async Task<Scene> SceneAsync(DateOnly clock)
+    private async Task<Scene> SceneAsync(DateOnly clock, Action<IServiceCollection>? payrollServices = null)
     {
         var host = Factory.WithFixedToday(clock);
         _hosts.Add(host);
         var admin = GlobalAdminClient(host); // boots the host before anything is seeded (PAT-008)
         await TestFixtures.SeedWageTypeMappingsAsync(Db);
-        var payroll = PayrollHost.Start(ConnectionString);
+        var payroll = PayrollHost.Start(ConnectionString, payrollServices);
         _payrolls.Add(payroll);
         var employee = await SeedPayableEmployeeAsync(ConnectionString, Org, (Feb01, Feb28), (Mar01, Mar31));
         return new Scene(admin, payroll, employee);
@@ -397,6 +398,102 @@ public sealed class PayInputsLockRaceTests : DatedConfigDockerFixture, IDisposab
     }
 
     // ═════════════════════════════════════════════════════════════════════
+    // The recording-time 503 (TASK-14831 item 5a; TASK-14847-T W5)
+    // ═════════════════════════════════════════════════════════════════════
+
+    private const string RecordingConfigUnavailableSentence =
+        "The agreement configuration could not be read while this month was being recorded. Nothing was exported or " +
+        "corrected, and no export record was written or changed. Retry when the configuration database is reachable.";
+
+    /// <summary>
+    /// <b>N (CI).</b> W5, the export route. The export of March calculates normally and is seen waiting on the held lock; the
+    /// configuration database then becomes unreadable (the test host's lookup starts to throw) and the lock is released. The
+    /// recheck under the lock cannot read the configuration, so the export answers 503 <c>payroll-config-unavailable</c> with
+    /// the RECORDING-time sentence (not the calculation-time one, which says nothing was calculated), and writes no export
+    /// record, no <c>PayrollExportGenerated</c>, no audit row and no delivery envelope (the calculation's manifest stays).
+    /// <para><b>Red conditions (kind N: it names <c>RecordingConfigUnavailableException</c>'s answer).</b> M-53 (the recheck
+    /// no longer wraps a failed configuration read): the lookup's exception reaches the route's calculation-time arm and the
+    /// body carries the calculation-time sentence, so the sentence assertion fails; with that arm gone too it is an anonymous
+    /// 500. Docker-gated: CI-pending (argued, not run, for M-53).</para>
+    /// </summary>
+    [Fact]
+    public async Task CalculateAndExport_ConfigUnreadableAtRecording_503Named_NothingWritten()
+    {
+        var lookup = new FailingConfigLookup();
+        var s = await SceneAsync(Clock, lookup.Install);
+
+        HttpResponseMessage response;
+        await using (var held = await HeldLock.AcquirePayInputsAsync(ConnectionString))
+        {
+            var export = s.Payroll.ExportAsync(s.Employee, Org, Mar01, Mar31);
+            await AssertWaitingAsync(ConnectionString, 1, export, "the export of March");
+            lookup.Failing = true;
+            await held.ReleaseAsync();
+            response = await export;
+        }
+
+        using (response)
+            await AssertRecordingConfigUnavailableAsync(response);
+        await AssertExportNothingWrittenAsync(s.Employee);
+    }
+
+    /// <summary>
+    /// <b>N (CI).</b> W5, the correction route. March is exported through the route first; the correction (<c>/recalculate</c>)
+    /// is seen waiting on the held lock, the configuration database then becomes unreadable and the lock is released. The
+    /// correction answers the same 503 body and writes nothing: the record's lines, hash and balances are unchanged, no
+    /// <c>RetroactiveCorrectionRequested</c>, no audit row, no idempotency marker for its token.
+    /// <para><b>Red conditions (kind N).</b> As above: M-53 changes the answer from the recording-time sentence.</para>
+    /// </summary>
+    [Fact]
+    public async Task Recalculate_ConfigUnreadableAtRecording_503Named_NothingWritten()
+    {
+        var lookup = new FailingConfigLookup();
+        var s = await SceneAsync(Clock, lookup.Install);
+        using (var first = await s.Payroll.ExportAsync(s.Employee, Org, Mar01, Mar31))
+            Assert.True(first.StatusCode == HttpStatusCode.OK, $"the first export: {await first.Content.ReadAsStringAsync()}");
+        var recordBefore = await ExportRecordStateAsync(s.Employee);
+        var token = Guid.NewGuid();
+
+        HttpResponseMessage response;
+        await using (var held = await HeldLock.AcquirePayInputsAsync(ConnectionString))
+        {
+            var correction = s.Payroll.RecalculateAsync(s.Employee, Org, Mar01, Mar31, token);
+            await AssertWaitingAsync(ConnectionString, 1, correction, "the correction of March");
+            lookup.Failing = true;
+            await held.ReleaseAsync();
+            response = await correction;
+        }
+
+        using (response)
+            await AssertRecordingConfigUnavailableAsync(response);
+        Assert.Equal(recordBefore, await ExportRecordStateAsync(s.Employee));
+        Assert.Equal(0L, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'RetroactiveCorrectionRequested'"));
+        Assert.Equal(0L, await CountAsync(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'RetroactiveCorrectionRequested'"));
+        Assert.Equal(0L, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token = @t", ("t", token)));
+    }
+
+    /// <summary>The recording-time 503: exactly the three members the contract names, the fixed sentence and kind, and no
+    /// date or employee id (ADR-040 D7). Literals, never the production text.</summary>
+    private static async Task AssertRecordingConfigUnavailableAsync(HttpResponseMessage response)
+    {
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.ServiceUnavailable,
+            $"expected 503 payroll-config-unavailable, got {(int)response.StatusCode}: {text}");
+        using var doc = JsonDocument.Parse(text);
+        var root = doc.RootElement;
+        Assert.Equal(
+            new[] { "error", "kind", "success" },
+            root.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.Equal(RecordingConfigUnavailableSentence, root.GetProperty("error").GetString());
+        Assert.Equal("payroll-config-unavailable", root.GetProperty("kind").GetString());
+        Assert.DoesNotMatch(new Regex(@"\d{4}-\d{2}-\d{2}"), text);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
     // Requests and reads
     // ═════════════════════════════════════════════════════════════════════
 
@@ -446,11 +543,16 @@ public sealed class PayInputsLockRaceTests : DatedConfigDockerFixture, IDisposab
     private Task<long> ExportRecordCountAsync(string employee) => CountAsync(
         "SELECT COUNT(*) FROM payroll_export_records WHERE employee_id = @e AND year = 2026 AND month = 3", ("e", employee));
 
-    /// <summary>A refused export wrote no export record, no <c>PayrollExportGenerated</c> and no audit row for the employee and
-    /// month; the calculation's own manifest stays (it was written before the recording began).</summary>
+    /// <summary>A refused export wrote no export record, no <c>PayrollExportGenerated</c>, no audit row and no delivery envelope
+    /// (an <c>outbox_messages</c> row for <c>payroll</c> that names the employee) for the employee and month; the
+    /// calculation's own manifest stays (it was written before the recording began). The envelope is written after the commit
+    /// on its own connection, so only a recording that committed reaches it.</summary>
     private async Task AssertExportNothingWrittenAsync(string employee)
     {
         Assert.Equal(0L, await ExportRecordCountAsync(employee));
+        Assert.Equal(0L, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_messages WHERE destination = 'payroll' AND payload::text LIKE '%' || @e || '%'",
+            ("e", employee)));
         Assert.Equal(0L, await CountAsync(
             "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @s AND event_type = 'PayrollExportGenerated'",
             ("s", $"employee-{employee}")));
@@ -560,7 +662,9 @@ public sealed class PayrollEmploymentRecordGapTests : DatedConfigDockerFixture, 
         ExecAsync("DELETE FROM user_agreement_codes WHERE user_id = @e", ("e", employee));
 
     /// <summary><b>F (CI).</b> <c>/calculate-and-export</c> of a month with a record gap answers 422 with the three-member
-    /// body, byte for byte, and writes nothing: no export record, no <c>PayrollExportGenerated</c>, no audit row, no manifest.</summary>
+    /// body, byte for byte, and writes nothing: no export record, no <c>PayrollExportGenerated</c>, no audit row, no manifest.
+    /// <para>Red conditions: before TASK-14831's item 10 the route answers an anonymous 500, so the status assertion in
+    /// <c>AssertRecordGapAsync</c> fails.</para></summary>
     [Fact]
     public async Task CalculateAndExport_RecordGap_Answers422Named_NothingWritten()
     {
@@ -580,7 +684,9 @@ public sealed class PayrollEmploymentRecordGapTests : DatedConfigDockerFixture, 
 
     /// <summary><b>F (CI).</b> <c>/recalculate</c> of an exported month whose employment record has since gained a gap answers the
     /// same 422 body and writes nothing: the record, the correction event, the audit row, the idempotency marker and the
-    /// manifests are as they were.</summary>
+    /// manifests are as they were.
+    /// <para>Red conditions: before TASK-14831's item 10 the route answers an anonymous 500, so the status assertion in
+    /// <c>AssertRecordGapAsync</c> fails.</para></summary>
     [Fact]
     public async Task Recalculate_RecordGap_Answers422Named_NothingWritten()
     {
