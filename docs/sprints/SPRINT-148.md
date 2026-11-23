@@ -3096,3 +3096,14 @@ M-40 included [O for the 14 facts of the five classes run].
   - **V9:** no change.
   - **V10:** the log label is carried to TASK-14831.
 - **Next:** FU-T (`test-qa`), then cycle 2.
+
+**TASK-14830 FU-1 returned** (`payroll-integration`; `51ed2bb7` on `52ac6683`; report `.claude/reviews/S148-TASK-14830-FU-1-report.md`).
+- **V1 as built:** a new pure check, `FrozenInputsDefect`, runs at step 1 of `ReplayAsync`, right after `IsComplete`, before classifications are fetched and before the hours are read.
+  - **What it checks:** the count; null entries; each run's key against its piece; the nested config's agreement and OK version against the run's (new); and piece coverage of each EMPLOYED segment.
+  - The last of these moved from `FrozenEvaluationInputs` (deviation D1, accepted: V1 says "every" check). `FrozenEvaluationInputs` no longer refuses.
+- **Premise confirmed:** classifications were fetched at step 2, before the old one-for-one check.
+- **Scratch probe:** at `52ac6683`, shape (a) made one classification call, an engine outage then won over the named refusal, and shape (b) succeeded with 4 engine requests. At the tip, all shapes are refused by name with 0 classification calls and 0 engine requests.
+- **Gate:** build 0 errors, 125 warnings, CA2100 113; Unit 1718, DemoSeed 170, Regression non-Docker 147; shortcuts 19 found, 0 bad.
+- **The Orchestrator's check:** one file, with no public signature change.
+- **Found, not fixed:** a manifest whose segment list is damaged (a gap or an overlap) still makes the one classification call before `PlannedCalculation` refuses it (`:2924`). Those are segment checks, outside V1. Low; below the register floor, so recorded here.
+- **FU-T dispatched** (`test-qa`) on `51ed2bb7`: V1's facts, V3, V4, V5, V6 and V7, with reds at `52ac6683` and `f328d00d` and a local-cluster run.
