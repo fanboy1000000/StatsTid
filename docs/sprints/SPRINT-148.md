@@ -2529,3 +2529,46 @@ M-40 included [O for the 14 facts of the five classes run].
   - The Backend's compliance facts carry S6 and wait for TASK-14828.
 - **The 30 March question is refuted.** Payroll's recorded request already cuts at 1 April (30–31 March, then April), so S4 does not apply. What remains for TASK-14827 to argue is that the fingerprint assertion holds with per-piece configs.
 - **TASK-14827 dispatched** (`payroll-integration`) on `df670468`, with a local pre-check of PIN-1 and the payroll facts expected.
+
+**TASK-14827 returned** (`payroll-integration`; one commit `5873c29c` on `df670468`; report `.claude/reviews/S148-TASK-14827-report.md`). The agent stopped on 2026-11-20 when its login expired; it was resumed on 2026-11-23 and finished from where it stopped.
+- **What it builds:**
+  - Payroll resolves the agreement configuration in force for every piece of a month through the dated lookup (central, then position override, then local profile) and sends it with each timeline piece and each per-segment `evaluate` call.
+  - The organisation comes from the dated record and is frozen on each piece (`FrozenPiece.OrgId`, optional, left out of the manifest when null).
+  - The context days are cut at the three date reads only (ruling 13).
+  - A configuration payroll cannot read refuses the month before any engine call or write: 503 `payroll-config-unavailable`, or 422 `payroll-config-not-in-force` (ruling 12). A service built without the lookup is refused by the never-silent rule (ruling 14).
+  - Replay re-resolves from the frozen keys only (ruling 11; R42 holds).
+  - Engine request bodies carry enums as numbers through a second private options object (ruling 15).
+- **The Orchestrator's checks:**
+  - The diff touches only the three authorized files: PCS, payroll `Program.cs`, and `PlanInputs.cs` (`FrozenPiece.OrgId` only).
+  - The shortcut check gives 0 bad, and no `shortcut(pending)` was added.
+  - No compiled table is read under `src/Integrations`.
+  - Its four declared deviations go to 5α at the stack's tip:
+    - D1, replay's step 3b and its doc;
+    - D2, payroll `Program.cs`'s registration remark;
+    - D3, comment-only fixes;
+    - D4, new private members.
+- **Gate at the tip:** build 0 errors, 125 warnings, CA2100 113 distinct; DemoSeed 170 and Regression `Category!=Docker` 144 green. Unit has 37 reds:
+  - 36 hand-built PCS facts that pass no lookup, refused by the never-silent rule (TASK-14828-T gives them a fake lookup, its L2 and Do 11);
+  - one STOP item, `RuleEngineFailureLoggingTests.CallTimeRule_OnNonSuccess_…`, a reflection call with the old arity (`TargetParameterCountException`); the one-line fix (pass a config after `profile`) is carried to TASK-14828-T.
+- **Local cluster run (not CI evidence):**
+  - Green: PIN-1 2/2, the host-based payroll facts 53 of 54 and 137 of 137 (PIN-2 among them).
+  - Red until TASK-14828-T: WeeklyPayroll 12, SplitMonthPayroll 8 and SkemaCellClear's replay fact, because they build PCS by hand without a lookup. The same 20 ran green with a lookup added in a scratch copy only.
+  - **The dispatch's expectation that WeeklyPayroll and SplitMonth turn green here was wrong** (a brief contradiction it reported): the ruled never-silent rule always fires on a hand-built service.
+  - PIN-1's argument: PIN-2 proves the lookup's chain equals the compiled config. No local profile is seeded and nobody is transferred, so the fingerprint is unchanged.
+- **Carried to TASK-14828-T:**
+  - the reflection fix in `RuleEngineFailureLoggingTests.cs:79-90`;
+  - L2's count is now 22 files (17 Regression, 5 Unit), since `OrganisationHistoryWiringTests` was added;
+  - `RetroactiveCorrectionManifestTests.cs:297` (`TransactionalBlockFailure…`) now passes for the wrong reason: its `ThrowsAnyAsync<Exception>` is satisfied by the never-silent refusal.
+- **Carried to TASK-14828** (dispatch, comment lines only): `ConfigResolutionService.cs:9-16`, `:33-34`, `:73-74` and `:285-286` are untrue after the stack (Fable c3 N2, widened).
+- **Carried to TASK-14830:**
+  - `EnsureConfigUnchanged`'s remark and refusal text ("configs are code");
+  - `ReplayRefusedException.cs:37` (`ConfigChanged` does not cover "no configuration in force today");
+  - `IOrganisationHistoryReader.cs:12-15` ("no paid figure depends on it");
+  - the `TryResolveDatedProfileAsync` log label.
+- **For the stack's review:**
+  - Payroll's routes do not map `EmployeeProfileNotFoundException`, so a record gap, and now a missing organisation, answers an anonymous 500 named only in the server log. Whether a register row covers this is `(unproven)`: QUAL-151 covers the dates in those messages, not the status.
+  - A non-month period whose opening week crosses 1 April is not cut inside the context days. Both routes take whole months only (R-47).
+- **TASK-14828 dispatched** (`backend-infrastructure`) on `5873c29c`. Two items are carried into it:
+  - ruling R4: reuse covers every repeated caller in a request, with read counts before and after for a Skema month read, a save and a year overview;
+  - the comment-only `ConfigResolutionService.cs` authorization.
+  A local pre-check of the three compliance classes, and of the Teamoversigt and Skema facts staying green, is expected.

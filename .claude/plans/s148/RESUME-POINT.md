@@ -1,4 +1,4 @@
-# S148 resume point — updated 2026-11-20 (midday)
+# S148 resume point — updated 2026-11-23
 
 The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 24").
 
@@ -31,7 +31,7 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
   - PRs #63, #64 and #65 are closed unmerged, and every `ci/s148-*` branch is deleted.
   - Correction logged: under M-45 the profile PUT answered 200 in CI, not the local 403.
 
-## In flight (wave 5) — 2026-11-20 midday
+## In flight (wave 5) — 2026-11-23
 1. **Merged with GATE green:**
    - TASK-14822 + -T (`6fadd1fe`);
    - the TASK-14823 stack (`90828667`);
@@ -40,9 +40,19 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
 3. **The T14b stack, in progress** (TASK-14826 → 14826-T → 14827 → 14828 → 14828-T → REGEN → 14829, merged together; NR-P9). The briefs are at draft 2 ("final + 26").
    - **TASK-14826 returned:** `9f621abb` on `bb0677df` (report `.claude/reviews/S148-TASK-14826-report.md`; S1 … S10 checked byte for byte).
    - **TASK-14826-T returned:** tip `df670468` (report `.claude/reviews/S148-TASK-14826-T-report.md`); gate green; 60 local database reds, each for its stated reason (payroll S1/S3 → 14827; compliance S6 → 14828). The 30 March question is refuted: payroll already cuts at 1 April.
-   - **TASK-14827 dispatched** (`payroll-integration`) on `df670468`.
-   - **Carry to TASK-14828-T:** `WeeklyPayrollTests.cs:352-353`'s docstring ("the engine resolves config per day") is untrue now; AC-C1l's arms (2), (3), (5) were not mutation-run one by one (they share `IsOwnConfig`); remove the `WeeklyPipelineOnCoreTests` interim.
-   - **Then** TASK-14828 on 14827's tip.
+   - **TASK-14827 returned:** `5873c29c` on `df670468` (report `.claude/reviews/S148-TASK-14827-report.md`; the agent stopped on a login expiry on 2026-11-20 and was resumed on 2026-11-23). Three files in scope. Unit has 37 reds for TASK-14828-T (36 hand-built PCS facts without a lookup, plus the `RuleEngineFailureLoggingTests` reflection arity); DemoSeed and non-Docker Regression are green. Local: PIN-1 green; WeeklyPayroll 12, SplitMonth 8 and SkemaCellClear's replay stay red until TASK-14828-T gives the hand-built fixtures a lookup.
+   - **TASK-14828 dispatched** (`backend-infrastructure`) on `5873c29c`, with R4 (read counts for a Skema month read, a save and a year overview) and a comment-only `ConfigResolutionService.cs` authorization.
+   - **Carry to TASK-14828-T:**
+     - `WeeklyPayrollTests.cs:352-353`'s docstring ("the engine resolves config per day") is untrue now;
+     - AC-C1l's arms (2), (3), (5) were not mutation-run one by one (they share `IsOwnConfig`);
+     - remove the `WeeklyPipelineOnCoreTests` interim;
+     - the `RuleEngineFailureLoggingTests.cs:79-90` reflection fix (pass a config after `profile`);
+     - L2 is now 22 files (17/5);
+     - `RetroactiveCorrectionManifestTests.cs:297` passes for the wrong reason (the never-silent refusal satisfies `ThrowsAnyAsync<Exception>`);
+     - R9 and C2-R5 (TASK-14822's).
+   - **Carry to TASK-14830:** `EnsureConfigUnchanged`'s remark and text; `ReplayRefusedException.cs:37`; `IOrganisationHistoryReader.cs:12-15`; the `TryResolveDatedProfileAsync` log label.
+   - **For the stack's review:** payroll answers an anonymous 500 for `EmployeeProfileNotFoundException` (a record gap or a missing organisation); register coverage `(unproven)`.
+   - **Then** TASK-14828-T on 14828's tip, then REGEN, then TASK-14829.
 4. **Then** 14830 + -T, 14831 + -T, 14846, CI-W5 and CI-M5 (M-9, M-12, M-13, M-15, M-49).
 5. **Owner ruling 2026-11-19 (a):** QUAL-259 is built after S148.
 6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves.
