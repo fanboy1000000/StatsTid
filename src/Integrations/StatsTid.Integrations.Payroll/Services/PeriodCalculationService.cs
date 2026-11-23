@@ -2841,11 +2841,12 @@ public sealed class PeriodCalculationService
     /// <item>no complete frozen inputs on the manifest (<see cref="IsComplete"/>) — every pre-S145 manifest (the
     /// ADR-016:242 exception), a manifest written before the configurations were frozen (no
     /// <see cref="PlanInputs.ConfigRuns"/>, or a piece without an organisation; S148 ruling R-5), a null or empty
-    /// member — → <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
+    /// member — or frozen inputs that do not fit together (<see cref="FrozenInputsDefect"/>: configurations that
+    /// do not match the pieces one for one, or an EMPLOYED segment no piece covers) →
+    /// <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>. Every frozen-input check is here, before
+    /// any Rule Engine call (the classifications included) and before the hours read;</item>
     /// <item>the plan from the manifest (<see cref="PeriodPlanner.FromManifest"/>), and the evaluation inputs from
-    /// the frozen pieces, their frozen configurations and the cutoff alone (<see cref="FrozenEvaluationInputs"/>);
-    /// configurations that do not match the pieces one for one →
-    /// <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
+    /// the frozen pieces, their frozen configurations and the cutoff alone (<see cref="FrozenEvaluationInputs"/>);</item>
     /// <item>the recorded hours rows, re-read by event id (<see cref="IRecordedHoursReader.ReadByEventIdsAsync"/>,
     /// current or superseded); a genuinely absent id → <see cref="ReplayRefusedException.EntriesMissing"/>;</item>
     /// <item>the digests recomputed over the rows as re-read →
@@ -2902,7 +2903,9 @@ public sealed class PeriodCalculationService
                 $"Manifest {manifestId} not found in segment_manifests projection or event store. " +
                 "Cannot replay.");
 
-        // 1. The frozen inputs. A manifest without them is refused by name, never recomputed from live data.
+        // 1. The frozen inputs. A manifest without them, or with frozen inputs that do not fit together, is refused
+        //    by name, never recomputed from live data, and before any Rule Engine call (the classifications
+        //    included) or hours read: a damaged record gets its own refusal, never an engine failure.
         var frozen = manifest.PlanInputs is { } recorded && IsComplete(recorded)
             ? recorded
             : throw Refuse(
@@ -2911,6 +2914,8 @@ public sealed class PeriodCalculationService
                     ? "the manifest carries no frozen inputs (a manifest written before S145, or a projection row whose plan_inputs_jsonb is NULL)"
                     : "the manifest's frozen inputs are incomplete (a member is null or empty, or the frozen agreement " +
                       "configurations or a piece's organisation are absent: a manifest written before they were frozen)");
+        if (FrozenInputsDefect(frozen, manifest.Segments) is { } defect)
+            throw Refuse(ReplayRefusedException.ManifestWithoutFrozenInputs, manifestId, manifest.EmployeeId, defect);
 
         // 2. The plan (today's rule set re-asserts the D9 invariants, as on a forward calculation) and the
         //    evaluation inputs from the frozen pieces, their frozen configurations and the cutoff alone: no
@@ -2962,8 +2967,8 @@ public sealed class PeriodCalculationService
     /// JSON so that a manifest written before they existed decodes the same way on the projection row and on the
     /// event; here such a manifest is refused by name, before the plan is built and before any engine call. A
     /// replay without them would have to look the configurations up again, which it never does (ADR-016 D10,
-    /// R42). Whether the configurations match the pieces one for one is checked when they are read
-    /// (<see cref="FrozenEvaluationInputs"/>).
+    /// R42). Whether the members fit together (the configurations match the pieces one for one) is checked next,
+    /// at the same step (<see cref="FrozenInputsDefect"/>).
     /// </para>
     /// </summary>
     private static bool IsComplete(PlanInputs planInputs) =>
@@ -2975,6 +2980,67 @@ public sealed class PeriodCalculationService
         && !string.IsNullOrEmpty(planInputs.EntriesDigest)
         && !string.IsNullOrEmpty(planInputs.AbsencesDigest)
         && !string.IsNullOrEmpty(planInputs.EvaluationModel);
+
+    /// <summary>
+    /// Whether a replay's complete frozen inputs (<see cref="IsComplete"/>) fit together the way a forward
+    /// calculation writes them: <c>null</c> when they do, else the refusal's detail. A forward calculation freezes
+    /// one configuration entry per piece, in the pieces' order, with the piece's own run key and the configuration
+    /// resolved for that key (<see cref="FreezePlanInputs"/>), and one piece per EMPLOYED segment, starting on that
+    /// segment's first day. So each of these is a damaged record, refused as a manifest without (complete) frozen
+    /// inputs (<see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>):
+    /// <list type="bullet">
+    /// <item>an entry list of another length than the pieces;</item>
+    /// <item>a missing entry or configuration;</item>
+    /// <item>an entry whose dates, agreement, position or organisation differ from its piece's, or whose OK version
+    /// is not that of the piece's days;</item>
+    /// <item>an entry whose configuration names another agreement code or OK version than the entry itself (the
+    /// Rule Engine refuses such a configuration, <c>RuleRegistry.IsOwnConfig</c>);</item>
+    /// <item>an EMPLOYED segment whose first day no piece covers.</item>
+    /// </list>
+    /// Pure. <see cref="ReplayAsync(Guid, string?, Guid?, CancellationToken)"/> calls it at step 1, so a damaged
+    /// record is refused by name before any Rule Engine call (the classifications included) and before the hours
+    /// read, never answered by an engine failure; <see cref="FrozenEvaluationInputs"/> then refuses nothing. The
+    /// segment's or piece's index, never a date, goes into the detail: an EMPLOYED segment's first day can be a
+    /// hire date (ADR-040 D7).
+    /// </summary>
+    /// <param name="frozen">Frozen inputs that passed <see cref="IsComplete"/>.</param>
+    /// <param name="segments">The manifest's segments, which <see cref="PeriodPlanner.FromManifest"/> takes into
+    /// the plan unchanged.</param>
+    private static string? FrozenInputsDefect(PlanInputs frozen, IReadOnlyList<PlannedSegment> segments)
+    {
+        var runs = frozen.ConfigRuns!; // IsComplete: not null.
+        if (runs.Count != frozen.Pieces.Count)
+            return "the frozen agreement configurations do not match the frozen pieces one for one";
+
+        for (var i = 0; i < frozen.Pieces.Count; i++)
+        {
+            var piece = frozen.Pieces[i];
+            var run = runs[i];
+            if (run?.Config is null
+                || run.From != piece.From
+                || run.To != piece.To
+                || !string.Equals(run.AgreementCode, piece.AgreementCode, StringComparison.Ordinal)
+                || !string.Equals(run.OkVersion, OkVersionResolver.ResolveVersion(piece.From), StringComparison.Ordinal)
+                || !string.Equals(run.Position, piece.Position, StringComparison.Ordinal)
+                || !string.Equals(run.OrgId, piece.OrgId, StringComparison.Ordinal)
+                || !string.Equals(run.Config.AgreementCode, run.AgreementCode, StringComparison.Ordinal)
+                || !string.Equals(run.Config.OkVersion, run.OkVersion, StringComparison.Ordinal))
+            {
+                return $"frozen agreement configuration {i} does not belong to frozen piece {i}";
+            }
+        }
+
+        for (var s = 0; s < segments.Count; s++)
+        {
+            if (segments[s].EmploymentStatus != EmploymentWindowStatus.NOT_EMPLOYED
+                && PieceCovering(frozen.Pieces, segments[s].StartDate) is null)
+            {
+                return $"no frozen piece covers the first day of EMPLOYED segment {s}";
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// S145 / TASK-14513 — a replay's <see cref="EvaluationInputs"/>, from its manifest's frozen
@@ -2990,52 +3056,18 @@ public sealed class PeriodCalculationService
     /// The dated profile read a forward calculation makes at the segment start is not made;</item>
     /// <item>the settlement cutoff is the frozen one (R41), never re-derived from the employment window.</item>
     /// </list>
-    /// A NOT_EMPLOYED segment gets no profile and is not evaluated, as in a forward calculation (ADR-040 D10). A
-    /// frozen record with no piece covering an EMPLOYED segment's start cannot be replayed faithfully, so it is
-    /// refused as a manifest without (complete) frozen inputs. A forward calculation always freezes one piece per
-    /// EMPLOYED segment, starting on that segment's first day, so that is a damaged record, never a month.
+    /// A NOT_EMPLOYED segment gets no profile and is not evaluated, as in a forward calculation (ADR-040 D10).
     ///
     /// <para>
-    /// <b>The configurations match their pieces one for one.</b> A forward calculation freezes one entry per
-    /// piece, in the pieces' order, with the piece's own run key (<see cref="FreezePlanInputs"/>). An entry list
-    /// of another length, a missing entry or configuration, or an entry whose dates, agreement, position or
-    /// organisation differ from its piece's, or whose OK version is not that of the piece's days, is a damaged
-    /// record: refused here, before the hours are read, as a manifest without (complete) frozen inputs. A
-    /// manifest without the entries, or with a piece that has no organisation, was already refused by
-    /// <see cref="IsComplete"/>.
+    /// <b>It refuses nothing.</b> Its frozen inputs passed <see cref="IsComplete"/> and
+    /// <see cref="FrozenInputsDefect"/> at step 1 of the replay, before any Rule Engine call: one entry per piece,
+    /// each its piece's own with a configuration of the entry's agreement and OK version, and a piece covering the
+    /// first day of every EMPLOYED segment. So it only reads them.
     /// </para>
     /// </summary>
-    private EvaluationInputs FrozenEvaluationInputs(PlannedCalculation plan, PlanInputs frozen)
+    private static EvaluationInputs FrozenEvaluationInputs(PlannedCalculation plan, PlanInputs frozen)
     {
-        // The segment's or piece's index, never a date, goes into a refusal: an EMPLOYED segment's first day can
-        // be a hire date (ADR-040 D7).
-        if (frozen.ConfigRuns is not { } runs || runs.Count != frozen.Pieces.Count)
-        {
-            throw Refuse(
-                ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
-                "the frozen agreement configurations do not match the frozen pieces one for one");
-        }
-
-        var configs = new AgreementRuleConfig[frozen.Pieces.Count];
-        for (var i = 0; i < frozen.Pieces.Count; i++)
-        {
-            var piece = frozen.Pieces[i];
-            var run = runs[i];
-            if (run?.Config is null
-                || run.From != piece.From
-                || run.To != piece.To
-                || !string.Equals(run.AgreementCode, piece.AgreementCode, StringComparison.Ordinal)
-                || !string.Equals(run.OkVersion, OkVersionResolver.ResolveVersion(piece.From), StringComparison.Ordinal)
-                || !string.Equals(run.Position, piece.Position, StringComparison.Ordinal)
-                || !string.Equals(run.OrgId, piece.OrgId, StringComparison.Ordinal))
-            {
-                throw Refuse(
-                    ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
-                    $"frozen agreement configuration {i} does not belong to frozen piece {i}");
-            }
-
-            configs[i] = run.Config;
-        }
+        var configs = frozen.ConfigRuns!.Select(run => run.Config).ToArray();
 
         var segmentProfiles = new EmploymentProfile?[plan.Segments.Count];
         for (int s = 0; s < plan.Segments.Count; s++)
@@ -3044,10 +3076,7 @@ public sealed class PeriodCalculationService
             if (segment.EmploymentStatus == EmploymentWindowStatus.NOT_EMPLOYED)
                 continue;
 
-            var piece = PieceCovering(frozen.Pieces, segment.StartDate)
-                ?? throw Refuse(
-                    ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
-                    $"no frozen piece covers the first day of EMPLOYED segment {s}");
+            var piece = PieceCovering(frozen.Pieces, segment.StartDate)!;
             segmentProfiles[s] = ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate);
         }
 
