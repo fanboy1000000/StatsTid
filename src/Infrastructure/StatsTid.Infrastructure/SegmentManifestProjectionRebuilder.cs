@@ -82,9 +82,9 @@ public static class SegmentManifestProjectionRebuilder
     /// </list>
     /// <para>
     /// <b><c>plan_inputs_jsonb</c> (S145 / TASK-14509, refinement A7).</b> The frozen inputs of the
-    /// calculation a replay must reuse (the per-piece profile inputs, the opening flex balance, the
-    /// hours rows by event id with their digests, the config fingerprints, the evaluation-model
-    /// marker). The event <c>SegmentManifestCreated.PlanInputs</c> is the record of truth, so the
+    /// calculation a replay must reuse (the per-piece profile inputs, the agreement configuration sent
+    /// with each piece, the opening flex balance, the hours rows by event id with their digests, the
+    /// evaluation-model marker). The event <c>SegmentManifestCreated.PlanInputs</c> is the record of truth, so the
     /// rebuild copies <c>data-&gt;'planInputs'</c> as-is, exactly as <c>segments_jsonb</c> copies
     /// <c>data-&gt;'segments'</c>. Unlike segments the column is NULLABLE and there is
     /// deliberately NO <c>COALESCE</c> to an empty value: a manifest written before S145 has no

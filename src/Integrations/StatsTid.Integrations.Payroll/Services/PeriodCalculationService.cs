@@ -98,17 +98,18 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <strong>Replay primitive (ADR-016 D10; S145 / TASK-14513, refinement A7)</strong>: a replay re-runs a
 /// stored calculation on exactly the inputs it had and either reproduces it or refuses by name
 /// (<see cref="ReplayRefusedException"/>). Every successful calculation freezes its inputs into
-/// <see cref="PlanInputs"/> on the manifest, the event and <c>plan_inputs_jsonb</c>: what is DATA is stored
-/// (the timeline pieces, the settlement cutoff, the opening flex balance, the hours rows' event ids, the
-/// as-of outbox id and the rows' lossless digests), and what is CODE is fingerprinted (the Rule Engine's
-/// config fingerprints and evaluation-model marker). The one replay entry point,
+/// <see cref="PlanInputs"/> on the manifest, the event and <c>plan_inputs_jsonb</c>: the timeline pieces, the
+/// agreement configuration sent with each piece, by value (<see cref="PlanInputs.ConfigRuns"/>; configurations
+/// are data, ADR-043 D12), the settlement cutoff, the opening flex balance, the hours rows' event ids, the
+/// as-of outbox id and the rows' lossless digests; the arithmetic, which is code, is recorded as the Rule
+/// Engine's evaluation-model marker. The one replay entry point,
 /// <see cref="ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>, takes nothing but the manifest id
 /// (plus the auth header and correlation id for the engine call): it loads the manifest (the
 /// <c>segment_manifests</c> projection first, the event store as fallback), reconstructs the
 /// <see cref="PlannedCalculation"/> through <see cref="PeriodPlanner.FromManifest"/>, re-reads the recorded
-/// hours rows by event id, verifies them, evaluates from the frozen inputs only, and refuses when the
-/// engine's marker or fingerprint no longer matches. The result carries the <em>same</em> manifest id; no
-/// new manifest is minted.
+/// hours rows by event id, verifies them, evaluates from the frozen inputs only (the frozen configurations
+/// included; it never resolves one), and refuses when the engine's marker no longer matches. The result
+/// carries the <em>same</em> manifest id; no new manifest is minted.
 /// </para>
 ///
 /// <para>
@@ -226,15 +227,16 @@ public sealed class PeriodCalculationService
     // (RequireOrganisationHistoryReader). Each part is priced under its own institution's local profile (the
     // configuration resolved per piece, ADR-043 D12), so a month planned without its transfer cuts would price a
     // part under the wrong institution's rules. The refusal keeps such a plan from being made. Replay never reads
-    // it (ADR-016 D10: it never plans; it re-resolves from the organisation frozen on each piece, R42).
+    // it (ADR-016 D10: it never plans; it sends the configurations frozen on its manifest, R42).
     private readonly IOrganisationHistoryReader? _organisationHistoryReader;
     // ADR-043 D12 (P-13; TASK-14825's lookup, ruling B8): the agreement configuration in force, central → position
     // override → the institution's local profile, as of a day. Every calculation resolves one configuration per
     // timeline piece (a run in which nothing that selects a version changes) before its first rule-engine call and
     // sends it with the piece and with the segment's per-segment calls; the Rule Engine computes only with the
     // configuration a request carries. Optional in the constructor, but NEVER SILENT and with no mode: every
-    // calculation and replay that reaches config resolution throws InvalidOperationException naming the
-    // registration when it is absent (RequireConfigLookup); no compiled configuration is ever substituted.
+    // calculation that reaches config resolution throws InvalidOperationException naming the registration when
+    // it is absent (RequireConfigLookup); no compiled configuration is ever substituted. Replay never reads it: it
+    // sends the configurations frozen on its manifest (ADR-016 D10, R42).
     private readonly IAgreementConfigLookup? _configLookup;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
@@ -457,8 +459,8 @@ public sealed class PeriodCalculationService
         // "check does not apply" case: every planning and calculating call needs the transfer dates.
         _organisationHistoryReader = organisationHistoryReader;
         // NOT enforced here: the refusal runs at call time, when config resolution is reached
-        // (RequireConfigLookup), so a plan-only instance needs no lookup. Like the organisation reader it has no
-        // "check does not apply" case: every calculation and replay resolves a configuration for each piece.
+        // (RequireConfigLookup), so a plan-only or replay-only instance needs no lookup. Like the organisation
+        // reader it has no "check does not apply" case: every calculation resolves a configuration for each piece.
         _configLookup = configLookup;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
@@ -538,8 +540,9 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// The never-silent check for the agreement-configuration lookup (ADR-043 D12, P-13), called FIRST by
-    /// <see cref="ResolvePieceConfigsAsync"/>, before any configuration is read, on every calculation and replay,
-    /// with no mode (the rule of <see cref="RequireOrganisationHistoryReader"/>).
+    /// <see cref="ResolvePieceConfigsAsync"/>, before any configuration is read, on every calculation, with no
+    /// mode (the rule of <see cref="RequireOrganisationHistoryReader"/>). A replay never reaches it: it sends the
+    /// configurations frozen on its manifest (ADR-016 D10, R42), so a replay-only service needs no lookup.
     ///
     /// <para>
     /// <b>Why it throws (plain language).</b> The Rule Engine computes only with the agreement configuration a
@@ -550,14 +553,14 @@ public sealed class PeriodCalculationService
     /// </summary>
     private IAgreementConfigLookup RequireConfigLookup() =>
         _configLookup ?? throw new InvalidOperationException(
-            "PeriodCalculationService was asked to calculate or replay a month, which needs the agreement " +
+            "PeriodCalculationService was asked to calculate a month, which needs the agreement " +
             "configuration in force for each stretch of it, on a service constructed WITHOUT an " +
             "IAgreementConfigLookup. The Rule Engine computes only with the configuration a request carries, and " +
             "payroll never substitutes the compiled one (ADR-043 D12), so the month is refused before any rule-engine " +
             "call and nothing is written. Fix the wiring: the Payroll host must register IAgreementConfigLookup -> " +
             "ConfigResolutionService (the same singleton) in src/Integrations/StatsTid.Integrations.Payroll/Program.cs " +
             "(beside the AgreementConfigRepository and PositionOverrideRepository registrations). Test fixtures that " +
-            "calculate or replay must pass an IAgreementConfigLookup as the configLookup constructor argument (a fake " +
+            "calculate must pass an IAgreementConfigLookup as the configLookup constructor argument (a fake " +
             "answering the configuration of the requested agreement and OK version, declared with a comment, when the " +
             "fixture is not about configurations).");
 
@@ -623,9 +626,9 @@ public sealed class PeriodCalculationService
     /// <para>
     /// <strong>What the week-by-week evaluation ran on (S145 / TASK-14511, TASK-14513).</strong> The
     /// init-only members below record the per-plan lane's timeline call (the pieces sent, the settlement
-    /// cutoff — R41 — and the engine's config fingerprints and evaluation-model marker) and, on a successful
-    /// calculation, the complete <see cref="PlanInputs"/> frozen onto its manifest. They are not positional,
-    /// so every existing construction and deconstruction of this record is unchanged.
+    /// cutoff — R41 — and the engine's evaluation-model marker) and, on a successful calculation, the complete
+    /// <see cref="PlanInputs"/> frozen onto its manifest, the configuration sent with each piece included. They
+    /// are not positional, so every existing construction and deconstruction of this record is unchanged.
     /// </para>
     /// </summary>
     public sealed record PeriodCalculationOutcome(
@@ -646,12 +649,6 @@ public sealed class PeriodCalculationService
         /// <see cref="PlanInputs.SettlementCutoff"/>, because it cannot be recovered from the plan.
         /// </summary>
         public DateOnly? SettlementCutoff { get; init; }
-
-        /// <summary>
-        /// The config fingerprints the Rule Engine returned for the timeline call. Empty when no call
-        /// was made or the call failed.
-        /// </summary>
-        public IReadOnlyList<string> ConfigFingerprints { get; init; } = Array.Empty<string>();
 
         /// <summary>
         /// The evaluation-model marker the Rule Engine returned for the timeline call (for example
@@ -1160,10 +1157,10 @@ public sealed class PeriodCalculationService
     /// <item><see cref="Configs"/> — the agreement configuration in force over each piece, index-aligned with
     /// <see cref="Pieces"/> (ADR-043 D12).</item>
     /// </list>
-    /// A forward calculation derives them from the histories admission read
+    /// A forward calculation derives them from the histories admission read, resolving each piece's configuration
     /// (<see cref="DeriveEvaluationInputsAsync"/>); a replay builds them from its manifest's frozen
-    /// <see cref="PlanInputs"/> alone (<see cref="FrozenEvaluationInputs"/>, TASK-14513), and re-resolves the
-    /// configurations from the frozen keys (<see cref="ResolvePieceConfigsAsync"/>).
+    /// <see cref="PlanInputs"/> alone, the configurations included (<see cref="FrozenEvaluationInputs"/>), and
+    /// resolves nothing (ADR-016 D10, R42). <see cref="FreezePlanInputs"/> freezes <see cref="Configs"/> by value.
     /// </summary>
     private sealed record EvaluationInputs(
         IReadOnlyList<FrozenPiece> Pieces,
@@ -1269,17 +1266,16 @@ public sealed class PeriodCalculationService
     /// through <see cref="IAgreementConfigLookup.ResolveAsync"/> as of the piece's first day, with the piece's own
     /// keys only: its organisation, its agreement code, the OK version of its first day (ADR-003; never a
     /// caller's) and its position (<c>null</c> = no override layer). One read per piece is enough because a piece
-    /// is a run (see <see cref="EvaluationInputs.Configs"/>). A forward calculation and a replay share it: the
-    /// forward pieces carry the dated record's organisation, a replay's the organisation frozen on them, so a
-    /// replay reads no profile, agreement-code or organisation history (R42).
+    /// is a run (see <see cref="EvaluationInputs.Configs"/>). Only a forward calculation calls it, with the dated
+    /// record's organisation on each piece; a replay sends the configurations frozen on its manifest and resolves
+    /// none (<see cref="FrozenEvaluationInputs"/>; ADR-016 D10, R42).
     ///
     /// <para>
     /// Never silent (<see cref="RequireConfigLookup"/>, first, before anything is read) and never compiled: a read
     /// failure (<see cref="ConfigLookupUnavailableException"/>) and a day with no published version in force
     /// (<see cref="NoConfigInForceException"/>) propagate as themselves; the lookup logs each refusal once. A piece
     /// without an organisation is refused with <paramref name="withoutOrganisation"/>, the caller's own refusal
-    /// (a forward calculation's record gap; a replay refuses such a manifest earlier, in
-    /// <see cref="FrozenEvaluationInputs"/>).
+    /// (the forward calculation's record gap).
     /// </para>
     /// </summary>
     private async Task<IReadOnlyList<AgreementRuleConfig>> ResolvePieceConfigsAsync(
@@ -1315,10 +1311,11 @@ public sealed class PeriodCalculationService
     ///
     /// <para>
     /// <b>The frozen inputs (S145 / TASK-14513).</b> A successful evaluation records what it ran on as one
-    /// <see cref="PlanInputs"/> (<see cref="FreezePlanInputs"/>): the pieces and the cutoff it was given, the
-    /// opening balance, the hours rows' event ids, highest outbox id and lossless digests, and the engine's
-    /// fingerprints and marker. A forward calculation writes it onto the manifest; every outcome carries it,
-    /// which is what a replay compares with the manifest's record. A refused evaluation records nothing.
+    /// <see cref="PlanInputs"/> (<see cref="FreezePlanInputs"/>): the pieces, the configuration sent with each
+    /// and the cutoff it was given, the opening balance, the hours rows' event ids, highest outbox id and
+    /// lossless digests, and the engine's marker. A forward calculation writes it onto the manifest; every
+    /// outcome carries it, and a replay compares its marker with the manifest's record. A refused evaluation
+    /// records nothing.
     /// </para>
     ///
     /// <para>
@@ -1416,9 +1413,10 @@ public sealed class PeriodCalculationService
         var segmentProfiles = inputs.SegmentProfiles;
         var settlementCutoff = inputs.SettlementCutoff;
 
-        // ADR-043 D12: every piece carries the configuration resolved for it (forward: DeriveEvaluationInputsAsync;
-        // replay: ReplayAsync), and the engine computes only with what a request carries. Inputs without them are a
-        // defect in this service, refused before any call rather than sent to the engine configless.
+        // ADR-043 D12: every piece carries its configuration (forward: resolved, DeriveEvaluationInputsAsync;
+        // replay: frozen on the manifest, FrozenEvaluationInputs), and the engine computes only with what a request
+        // carries. Inputs without them are a defect in this service, refused before any call rather than sent to the
+        // engine configless.
         var configs = inputs.Configs;
         if (configs.Count != pieces.Count)
         {
@@ -1653,8 +1651,9 @@ public sealed class PeriodCalculationService
         }
 
         // ---------------------------------------------------------------
-        // 5. Freeze what this evaluation ran on (S145 TASK-14513, refinement A7): the data as stored
-        //    values, the code as the engine's fingerprints and marker. A replay re-runs exactly this.
+        // 5. Freeze what this evaluation ran on (refinement A7; ADR-043 D12, ADR-016 D10): every input as a
+        //    stored value, the configuration sent with each piece included, and the arithmetic as the engine's
+        //    marker. A replay re-runs exactly this.
         //    S146 TASK-14605 (R-33 item 2): with the opening's provenance, so a replay reproduces it.
         // ---------------------------------------------------------------
         var planInputs = FreezePlanInputs(inputs, recordedHours, openingFlexBalance, openingFlexProvenance, timeline);
@@ -1723,7 +1722,6 @@ public sealed class PeriodCalculationService
         {
             TimelinePieces = pieces,
             SettlementCutoff = settlementCutoff,
-            ConfigFingerprints = timeline?.ConfigFingerprints ?? (IReadOnlyList<string>)Array.Empty<string>(),
             EvaluationModel = timeline?.EvaluationModel,
             PlanInputs = planInputs,
         };
@@ -1734,7 +1732,13 @@ public sealed class PeriodCalculationService
     /// successful evaluation, each member from what the evaluation actually consumed:
     /// <list type="bullet">
     /// <item><see cref="PlanInputs.Pieces"/> — the timeline pieces exactly as sent: the EMPLOYED context days of
-    /// the opening week, then one per EMPLOYED segment, each with its fraction, agreement and position;</item>
+    /// the opening week, then one per EMPLOYED segment, each with its fraction, agreement, position and
+    /// organisation;</item>
+    /// <item><see cref="PlanInputs.ConfigRuns"/> — one entry per piece, in the pieces' order: the piece's run key
+    /// (its dates, agreement, the OK version of its days, position and organisation) and the very configuration
+    /// object the evaluation sent with it (<see cref="EvaluationInputs.Configs"/>, the same instances the call
+    /// helpers serialised), by value (ADR-043 D12, ADR-016 D10). Nothing is re-read, resolved, de-duplicated or
+    /// hashed;</item>
     /// <item><see cref="PlanInputs.SettlementCutoff"/> — the cutoff as sent (R41: the window's inclusive
     /// <c>End</c> when it is on or before the period end, else <c>null</c>; derived once, by
     /// <see cref="SettlementCutoffFrom"/>, and not recoverable from the plan);</item>
@@ -1749,9 +1753,8 @@ public sealed class PeriodCalculationService
     /// read returned none (outbox ids start at 1, so 0 means "nothing consumed");</item>
     /// <item><see cref="PlanInputs.EntriesDigest"/> / <see cref="PlanInputs.AbsencesDigest"/> — the lossless
     /// digests of the rows as read, before normalization (R15, <see cref="HoursDigest"/>);</item>
-    /// <item><see cref="PlanInputs.ConfigFingerprints"/> / <see cref="PlanInputs.EvaluationModel"/> — what the
-    /// Rule Engine returned for the timeline call; for a plan that made no call (no EMPLOYED segment), no
-    /// fingerprint and <see cref="NoEngineCallEvaluationModel"/>.</item>
+    /// <item><see cref="PlanInputs.EvaluationModel"/> — what the Rule Engine returned for the timeline call; for
+    /// a plan that made no call (no EMPLOYED segment), <see cref="NoEngineCallEvaluationModel"/>.</item>
     /// </list>
     /// Pure: it reads nothing. Only called on the success path, where a missing timeline answer can only mean
     /// that no call was made (a failed call refuses the calculation before this point, R-6).
@@ -1775,10 +1778,14 @@ public sealed class PeriodCalculationService
             AsOfOutboxId: Math.Max(maxEntryOutboxId, maxAbsenceOutboxId),
             EntriesDigest: HoursDigest.ComputeEntriesDigest(recordedHours.Entries),
             AbsencesDigest: HoursDigest.ComputeAbsencesDigest(recordedHours.Absences),
-            ConfigFingerprints: timeline?.ConfigFingerprints.ToArray() ?? Array.Empty<string>(),
             EvaluationModel: timeline?.EvaluationModel ?? NoEngineCallEvaluationModel)
         {
             OpeningFlexProvenance = openingFlexProvenance,
+            ConfigRuns = inputs.Pieces
+                .Select((piece, i) => new FrozenConfigRun(
+                    piece.From, piece.To, piece.AgreementCode, OkVersionResolver.ResolveVersion(piece.From),
+                    piece.Position, piece.OrgId, inputs.Configs[i]))
+                .ToArray(),
         };
     }
 
@@ -2817,11 +2824,12 @@ public sealed class PeriodCalculationService
     /// about the employee that could have changed since the month was calculated. It reads what the calculation
     /// recorded about its own inputs on the manifest (<see cref="PlanInputs"/>), re-reads the hours rows the
     /// calculation recorded (by their event ids, so a row the employee has since re-saved is still found), and
-    /// re-runs the evaluation. Inputs that are data are checked against their record. The agreement configurations
-    /// are not on the manifest yet (TASK-14830 freezes them): until then they are looked up again for the keys
-    /// frozen on each piece, and they and the arithmetic version are checked through the fingerprint and marker
-    /// the Rule Engine returns. Anything that no longer matches refuses the replay by name instead of producing a
-    /// different figure.
+    /// re-runs the evaluation. The hours rows are checked against their record. The agreement configurations are
+    /// on the manifest by value, so the replay sends exactly the ones the month was paid on and never looks one up
+    /// again (ADR-043 D12, ADR-016 D10): a configuration published since, even one dated back into the month,
+    /// changes nothing here; it reaches a paid month only through an explicit correction. The arithmetic version
+    /// is checked through the marker the Rule Engine returns. Anything that no longer matches refuses the replay
+    /// by name instead of producing a different figure.
     /// </para>
     ///
     /// <para>
@@ -2830,25 +2838,23 @@ public sealed class PeriodCalculationService
     /// <item>the never-silent hours-reader check (R25), before any read;</item>
     /// <item>the manifest load (the projection first, the event store as fallback); an unknown id is an
     /// <see cref="InvalidOperationException"/>, as before;</item>
-    /// <item>no (complete) frozen inputs on the manifest — every pre-S145 manifest, the ADR-016:242 exception —
-    /// → <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
+    /// <item>no complete frozen inputs on the manifest (<see cref="IsComplete"/>) — every pre-S145 manifest (the
+    /// ADR-016:242 exception), a manifest written before the configurations were frozen (no
+    /// <see cref="PlanInputs.ConfigRuns"/>, or a piece without an organisation; S148 ruling R-5), a null or empty
+    /// member — → <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
     /// <item>the plan from the manifest (<see cref="PeriodPlanner.FromManifest"/>), and the evaluation inputs from
-    /// the frozen pieces and cutoff alone (<see cref="FrozenEvaluationInputs"/>); a piece without a frozen
-    /// organisation → <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
+    /// the frozen pieces, their frozen configurations and the cutoff alone (<see cref="FrozenEvaluationInputs"/>);
+    /// configurations that do not match the pieces one for one →
+    /// <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
     /// <item>the recorded hours rows, re-read by event id (<see cref="IRecordedHoursReader.ReadByEventIdsAsync"/>,
     /// current or superseded); a genuinely absent id → <see cref="ReplayRefusedException.EntriesMissing"/>;</item>
     /// <item>the digests recomputed over the rows as re-read →
     /// <see cref="ReplayRefusedException.EntriesDigestMismatch"/> /
     /// <see cref="ReplayRefusedException.AbsencesDigestMismatch"/>;</item>
-    /// <item>each piece's agreement configuration, re-resolved from its frozen keys
-    /// (<see cref="ResolvePieceConfigsAsync"/>; until TASK-14830 freezes them, wave-5 batch-C ruling 11): no
-    /// published version in force today → <see cref="ReplayRefusedException.ConfigChanged"/>; an unreadable
-    /// configuration database → the lookup's <see cref="ConfigLookupUnavailableException"/>; a service built
-    /// without the lookup → <see cref="InvalidOperationException"/>;</item>
-    /// <item>evaluation (<see cref="EvaluateAsync"/>, no manifest minted), on the frozen opening balance;</item>
-    /// <item>the engine's marker, then its fingerprints, compared with the record →
-    /// <see cref="ReplayRefusedException.EvaluationModelChanged"/> /
-    /// <see cref="ReplayRefusedException.ConfigChanged"/>.</item>
+    /// <item>evaluation (<see cref="EvaluateAsync"/>, no manifest minted), on the frozen opening balance, with
+    /// each piece's frozen configuration;</item>
+    /// <item>the engine's marker compared with the record →
+    /// <see cref="ReplayRefusedException.EvaluationModelChanged"/>.</item>
     /// </list>
     /// A failed rule-engine call returns the refused result (<c>Success == false</c>, no figure; S145 ruling
     /// R-6), exactly as a forward calculation does: an engine that cannot be reached proves nothing either way.
@@ -2857,12 +2863,13 @@ public sealed class PeriodCalculationService
     /// <para>
     /// <b>Evaluation only, never admission (R42).</b> A replay proves what WAS calculated. Whether the previous
     /// month is approved TODAY, today's employment window, today's agreement, profile or organisation history and
-    /// today's hours rows cannot change whether that result is reproducible. So a replay never consults the
-    /// <see cref="IPriorPeriodApprovalReader"/>, the agreement-code repository, the
-    /// <see cref="IEmploymentWindowResolver"/>, the <see cref="IEmploymentProfileResolver"/>, the
-    /// <see cref="IOrganisationHistoryReader"/> or <see cref="IRecordedHoursReader.ReadCurrentAsync"/>, and a replay
-    /// on a service built without an approval reader succeeds. The planner's refusal, the week check and the
-    /// months-in-order check are calculation rules.
+    /// today's hours rows cannot change whether that result is reproducible, and neither can today's agreement
+    /// configurations. So a replay never consults the <see cref="IPriorPeriodApprovalReader"/>, the
+    /// agreement-code repository, the <see cref="IEmploymentWindowResolver"/>, the
+    /// <see cref="IEmploymentProfileResolver"/>, the <see cref="IOrganisationHistoryReader"/>, the
+    /// <see cref="IAgreementConfigLookup"/> or <see cref="IRecordedHoursReader.ReadCurrentAsync"/>, and a replay on a
+    /// service built without an approval reader or a configuration lookup succeeds. The planner's refusal, the
+    /// week check and the months-in-order check are calculation rules.
     /// </para>
     ///
     /// <para>
@@ -2902,12 +2909,13 @@ public sealed class PeriodCalculationService
                 ReplayRefusedException.ManifestWithoutFrozenInputs, manifestId, manifest.EmployeeId,
                 manifest.PlanInputs is null
                     ? "the manifest carries no frozen inputs (a manifest written before S145, or a projection row whose plan_inputs_jsonb is NULL)"
-                    : "the manifest's frozen inputs are incomplete (a member is null or empty)");
+                    : "the manifest's frozen inputs are incomplete (a member is null or empty, or the frozen agreement " +
+                      "configurations or a piece's organisation are absent: a manifest written before they were frozen)");
 
         // 2. The plan (today's rule set re-asserts the D9 invariants, as on a forward calculation) and the
-        //    evaluation inputs from the frozen pieces and cutoff alone: no employment window, no profile,
-        //    agreement or organisation history, no dated profile read (R41, R42). Their configurations follow
-        //    the hours checks (step 3b), so the refusal order is unchanged.
+        //    evaluation inputs from the frozen pieces, their frozen configurations and the cutoff alone: no
+        //    employment window, no profile, agreement, organisation or configuration history, no dated profile
+        //    read, no configuration lookup (R41, R42; ADR-043 D12).
         var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
         var inputs = FrozenEvaluationInputs(plan, frozen);
 
@@ -2916,34 +2924,6 @@ public sealed class PeriodCalculationService
             plan.EmployeeId, frozen.EntryEventIds, frozen.AbsenceEventIds, ct);
         EnsureRecordedRowsPresent(plan, frozen, recordedHours);
         EnsureHoursDigestsMatch(plan, frozen, recordedHours);
-
-        // 3b. The agreement configurations (ADR-043 D12; wave-5 batch-C ruling 11): the engine computes only with
-        //     the configuration each piece carries, and a manifest does not hold them yet (TASK-14830 freezes them).
-        //     Until then each frozen piece's configuration is re-resolved through the lookup from the piece's frozen
-        //     keys alone (its organisation, agreement, position and the OK version of its first day), so no profile,
-        //     agreement-code or organisation history is read (R42). A key with no published version in force today
-        //     cannot reproduce the calculation: refused as a changed configuration. One that resolves to different
-        //     values is refused after evaluation by the fingerprint check (step 5). A read failure propagates as the
-        //     lookup's own exception. (Every piece carries an organisation: FrozenEvaluationInputs refused the rest.)
-        try
-        {
-            inputs = inputs with
-            {
-                Configs = await ResolvePieceConfigsAsync(
-                    inputs.Pieces,
-                    () => Refuse(
-                        ReplayRefusedException.ManifestWithoutFrozenInputs, manifestId, plan.EmployeeId,
-                        "a frozen piece carries no organisation"),
-                    ct),
-            };
-        }
-        catch (NoConfigInForceException)
-        {
-            throw Refuse(
-                ReplayRefusedException.ConfigChanged, manifestId, plan.EmployeeId,
-                "no published agreement configuration is in force today for a frozen piece's agreement, OK version, " +
-                "position and organisation");
-        }
 
         // 4. Evaluation only (R42), on the frozen opening balance. emitAuditEvents:false — a replay re-evaluates
         //    but does NOT mint a new SegmentManifestCreated or PeriodCalculationCompleted event (ADR-016 D10
@@ -2960,9 +2940,9 @@ public sealed class PeriodCalculationService
         if (!outcome.Result.Success || outcome.PlanInputs is not { } replayed)
             return outcome.Result;
 
-        // 5. The code: the engine's marker and fingerprints must still be the recorded ones.
+        // 5. The arithmetic: the engine's marker must still be the recorded one. The configurations need no check:
+        //    the replay sent exactly the frozen ones.
         EnsureEvaluationModelUnchanged(plan, frozen, replayed);
-        EnsureConfigUnchanged(plan, frozen, replayed);
 
         return outcome.Result;
     }
@@ -2974,13 +2954,24 @@ public sealed class PeriodCalculationService
     /// on the event the stream read fails, see the same method), but a member written as an explicit
     /// JSON <c>null</c> list or an empty digest still decodes; it is refused by the same name
     /// (<see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>) rather than crashing later. An empty
-    /// list is complete (no rows read; no fingerprint for a plan that made no engine call).
+    /// list is complete (no rows read; no pieces, and so no configurations, for a plan with no EMPLOYED day).
+    ///
+    /// <para>
+    /// <b>The members of the current contract that are not <c>[JsonRequired]</c> (S148 ruling R-5).</b>
+    /// <see cref="PlanInputs.ConfigRuns"/> and each piece's <see cref="FrozenPiece.OrgId"/> are optional in the
+    /// JSON so that a manifest written before they existed decodes the same way on the projection row and on the
+    /// event; here such a manifest is refused by name, before the plan is built and before any engine call. A
+    /// replay without them would have to look the configurations up again, which it never does (ADR-016 D10,
+    /// R42). Whether the configurations match the pieces one for one is checked when they are read
+    /// (<see cref="FrozenEvaluationInputs"/>).
+    /// </para>
     /// </summary>
     private static bool IsComplete(PlanInputs planInputs) =>
         planInputs.Pieces is not null
+        && planInputs.Pieces.All(piece => piece is not null && !string.IsNullOrEmpty(piece.OrgId))
+        && planInputs.ConfigRuns is not null
         && planInputs.EntryEventIds is not null
         && planInputs.AbsenceEventIds is not null
-        && planInputs.ConfigFingerprints is not null
         && !string.IsNullOrEmpty(planInputs.EntriesDigest)
         && !string.IsNullOrEmpty(planInputs.AbsencesDigest)
         && !string.IsNullOrEmpty(planInputs.EvaluationModel);
@@ -2991,6 +2982,9 @@ public sealed class PeriodCalculationService
     /// day):
     /// <list type="bullet">
     /// <item>the per-plan lane sends the frozen pieces exactly as recorded, context days included;</item>
+    /// <item>each piece's agreement configuration is the one frozen with it (<see cref="PlanInputs.ConfigRuns"/>,
+    /// entry <c>i</c> for piece <c>i</c>), sent as decoded: no configuration is looked up, resolved or re-read
+    /// (ADR-043 D12, ADR-016 D10, R42), so a configuration published since never reaches a replay;</item>
     /// <item>each EMPLOYED segment's profile, which the per-segment lane sends and the wage-type mapping stamps
     /// on its lines, is built from the frozen piece covering the segment's start (<see cref="ProfileFromPiece"/>).
     /// The dated profile read a forward calculation makes at the segment start is not made;</item>
@@ -3002,24 +2996,45 @@ public sealed class PeriodCalculationService
     /// EMPLOYED segment, starting on that segment's first day, so that is a damaged record, never a month.
     ///
     /// <para>
-    /// <b>The organisation (wave-5 batch-C ruling 11).</b> A replay re-resolves each piece's configuration from the
-    /// keys frozen on it (<see cref="ResolvePieceConfigsAsync"/>, after the hours checks), the organisation among
-    /// them, because the local profile is chosen by organisation. A piece that carries none cannot be re-resolved
-    /// without reading today's organisation history, which a replay never does (R42), so it is refused here, with
-    /// the frozen-inputs checks, as a manifest without (complete) frozen inputs: TASK-14830's final rule, early.
-    /// The configurations themselves are left empty here and set by the replay.
+    /// <b>The configurations match their pieces one for one.</b> A forward calculation freezes one entry per
+    /// piece, in the pieces' order, with the piece's own run key (<see cref="FreezePlanInputs"/>). An entry list
+    /// of another length, a missing entry or configuration, or an entry whose dates, agreement, position or
+    /// organisation differ from its piece's, or whose OK version is not that of the piece's days, is a damaged
+    /// record: refused here, before the hours are read, as a manifest without (complete) frozen inputs. A
+    /// manifest without the entries, or with a piece that has no organisation, was already refused by
+    /// <see cref="IsComplete"/>.
     /// </para>
     /// </summary>
     private EvaluationInputs FrozenEvaluationInputs(PlannedCalculation plan, PlanInputs frozen)
     {
-        foreach (var frozenPiece in frozen.Pieces)
+        // The segment's or piece's index, never a date, goes into a refusal: an EMPLOYED segment's first day can
+        // be a hire date (ADR-040 D7).
+        if (frozen.ConfigRuns is not { } runs || runs.Count != frozen.Pieces.Count)
         {
-            if (string.IsNullOrEmpty(frozenPiece.OrgId))
+            throw Refuse(
+                ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
+                "the frozen agreement configurations do not match the frozen pieces one for one");
+        }
+
+        var configs = new AgreementRuleConfig[frozen.Pieces.Count];
+        for (var i = 0; i < frozen.Pieces.Count; i++)
+        {
+            var piece = frozen.Pieces[i];
+            var run = runs[i];
+            if (run?.Config is null
+                || run.From != piece.From
+                || run.To != piece.To
+                || !string.Equals(run.AgreementCode, piece.AgreementCode, StringComparison.Ordinal)
+                || !string.Equals(run.OkVersion, OkVersionResolver.ResolveVersion(piece.From), StringComparison.Ordinal)
+                || !string.Equals(run.Position, piece.Position, StringComparison.Ordinal)
+                || !string.Equals(run.OrgId, piece.OrgId, StringComparison.Ordinal))
             {
                 throw Refuse(
                     ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
-                    "a frozen piece carries no organisation, so its agreement configuration cannot be re-resolved");
+                    $"frozen agreement configuration {i} does not belong to frozen piece {i}");
             }
+
+            configs[i] = run.Config;
         }
 
         var segmentProfiles = new EmploymentProfile?[plan.Segments.Count];
@@ -3029,8 +3044,6 @@ public sealed class PeriodCalculationService
             if (segment.EmploymentStatus == EmploymentWindowStatus.NOT_EMPLOYED)
                 continue;
 
-            // The segment's index, never its date, goes into the refusal: an EMPLOYED segment's first day can
-            // be a hire date (ADR-040 D7).
             var piece = PieceCovering(frozen.Pieces, segment.StartDate)
                 ?? throw Refuse(
                     ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
@@ -3038,7 +3051,10 @@ public sealed class PeriodCalculationService
             segmentProfiles[s] = ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate);
         }
 
-        return new EvaluationInputs(frozen.Pieces, segmentProfiles, frozen.SettlementCutoff);
+        return new EvaluationInputs(frozen.Pieces, segmentProfiles, frozen.SettlementCutoff)
+        {
+            Configs = configs,
+        };
     }
 
     /// <summary>
@@ -3049,9 +3065,10 @@ public sealed class PeriodCalculationService
     /// fraction (the absence rule scales by it); the wage-type mapping reads only the employee id.
     ///
     /// <para>
-    /// <b>What is frozen, and what is not.</b> The organisation is frozen on the piece (wave-5 batch-C ruling 11)
-    /// because it selects the local profile when the replay re-resolves the configuration, and the profile carries
-    /// it so the per-segment calls run under the same keys as the piece; no rule reads it. The employment category
+    /// <b>What is frozen, and what is not.</b> The organisation is frozen on the piece because it selected the
+    /// local profile of the configuration frozen with the piece (part of that entry's run key, ADR-043 D12), and
+    /// the profile carries it so the per-segment calls run under the same keys as the piece whose frozen
+    /// configuration they send; no rule reads it. The employment category
     /// is read by no rule and by no export line, so a piece does not carry it (refinement A7 freezes the per-piece
     /// inputs rules read; a rule that starts reading another field adds it to the piece and bumps the
     /// evaluation-model marker); the replay profile leaves it empty rather than guessing a value.
@@ -3139,8 +3156,9 @@ public sealed class PeriodCalculationService
     /// S145 / TASK-14513 (refinement A7) — the replay's evaluation-model marker (what the engine answers now, or
     /// <see cref="NoEngineCallEvaluationModel"/> again for a plan that makes no call) must equal the recorded one.
     /// An engine whose arithmetic changed is refused, never silently recomputed
-    /// (<see cref="ReplayRefusedException.EvaluationModelChanged"/>). Checked before the fingerprints: a new
-    /// arithmetic version may also change how configs are fingerprinted, and the marker is then the real cause.
+    /// (<see cref="ReplayRefusedException.EvaluationModelChanged"/>). It is the replay's one check after
+    /// evaluation: the agreement configurations need none, because the replay sent exactly the frozen ones
+    /// (ADR-043 D12, ADR-016 D10).
     /// </summary>
     private void EnsureEvaluationModelUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
     {
@@ -3151,23 +3169,6 @@ public sealed class PeriodCalculationService
             ReplayRefusedException.EvaluationModelChanged, plan.ManifestId, plan.EmployeeId,
             $"the calculation was evaluated by '{frozen.EvaluationModel}' and the Rule Engine now answers " +
             $"'{replayed.EvaluationModel}'");
-    }
-
-    /// <summary>
-    /// S145 / TASK-14513 (refinement A7) — the config fingerprints the engine returns for the frozen pieces must
-    /// equal the recorded ones, in order: agreement configs are code, so a config that changed since the
-    /// calculation is refused by name (<see cref="ReplayRefusedException.ConfigChanged"/>) rather than paying a
-    /// different figure.
-    /// </summary>
-    private void EnsureConfigUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
-    {
-        if (replayed.ConfigFingerprints.SequenceEqual(frozen.ConfigFingerprints, StringComparer.Ordinal))
-            return;
-
-        throw Refuse(
-            ReplayRefusedException.ConfigChanged, plan.ManifestId, plan.EmployeeId,
-            "the agreement configs the Rule Engine resolves for the frozen pieces no longer match the recorded " +
-            "fingerprints");
     }
 
     /// <summary>
@@ -4814,9 +4815,8 @@ public sealed class PeriodCalculationService
     /// <para>
     /// A 2xx answer is accepted only when it is complete AND successful: exactly the three rows
     /// <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c>, each with
-    /// <c>Success == true</c>; a flex block with <c>Success == true</c>; at least one config fingerprint;
-    /// and a non-empty evaluation-model marker (both are frozen into <see cref="PlanInputs"/> and checked
-    /// again by a replay, TASK-14513). Anything
+    /// <c>Success == true</c>; a flex block with <c>Success == true</c>; and a non-empty evaluation-model
+    /// marker (frozen into <see cref="PlanInputs"/> and checked again by a replay). Anything
     /// else is a failed call, not a partial result (<see cref="TimelineReplyDefect"/>).
     /// </para>
     /// </summary>
@@ -4837,9 +4837,10 @@ public sealed class PeriodCalculationService
         {
             // The body of EvaluateTimelineRequest (Rule Engine contract, TASK-14505). Each piece is sent as
             // { from, to, partTimeFraction, agreementCode, position, config }: the frozen piece's values and the
-            // configuration resolved for it (configs[i] for pieces[i], ADR-043 D12), which the engine computes with.
-            // The piece's organisation is not sent: no rule reads it (it is frozen for replay's re-resolution only,
-            // so the evaluation-model marker does not move). The OK version is not sent either: the engine derives
+            // configuration of the piece (configs[i] for pieces[i]: resolved on a forward calculation, frozen on the
+            // manifest for a replay, ADR-043 D12), which the engine computes with. The piece's organisation is not
+            // sent: no rule reads it (it is part of the run key frozen with the configuration, so the
+            // evaluation-model marker does not move). The OK version is not sent either: the engine derives
             // it from the dates and refuses a piece that spans two OK versions or whose config names another
             // agreement or OK version (its fixed 400); every piece of a calendar month lies in one OK version,
             // because the plan is cut at 1 April and the month's context days lie in the month before it (both
@@ -4949,9 +4950,7 @@ public sealed class PeriodCalculationService
     /// <c>FLEX_BALANCE</c> (and nothing else), each with a line-item list and <c>Success == true</c>
     /// (a failed row is a failed evaluation, not a payroll figure — Codex WARNING 2, R-6);</item>
     /// <item>a flex block with <c>Success == true</c>;</item>
-    /// <item>at least one config fingerprint, none blank (an answer without one could not be checked by a
-    /// replay, TASK-14513);</item>
-    /// <item>a non-empty evaluation-model marker.</item>
+    /// <item>a non-empty evaluation-model marker (an answer without one could not be checked by a replay).</item>
     /// </list>
     /// The returned phrase is fixed text naming rule ids only, so it is safe to log; nothing from the
     /// response body is ever echoed (SEC-039).
@@ -4983,13 +4982,6 @@ public sealed class PeriodCalculationService
             return "incomplete: no flex block";
         if (!timeline.Flex.Success)
             return "failed flex block";
-
-        if (timeline.ConfigFingerprints is null
-            || timeline.ConfigFingerprints.Count == 0
-            || timeline.ConfigFingerprints.Any(string.IsNullOrWhiteSpace))
-        {
-            return "no config fingerprint";
-        }
 
         if (string.IsNullOrWhiteSpace(timeline.EvaluationModel))
             return "no evaluation-model marker";
