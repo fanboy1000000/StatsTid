@@ -63,8 +63,11 @@ namespace StatsTid.Backend.Api.Services;
 /// <para>
 /// A lookup refusal (<see cref="ConfigLookupUnavailableException"/>, <see cref="NoConfigInForceException"/>)
 /// is not caught here: it reaches the caller and the Backend's one mapping of the two
-/// (<c>ConfigLookupRefusalMiddleware</c>). A failed date read is the same refusal: its database error is
-/// logged once and answered as <see cref="ConfigLookupUnavailableException"/>, never as a cut not made.
+/// (<c>ConfigLookupRefusalMiddleware</c>). The one exception is <see cref="ComputeMonthNormAsync"/>'s weekday
+/// that no dated record covers, where <see cref="NoConfigInForceException"/> alone is answered by the rule its
+/// summary states (the T14b stack's 5a ruling T2, the second ruled exception to B4's no-catch rule). A failed
+/// date read is the same refusal: its database error is logged once and answered as
+/// <see cref="ConfigLookupUnavailableException"/>, never as a cut not made.
 /// </para>
 ///
 /// <para>
@@ -274,7 +277,10 @@ public sealed class DailyNormCalculator
     /// employee's dated record of that day (the full chain, the same resolution as <see cref="ComputeRangeAsync"/>).
     /// <c>null</c> where no dated record covers the day, or the record lacks its agreement-code or organisation
     /// row (<see cref="EmployeeProfileNotFoundException"/>, fail-soft as the month-end scalar). Backs the Skema
-    /// month's served minimum rest (S0-4).
+    /// month's served minimum rest (S0-4). On the month's own days the Skema month reaches that second null on
+    /// weekend days only: a weekday gap fails the month through the daily-norm rows, since
+    /// <see cref="ComputeRangeAsync"/> resolves every weekday without catching it (5a ruling T8). On the day after the
+    /// month, which the daily-norm rows do not cover, it is reached on any day.
     /// </summary>
     public async Task<IReadOnlyList<DailyConfig>> ResolveConfigsAsync(
         string employeeId,
@@ -335,9 +341,20 @@ public sealed class DailyNormCalculator
     ///   <item><description><b>An annual-activity agreement</b> (the month-end record's month-end configuration
     ///   says so; BC-5 (a)) keeps the formula it had: weekdays × <c>DayNorm.ForWeekday(W, f)</c>, W that
     ///   configuration's weekly norm.</description></item>
+    ///   <item><description><b>A weekday no dated record covers whose key has no configuration in force that
+    ///   day</b> (a new agreement published from a later date; the T14b stack's 5a ruling T2, N-2): W_d is the
+    ///   same key's configuration in force at month end, and the day counts 0.00 h when none is in force at month
+    ///   end either. Such a day is already a stand-in (QUAL-226), so it never fails the screen. This is the second
+    ///   ruled exception to B4's no-catch rule: exactly <see cref="NoConfigInForceException"/>, exactly on such a
+    ///   day, here only. A day a record covers still refuses by name, the month-end record's month-end read still
+    ///   refuses, and <see cref="ConfigLookupUnavailableException"/> always propagates. In the wired host the
+    ///   refusal is asked of the lookup at most once per agreement and OK version per request: the request
+    ///   remembers the days through which nothing can come into force (up to the agreement's next published
+    ///   version start, from the date reads the stretch already makes), so a roster does not pay one refused read
+    ///   and one Error log line per person per day.</description></item>
     /// </list>
-    /// No compiled value and no floor: a lookup refusal propagates (P-13). Every configuration is resolved once
-    /// per stretch (the class remark).
+    /// No compiled value and no floor: any other lookup refusal propagates (P-13). Every configuration is resolved
+    /// once per stretch (the class remark).
     /// </summary>
     public async Task<decimal> ComputeMonthNormAsync(
         Func<DateOnly, DatedRecord?> recordOn,
@@ -377,16 +394,46 @@ public sealed class DailyNormCalculator
             if (!DayNorm.IsWeekday(day))
                 continue;
 
-            var record = recordOn(day) ?? monthEndRecord;
-            var config = await ConfigInForceAsync(
-                record is null
-                    ? CentralKey(noRecordAgreementCode, day)
-                    : FullChainKey(record.OrgId, record.AgreementCode, record.Position, day),
-                day, monthEnd, stretches, ct);
-            sum += DayNorm.ForWeekday(config.WeeklyNormHours, fraction);
+            var dayRecord = recordOn(day);
+            var record = dayRecord ?? monthEndRecord;
+            var key = record is null
+                ? CentralKey(noRecordAgreementCode, day)
+                : FullChainKey(record.OrgId, record.AgreementCode, record.Position, day);
+
+            // The OK version changes only on 1 April, so the key built for d is the month end's key too.
+            var config = dayRecord is not null
+                ? await ConfigInForceAsync(key, day, monthEnd, stretches, ct)
+                : await NoRecordConfigAsync(key, day) ?? await NoRecordConfigAsync(key, monthEnd);
+            if (config is not null)
+                sum += DayNorm.ForWeekday(config.WeeklyNormHours, fraction);
         }
 
         return sum;
+
+        // The configuration of a no-record weekday's key in force on asOf, or null when none is (5a ruling T2).
+        async Task<AgreementRuleConfig?> NoRecordConfigAsync(StretchKey key, DateOnly asOf)
+        {
+            if (stretches.NoneInForce(key, asOf))
+                return null;
+
+            var plan = await PlanStretchAsync(key, asOf, monthEnd, stretches, ct);
+            if (plan.Config is not null)
+                return plan.Config;
+
+            try
+            {
+                return await ResolveStretchAsync(key, asOf, plan.To, stretches, ct);
+            }
+            catch (NoConfigInForceException)
+            {
+                // 5a ruling T2: the second ruled catch of a lookup refusal (B4's exception), this type on a weekday
+                // no dated record covers only. The lookup's Error log line for this refusal is expected: the screen
+                // is still served (5a ruling T11). Nothing comes into force before the agreement's next published
+                // version, so the request asks no more for those days.
+                stretches.AddNoneInForce(key, asOf, plan.CentralTo);
+                return null;
+            }
+        }
     }
 
     /// <summary>The dated profile, or <c>null</c> when none covers the day or it lacks its agreement-code or
@@ -421,10 +468,24 @@ public sealed class DailyNormCalculator
     private async Task<AgreementRuleConfig> ConfigInForceAsync(
         StretchKey key, DateOnly day, DateOnly horizonEnd, RequestStretchSet stretches, CancellationToken ct)
     {
+        var plan = await PlanStretchAsync(key, day, horizonEnd, stretches, ct);
+        return plan.Config ?? await ResolveStretchAsync(key, day, plan.To, stretches, ct);
+    }
+
+    /// <summary>
+    /// <see cref="ConfigInForceAsync"/> before its lookup: the configuration of a stretch of the request that covers
+    /// the day or of the extended earlier stretch, else none yet, with <c>To</c> the last day a new stretch from the
+    /// day may reach. <c>CentralTo</c> is that bound counted on the central layer's version starts alone, the one
+    /// layer whose absence refuses (<see cref="NoConfigInForceException"/>), so a refusal on the day holds through it.
+    /// </summary>
+    private async Task<StretchPlan> PlanStretchAsync(
+        StretchKey key, DateOnly day, DateOnly horizonEnd, RequestStretchSet stretches, CancellationToken ct)
+    {
         if (stretches.Covering(key, day) is { } covering)
-            return covering.Config;
+            return new StretchPlan(covering.Config, covering.To, covering.To);
 
         var to = day;
+        var centralTo = day;
         ConfigStretch? extended = null;
         if (horizonEnd > day
             && _agreementConfigRepo is not null && _positionOverrideRepo is not null && _localAgreementProfileRepo is not null)
@@ -435,16 +496,24 @@ public sealed class DailyNormCalculator
             var earlier = stretches.LatestEndingBefore(key, day);
             var starts = await VersionStartsAsync(key, earlier?.To ?? day.AddDays(-1), horizonEnd, ct);
             var next = horizonEnd.AddDays(1);
+            var nextCentral = next;
             var startsByDay = false;
-            foreach (var start in starts)
+            foreach (var (start, central) in starts)
             {
                 if (start <= day)
+                {
                     startsByDay = true;
-                else if (start < next)
+                    continue;
+                }
+
+                if (start < next)
                     next = start;
+                if (central && start < nextCentral)
+                    nextCentral = start;
             }
 
             to = next.AddDays(-1);
+            centralTo = nextCentral.AddDays(-1);
             if (!startsByDay)
                 extended = earlier;
         }
@@ -452,9 +521,17 @@ public sealed class DailyNormCalculator
         if (extended is not null)
         {
             extended.To = to;
-            return extended.Config;
+            return new StretchPlan(extended.Config, to, to);
         }
 
+        return new StretchPlan(null, to, centralTo);
+    }
+
+    /// <summary>Resolves <paramref name="key"/> through the lookup as of <paramref name="day"/> and keeps it for the
+    /// request as the stretch <c>[day, to]</c>.</summary>
+    private async Task<AgreementRuleConfig> ResolveStretchAsync(
+        StretchKey key, DateOnly day, DateOnly to, RequestStretchSet stretches, CancellationToken ct)
+    {
         var config = key.CentralOnly
             ? await _configLookup.ResolveCentralAsync(key.AgreementCode, key.OkVersion, day, ct)
             : await _configLookup.ResolveAsync(key.OrgId!, key.AgreementCode, key.OkVersion, key.Position, day, ct);
@@ -464,33 +541,36 @@ public sealed class DailyNormCalculator
 
     /// <summary>
     /// The dates inside <c>(<paramref name="afterExclusive"/>, <paramref name="toInclusive"/>]</c> on which a
-    /// new version of one of <paramref name="key"/>'s layers comes into force: the central layer's published
-    /// versions, and for the full chain the position override's versions (when a position is given) and the
-    /// organisation's local-profile activations.
+    /// new version of one of <paramref name="key"/>'s layers comes into force, each marked whether it is the
+    /// central layer's: the central layer's published versions, and for the full chain the position override's
+    /// versions (when a position is given) and the organisation's local-profile activations.
     /// </summary>
-    private async Task<List<DateOnly>> VersionStartsAsync(
+    private async Task<List<(DateOnly Start, bool Central)>> VersionStartsAsync(
         StretchKey key, DateOnly afterExclusive, DateOnly toInclusive, CancellationToken ct)
     {
-        var starts = new List<DateOnly>(await ReadDatesAsync(
-            () => _agreementConfigRepo!.GetPublishedAppliesFromDatesAsync(
-                key.AgreementCode, key.OkVersion, afterExclusive, toInclusive, ct),
-            "central agreement configuration", key));
+        var starts = (await ReadDatesAsync(
+                () => _agreementConfigRepo!.GetPublishedAppliesFromDatesAsync(
+                    key.AgreementCode, key.OkVersion, afterExclusive, toInclusive, ct),
+                "central agreement configuration", key))
+            .Select(start => (start, true))
+            .ToList();
         if (key.CentralOnly)
             return starts;
 
         if (key.Position is not null)
         {
-            starts.AddRange(await ReadDatesAsync(
-                () => _positionOverrideRepo!.GetVersionAppliesFromDatesAsync(
-                    key.AgreementCode, key.OkVersion, key.Position, afterExclusive, toInclusive, ct),
-                "position override", key));
+            starts.AddRange((await ReadDatesAsync(
+                    () => _positionOverrideRepo!.GetVersionAppliesFromDatesAsync(
+                        key.AgreementCode, key.OkVersion, key.Position, afterExclusive, toInclusive, ct),
+                    "position override", key))
+                .Select(start => (start, false)));
         }
 
         var activations = await ReadDatesAsync(
             () => _localAgreementProfileRepo!.GetActivationsInPeriodAsync(
                 key.OrgId!, key.AgreementCode, key.OkVersion, afterExclusive, toInclusive, ct),
             "local agreement profile", key);
-        starts.AddRange(activations.Select(activation => activation.EffectiveFrom));
+        starts.AddRange(activations.Select(activation => (activation.EffectiveFrom, false)));
         return starts;
     }
 
@@ -542,9 +622,32 @@ public sealed class DailyNormCalculator
         public AgreementRuleConfig Config { get; } = config;
     }
 
+    /// <summary>What <see cref="PlanStretchAsync"/> found: the configuration when a stretch already holds the day,
+    /// else <c>null</c>; the last day a new stretch from the day may reach; and that bound on central starts
+    /// alone.</summary>
+    private readonly record struct StretchPlan(AgreementRuleConfig? Config, DateOnly To, DateOnly CentralTo);
+
     private sealed class RequestStretchSet
     {
         private readonly Dictionary<StretchKey, List<ConfigStretch>> _byKey = new();
+
+        // 5a ruling T2's memo, written by ComputeMonthNormAsync's no-record days only: per agreement and OK version,
+        // the inclusive ranges on which the lookup refused (no published central version in force), each up to
+        // the day before the next central version start. The central layer alone decides that refusal, so the
+        // range holds for every key of the pair.
+        private readonly Dictionary<(string AgreementCode, string OkVersion), List<(DateOnly From, DateOnly To)>>
+            _noneInForce = new();
+
+        public bool NoneInForce(StretchKey key, DateOnly day) =>
+            _noneInForce.TryGetValue((key.AgreementCode, key.OkVersion), out var ranges)
+            && ranges.Exists(range => range.From <= day && day <= range.To);
+
+        public void AddNoneInForce(StretchKey key, DateOnly from, DateOnly to)
+        {
+            if (!_noneInForce.TryGetValue((key.AgreementCode, key.OkVersion), out var ranges))
+                _noneInForce[(key.AgreementCode, key.OkVersion)] = ranges = new List<(DateOnly From, DateOnly To)>();
+            ranges.Add((from, to));
+        }
 
         public ConfigStretch? Covering(StretchKey key, DateOnly day) =>
             _byKey.TryGetValue(key, out var stretches)

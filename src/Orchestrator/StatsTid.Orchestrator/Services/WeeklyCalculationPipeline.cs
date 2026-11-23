@@ -40,9 +40,14 @@ public sealed class WeeklyCalculationPipeline
         var okVersion = parameters["okVersion"].ToString()!;
         var periodStart = parameters["periodStart"].ToString()!;
         var periodEnd = parameters["periodEnd"].ToString()!;
-        var weeklyNormHours = Convert.ToDecimal(parameters["weeklyNormHours"]);
-        var partTimeFraction = Convert.ToDecimal(parameters["partTimeFraction"]);
-        var previousFlexBalance = Convert.ToDecimal(parameters["previousFlexBalance"]);
+        var weeklyNormHours = ReadDecimal(parameters["weeklyNormHours"]);
+        var partTimeFraction = ReadDecimal(parameters["partTimeFraction"]);
+        var previousFlexBalance = ReadDecimal(parameters["previousFlexBalance"]);
+
+        // POST /api/orchestrator/execute deserializes each parameter as a JsonElement; a direct caller passes a CLR
+        // numeric. Both are read, since Convert.ToDecimal alone throws on a JsonElement (5a ruling T4).
+        static decimal ReadDecimal(object value) =>
+            value is JsonElement json ? json.GetDecimal() : Convert.ToDecimal(value);
 
         var client = _httpClientFactory.CreateClient();
         if (authorizationHeader is not null)

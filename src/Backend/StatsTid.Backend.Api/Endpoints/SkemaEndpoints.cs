@@ -593,8 +593,10 @@ public static class SkemaEndpoints
             // The screen's instant rest warning judges each work end by the minimum rest of its own date,
             // as the compliance check does; a finding can be dated monthEnd + 1 (a night shift begun on the
             // month's last day) and never before the month (ruling 17). The month's days use the daily-norm
-            // rows' resolution (each day's own dated record, the full chain; null where no complete record
-            // covers the day), so a lookup refusal fails the month through the Backend's one mapping (B4).
+            // rows' resolution (each day's own dated record, the full chain; null where no dated record covers
+            // the day), so a lookup refusal fails the month through the Backend's one mapping (B4). A record gap
+            // (a profile row without its agreement-code or organisation row) serves null on weekend days only: a
+            // weekday gap already fails the month through the daily-norm rows above (5a ruling T8).
             // monthEnd + 1 never fails the month: its next OK version's configuration may not be published
             // yet, so no record or no configuration in force there serves null; an unreadable configuration
             // still propagates. Configuration values, not registrations: served to a leader too (RES-002).
@@ -610,7 +612,8 @@ public static class SkemaEndpoints
             }
             catch (NoConfigInForceException)
             {
-                // Ruling 17: the one ruled catch of a lookup refusal (B4's exception), this type on this day only.
+                // Ruling 17: a ruled catch of a lookup refusal (B4's exception), this type on this day only. The
+                // lookup's Error log line for this refusal is expected: the month is still served (5a ruling T11).
                 nextBoundaryMinimumRest = null;
             }
             minimumRest.Add(new SkemaDayHoursRow(nextBoundaryDay, nextBoundaryMinimumRest));

@@ -454,9 +454,10 @@ builder.Services.AddSingleton<StatsTid.Infrastructure.TerminationPayoutRequestRe
 builder.Services.AddSingleton<StatsTid.Infrastructure.EmploymentEndDateLifecycleWriter>();
 builder.Services.AddSingleton<StatsTid.Infrastructure.SettlementReversalService>();
 // S65 / TASK-6502 — shared per-day "Arbejdstid"-norm resolver (extracted from the Skema
-// month read; also consumed by the Balance year-overview read). Stateless: it keeps no
-// cache (each day resolves its own configuration through IAgreementConfigLookup), so
-// singleton is safe.
+// month read; also consumed by the Balance year-overview read). It keeps no state on the
+// instance: the configuration stretches it reuses live per request, in the current
+// HttpContext's Items reached through IHttpContextAccessor, so nothing outlives or crosses
+// a request, and that is why a singleton is safe.
 builder.Services.AddSingleton<StatsTid.Backend.Api.Services.DailyNormCalculator>();
 // S66 / TASK-6603 — vacation-consumption (feriedage) calculator (ADR-032 D1/D3). Composes the
 // shared DailyNormCalculator (one norm impl, no drift) + the dated profile resolver for the

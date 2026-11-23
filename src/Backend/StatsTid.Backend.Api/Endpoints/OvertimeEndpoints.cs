@@ -129,6 +129,9 @@ public static class OvertimeEndpoints
                     employeeId,
                     agreementCode,
                     okVersion = user.OkVersion,
+                    // Required by the engine's EmploymentProfile, so a profile without it does not bind (5a ruling
+                    // T5). The users row's value: this route reads no dated profile.
+                    employmentCategory = user.EmploymentCategory,
                 },
                 entries = Array.Empty<object>(),
                 periodStart,
