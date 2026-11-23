@@ -2703,3 +2703,26 @@ M-40 included [O for the 14 facts of the five classes run].
   - 5a internal, the Fable `reviewer`;
   - 5a Codex (`.claude/reviews/S148-session-helpers/codex-T14b-5a-prompt.txt`).
   Both 5a lenses are asked to judge items (a)–(h): TASK-14828's deviations 2 and 8, `DatedRecordTimeline`, payroll's anonymous 500, AC-C13k (2), the weekly pipeline's `JsonElement` cast, the compliance smoke probe and the two untrue remarks.
+
+**The T14b stack review, cycle 1** (`bb0677df..043c5f35`; each review saved verbatim before acting):
+- **5α** (`S148-T14b-5alpha.md`, Sonnet): **FAIL on one item**, TASK-14829's declared `ui/Checkbox.tsx` (`describedBy`), outside its list, though the ruled `aria-describedby` needs it. All else passes:
+  - files per commit and the separation of production and test commits;
+  - `ConfigResolutionService.cs` comment-only;
+  - three `shortcut(pending)` comments in `src`, `shortcut(F10)` gone, `AgreementConfigProvider` gone;
+  - the catch census and the compiled-table census;
+  - S1–S10, payroll's two bodies, the note and the two sentences match;
+  - the protected files are untouched and the trailers are present.
+- **Codex** (`S148-T14b-5a-codex-c1.raw.md`): **CHANGES-REQUIRED**.
+  - B1: AC-C13k (2), the week check counts a same-code row start.
+  - B2: the weekly pipeline's `JsonElement` cast.
+  - W1: payroll's configuration-date reads raise a raw database exception, so an anonymous 500 instead of the fixed 503.
+  - W2: the workless month's synthetic run, against ruling 18.
+  - W3: deviation 8's fail-soft null.
+  - W4: the compliance smoke probe.
+  - N1–N3.
+- **Fable reviewer** (`S148-T14b-5a-reviewer.md`, Fable 5.2): **APPROVED-WITH-WARNINGS**.
+  - W-1: a correctly configured new agreement makes Teamoversigt and the balance summary answer 500 `config_not_in_force` for the days before its start (`DailyNormCalculator.cs:380-385`).
+  - W-2: the overtime-governance route has sent a profile without `employmentCategory` since before the stack, which the engine refuses at binding, so the new governance smoke probe will be red. Confirmed by the Orchestrator by reading.
+  - W-3: two facts committed knowing they are red.
+  - W-4: Backend `Program.cs:456-459`'s remark.
+- **Where the lenses disagree:** (a) and (b), TASK-14828's deviations 2 and 8. Fable W-1 also changes N-2's formula. Both went to the **adjudicator** (Fable), dispatched with all three reviews.
