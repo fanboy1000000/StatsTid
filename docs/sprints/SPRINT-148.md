@@ -2780,3 +2780,46 @@ M-40 included [O for the 14 facts of the five classes run].
 - Its commit touches only frontend files; the Orchestrator cherry-picks it onto the final tip.
 
 **T14b FU-2 dispatched** (`backend-infrastructure`) on `b2304473`: T2, T4, T5, T8, T10 and T11, with a local scratch probe of T2's new-agreement case.
+
+**T14b FU-2 returned** (`backend-infrastructure`; `d6412930` on `b2304473`; report `.claude/reviews/S148-T14b-FU-2-report.md`).
+- **What a leader now sees.** Publish agreement X from Monday 16 March 2026 and hire someone onto it that day.
+  - Before, Teamoversigt failed for the whole team, and the new hire's balance page failed with "publish a configuration". Publishing could not fix it.
+  - Now both show **162.80 h** for March. The days before the start count at the new agreement's rate, the stand-in every mid-month starter already gets (QUAL-226).
+- **T2 as built** (`DailyNormCalculator.cs`):
+  - A no-record weekday reads its key on the day, else at month end, else counts nothing.
+  - The one catch (`:427`) sits in a local function of `ComputeMonthNormAsync` and wraps only the lookup call. The date reads, which raise the "unavailable" refusal, run before it.
+  - A record-covered day uses the unchanged path.
+- **The bound is stricter than ruled.** Only the central layer can refuse (`ConfigResolutionService.cs:154`). So a refusal is remembered for the request per agreement and OK version, up to the next central version start, which the stretch's date reads already give.
+  - Measured on a local cluster with a roster of three such hires: 1 refused lookup, not 30.
+  - The bound has no committed fact: a database-free fact cannot reach the date repositories.
+- **T4:** the weekly task reads a `JsonElement` or a CLR number.
+- **T5:** the governance profile carries `employmentCategory = user.EmploymentCategory`. No test asserts the payload's members.
+- **T8, T10 and T11:** the remarks are made exact and quoted in the report. FU-2 wrote T8 more exactly than the ruling: only the record-gap null is weekend-only, and only on the month's own days.
+- **The Orchestrator's checks:**
+  - The diff touches the five authorized files.
+  - The catch census in the Backend: the middleware, `SkemaEndpoints.cs:613` (ruling 17) and `DailyNormCalculator.cs:427` (T2), nothing else.
+  - `ConfigLookupUnavailableException` is never caught.
+- **Gate:**
+  - Build 0 errors, 125 warnings, CA2100 113.
+  - Unit 1751, DemoSeed 170, Regression non-Docker 146.
+  - The shortcut check shows the three known sites.
+  - `openapi.json` is unchanged.
+- **Local cluster (port 55443, not CI evidence):**
+  - The screen and compliance classes pass, 46 and 48.
+  - T2's probe gives 200 and 162.80 on both screens at the tip, and 500 `config_not_in_force` on both at `b2304473`.
+- **Brief contradiction 2, ruled by the Orchestrator.** In T2's zero case (no record, nothing in force all month), Teamoversigt shows 0, but the balance summary still answers 500 `config_not_in_force`.
+  - The refusal does not come from the figure. It comes from the balance's separate merarbejde-flag read at month end (`BalanceEndpoints.cs:161-162`).
+  - T2 confines its exception to `ComputeMonthNormAsync`, so that read refuses by name under B4. The refusal is also accurate, because the agreement has nothing published in force.
+  - FU-T's Docker fact asserts 200 and 0 on Teamoversigt and the named 500 on the balance.
+  - T2's "given up" line holds for Teamoversigt only. That goes into O-17's owner note with T2.
+- **Found, not fixed:**
+  - `ConfigResolutionService.cs:306-310`'s remark omitted T2's catch; fixed by the Orchestrator below.
+  - The weekly pipeline's profile sends a hard-coded `employmentCategory = "Standard"` (`WeeklyCalculationPipeline.cs:65`). This is legacy R-8 and predates the stack; it goes into the legacy-readers QUAL row at the merge.
+- **Orchestrator, comment only** (`9f7bc7af` on `d6412930`; T14 plus the found remarks):
+  - `WeeklyTimelineCore.cs`: the callers split pieces at OK-version dates, and the engine refuses a piece spanning two (S4).
+  - `CentralAgreementConfigs.cs`: names all three legacy callers.
+  - Payroll `Program.cs`: a configuration-date read logs its own failure (both remarks).
+  - `ConfigResolutionService.cs`: `NoConfigInForceException`'s remark names T2's catch beside ruling 17's.
+  - Every changed line is a comment. TASK-14828's brief gains T2's edits: item 6, ruling 17's "one", and the catch census.
+- **FU-T dispatched** (`test-qa`) on `9f7bc7af`: the facts of T2–T9, T12 and T17 (19 items), AC-C13k (2)'s docstring R → F, each F fact's red at `043c5f35`, and the new Docker facts run on a local cluster.
+- **Housekeeping:** FU-1's and TASK-14828's worktrees are removed (their commits are on FU-2's branch). One empty directory of the latter was held by a process and is left.
