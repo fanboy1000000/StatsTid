@@ -3153,3 +3153,10 @@ M-40 included [O for the 14 facts of the five classes run].
 - **O-17 note 1, the interim set-fingerprint window, is closed.**
 - **Owed:** the `TryResolveDatedProfileAsync` log label goes to TASK-14831's dispatch (V10).
 - **CI-W5 watch list gains:** the five `FrozenConfigReplayTests` facts and `ManifestProjectionRebuildPlanInputsTests`. **CI-M5:** M-13 with its widened frozen list.
+
+**The TASK-14830 GATE on master** (`27160f92`, the merge).
+- **Build:** 0 errors, 125 warnings, CA2100 113.
+- **Tests:** Unit 1724; DemoSeed 170; Regression non-Docker 147. The shortcut check finds 19, with 0 bad.
+- **Frontend:** untouched since `f328d00d`, so the frontend checks are not re-run.
+- **Housekeeping:** the last TASK-14830 worktree is removed, and only the main checkout remains.
+- **Next:** TASK-14831 + -T (T24, payroll's recheck under the lock). It carries T13's 422 `payroll-employment-record-gap` and the `TryResolveDatedProfileAsync` log label (V10).
