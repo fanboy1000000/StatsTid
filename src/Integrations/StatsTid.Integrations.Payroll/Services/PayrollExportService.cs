@@ -346,16 +346,16 @@ public sealed class PayrollExportService
             await AssertPeriodApprovedForUpdateAsync(conn, tx, periodId, key, ct);
 
             // S147 TASK-14715 (R-17; fix-up 1, R-F1) — the record-less UNTRACKED zero-line month. It has passed every
-            // check above that any calculating export runs, in the same order and with the same refusals: the ledger
-            // lock, the under-lock recheck, the previous month's FOR SHARE recheck, and this month's APPROVED
-            // FOR UPDATE re-assert with the four-eyes checkpoint. Only the write is skipped: when the month has no
-            // record, nothing is handed off (ADR-034 D3), so no record, event, audit row or envelope. The month stays
-            // reopenable, a re-export writes nothing again and /recalculate refuses it as never exported. The read
-            // runs under the ledger lock that every writer of payroll_export_records takes before it touches a record,
-            // so it sees every record committed before the lock was granted and none can appear until this
-            // transaction ends. A month
-            // that already HAS a record (case 3b, a re-run) goes on as before: the insert meets the record and the
-            // content compare answers 409 "use a correction" when the recorded lines differ.
+            // check above that any calculating export runs, in the same order and with the same refusals: the
+            // pay-inputs and ledger locks, the two under-lock rechecks, the previous month's FOR SHARE recheck, and
+            // this month's APPROVED FOR UPDATE re-assert with the four-eyes checkpoint. Only the write is skipped: when
+            // the month has no record, nothing is handed off (ADR-034 D3), so no record, event, audit row or envelope.
+            // The month stays reopenable, a re-export writes nothing again and /recalculate refuses it as never
+            // exported. The read runs under the ledger lock that every writer of payroll_export_records takes before
+            // it touches a record, so it sees every record committed before the lock was granted and none can appear
+            // until this transaction ends. A month that already HAS a record (case 3b, a re-run) goes on as before: the
+            // insert meets the record and the content compare answers 409 "use a correction" when the recorded lines
+            // differ.
             var recordLess = untrackedZeroLine && !await MonthHasRecordAsync(conn, tx, key, ct);
             if (!recordLess)
             {
