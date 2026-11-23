@@ -3337,3 +3337,9 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Found, not fixed:** `PeriodCalculationService.cs:3845`'s `DatedProfile` doc names two tables. The Orchestrator fixes it at the merge (comment only).
 - **The Orchestrator's checks:** the three authorized files.
 - **TASK-14847-T dispatched** (`test-qa`) on `ed91a98d`, with the brief (`97642fc0`), the ruled repair, and TASK-14847's seam for AC-PIL-i (1)–(4).
+
+**TASK-14846 cycle 2 complete**: Fable (`S148-TASK-14846-5a-reviewer-c2.md`) **APPROVED**; both of its cycle-1 warnings are closed. All three lenses have now passed cycle 2 (5α PASS, Codex APPROVED, Fable APPROVED).
+- **Two notes, carried to TASK-14838 with X7:**
+  - The picker's `selfLockNoteId` links and hides but does not itself lock (the sections' prop also disables). TASK-14838 may make the picker derive `disabled` from it.
+  - The hidden helper's last sentence ("Navn, e-mail, organisation og ledelse gemmes straks…") still applies on a self record. Whether to keep that sentence is a TASK-14838 copy choice.
+- **TASK-14846 (`2d086a28`, `0a3a3d7c`) is ready to merge** after the TASK-14831 + 14847 stack, then the GATE with the five frontend checks (vitest needs the owner's go-ahead after the low-memory reap, or it runs in CI-W5).
