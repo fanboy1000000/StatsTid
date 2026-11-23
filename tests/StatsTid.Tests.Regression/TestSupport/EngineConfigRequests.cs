@@ -1,3 +1,4 @@
+using StatsTid.Infrastructure;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Config;
@@ -195,4 +196,22 @@ public static class EngineConfigRequests
             WorkIntervals = workIntervals,
             Configs = runs,
         };
+
+    /// <summary>
+    /// S148 / TASK-14828-T: the fake <see cref="IAgreementConfigLookup"/> of every hand-built payroll fixture that is not
+    /// ABOUT configurations. Payroll refuses to calculate or replay a month without a lookup (ADR-043 D12, never silent), and
+    /// this fake answers the compiled config of the key it is asked about, the one the engine resolved before the switch, so no
+    /// expected value moves. A fact about what payroll reads from the database does not use it.
+    /// </summary>
+    public sealed class CompiledLookup : IAgreementConfigLookup
+    {
+        public Task<AgreementRuleConfig> ResolveAsync(
+            string orgId, string agreementCode, string okVersion, string? position, DateOnly asOf,
+            CancellationToken ct = default) =>
+            Task.FromResult(Config(agreementCode, okVersion, position));
+
+        public Task<AgreementRuleConfig> ResolveCentralAsync(
+            string agreementCode, string okVersion, DateOnly asOf, CancellationToken ct = default) =>
+            Task.FromResult(Config(agreementCode, okVersion));
+    }
 }

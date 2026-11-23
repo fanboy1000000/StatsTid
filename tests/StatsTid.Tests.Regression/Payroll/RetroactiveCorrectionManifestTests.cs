@@ -294,12 +294,15 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         // the tx rolled back (no event/audit/baseline-update), and the caller got correction lines
         // anyway → the NEXT correction would diff against the STALE 10h baseline (the B3 double-count).
         // Post-fix the failure PROPAGATES (the call surfaces an error, not Success=true).
-        await Assert.ThrowsAnyAsync<Exception>(() => service.RecalculateAsync(
+        // S148 TASK-14828-T: tightened from ThrowsAnyAsync<Exception>, which payroll's never-silent refusal (a service built
+        // without a configuration lookup) also satisfied; the only answer that is right is the audit row's FK violation.
+        var failure = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => service.RecalculateAsync(
             profile,
             periodStart: new DateOnly(year, month, 1),
             periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
             reason: "trigger tx-block failure",
             actorId: "admin-test"));
+        Assert.Equal("23503", failure.SqlState);
 
         // The baseline is UNCHANGED — the tx rolled back, so a subsequent correction still diffs
         // against the original 10h (NOT a half-applied / desynced state).
@@ -499,6 +502,8 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
             priorPeriodApprovalReader: new Segmentation.TestFixtures.AlwaysApprovedPriorPeriods(),
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new Segmentation.TestFixtures.NoTransferDates(),
+            // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
+            configLookup: new StatsTid.Tests.Shared.EngineConfigRequests.CompiledLookup(),
             // S146 R-14: a correction/ledger fact over the database: the production reader over payroll_export_records.
             flexLedgerReader: new PostgresFlexLedgerReader(factory));
         return new RetroactiveCorrectionService(

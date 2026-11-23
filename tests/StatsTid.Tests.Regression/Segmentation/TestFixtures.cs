@@ -285,6 +285,8 @@ internal static class TestFixtures
             priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new TestFixtures.NoTransferDates(),
+            // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
+            configLookup: new StatsTid.Tests.Shared.EngineConfigRequests.CompiledLookup(),
             // S146 R-14: the opening is derived from the recorded ledger, never handed in. Default = an EMPTY
             // in-memory ledger (not about the chain: LEDGER_START 0, the opening the former caller-supplied 0m
             // said); a fact over the database that records months passes the Postgres reader.

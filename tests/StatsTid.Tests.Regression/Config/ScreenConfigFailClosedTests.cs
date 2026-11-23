@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Infrastructure;
+using StatsTid.Tests.Regression.Balance;
 using StatsTid.Tests.Regression.Contracts;
 using StatsTid.Tests.Regression.TestSupport;
 
@@ -37,7 +38,7 @@ namespace StatsTid.Tests.Regression.Config;
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
-public sealed class ScreenConfigFailClosedTests : DatedConfigDockerFixture
+public sealed class ScreenConfigFailClosedTests : ScreenNormFixture
 {
     private static readonly DateOnly Monday9Nov2026 = new(2026, 11, 9);
 
@@ -169,6 +170,60 @@ public sealed class ScreenConfigFailClosedTests : DatedConfigDockerFixture
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.Equal(NotInForceBody, text);
         Assert.DoesNotContain("dailyNorm", text);
+    }
+
+    /// <summary>
+    /// <b>S148 / TASK-14828-T (AC-C1m (1), the Teamoversigt half; kind F (CI)).</b> An HK / OK24 employee on a leader's roster,
+    /// and the lookup's database read failing. <c>GET /api/approval/team-overview?year=2026&amp;month=3</c> as the leader answers 503
+    /// with exactly <c>{ "error": "Agreement configuration service unavailable" }</c> (B4's fixed body, taken from TASK-14825's
+    /// brief, never read back from a report), and no <c>normExpected</c> member: no value taken from the code.
+    ///
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; argued statically). On the code before the stack Teamoversigt fell back to the
+    /// compiled HK configuration when the read failed (<c>ApprovalEndpoints.cs:1361-1363</c> at <c>bb529e62</c>): 200 with the
+    /// compiled 162.80, so the status assertion fails.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Teamoversigt_ReadFailure_Errors()
+    {
+        var host = FailingReadHost(Monday9Nov2026);
+        _ = host.CreateClient(); // boot the host before anyone is seeded
+        var leader = await SeedLeaderAsync(host, "t828fc_tl", Org);
+        await SeedRosterMemberAsync("t828fc_te", Org, "t828fc_tl");
+
+        using var response = await leader.GetAsync("/api/approval/team-overview?year=2026&month=3");
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(UnavailableBody, text);
+        Assert.DoesNotContain("normExpected", text);
+    }
+
+    /// <summary>
+    /// <b>S148 / TASK-14828-T (AC-C1m (1), the balance half; kind F (CI)).</b> An HK / OK24 employee reads their own balance summary,
+    /// <c>GET /api/balance/{id}/summary?year=2026&amp;month=3</c>, with the lookup's database read failing: 503 with exactly the unavailable
+    /// body (B4) and no <c>normHoursExpected</c> member.
+    ///
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; argued statically). Before the stack the balance fell back to the compiled weekly
+    /// norm when the read failed (<c>BalanceEndpoints.cs:162</c> at <c>bb529e62</c>): 200 with 162.80, so the status assertion fails.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Balance_ReadFailure_Errors()
+    {
+        var host = FailingReadHost(Monday9Nov2026);
+        _ = host.CreateClient(); // boot the host before anyone is seeded
+        await RegressionSeed.SeedEmployeeAsync(ConnectionString, "t828fc_be", Org, "HK", "OK24");
+
+        using var employee = S120ContractAssert.EmployeeClient(host, "t828fc_be", Org);
+        using var response = await employee.GetAsync("/api/balance/t828fc_be/summary?year=2026&month=3");
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(UnavailableBody, text);
+        Assert.DoesNotContain("normHoursExpected", text);
     }
 
     /// <summary>

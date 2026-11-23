@@ -244,7 +244,8 @@ internal static class EmploymentWindowPcsFixture
         IEmploymentWindowResolver? windowResolver = null,
         IReadOnlyList<RuleClassification>? ruleSet = null,
         IRecordedHoursReader? hoursReader = null,
-        IFlexLedgerReader? flexLedgerReader = null)
+        IFlexLedgerReader? flexLedgerReader = null,
+        IAgreementConfigLookup? configLookup = null)
     {
         // S137 Step-5a (Reviewer WARNING 1): PCS REFUSES a profile resolver without a window
         // resolver — that pairing is the dropped-DI shape that would silently pay a leaver all
@@ -277,7 +278,7 @@ internal static class EmploymentWindowPcsFixture
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new NoTransferDates(),
             // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
-            configLookup: new FakeConfigLookup(),
+            configLookup: configLookup ?? new FakeConfigLookup(),
             // S146 R-14: the opening comes from the recorded ledger now, never from the caller. A fact that is
             // not about the chain gets an EMPTY ledger (no records), so the month opens at LEDGER_START 0, which
             // is what the former caller-supplied 0m said. A fact that needs a non-zero opening passes

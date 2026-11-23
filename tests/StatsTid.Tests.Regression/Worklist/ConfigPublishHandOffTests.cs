@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Tests.Regression.Config;
+using StatsTid.Tests.Regression.Contracts;
+using StatsTid.Tests.Regression.Payroll;
 using StatsTid.Tests.Regression.TestSupport;
 using static StatsTid.Tests.Regression.Organisation.TransferWriteTests;
 
@@ -39,7 +41,7 @@ namespace StatsTid.Tests.Regression.Worklist;
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
-public sealed class ConfigPublishHandOffTests : DatedConfigDockerFixture
+public sealed class ConfigPublishHandOffTests : DatedPayrollFixture
 {
     /// <summary>The fixed clock: Tuesday 10 November 2026.</summary>
     private static readonly DateOnly Clock = new(2026, 11, 10);
@@ -77,6 +79,73 @@ public sealed class ConfigPublishHandOffTests : DatedConfigDockerFixture
             (2026, 1), (2026, 2), (2026, 3), (2026, 4));
         Assert.DoesNotContain(rows, r => r.Month == 5);
         Assert.Equal(4, rows.Count);
+    }
+
+    // ─── AC-C2c (recalculation) ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// <b>F (CI).</b> AC-C2c, the recalculation half (S148 TASK-14828-T). An HK/OK26 full-timer in STY01 with 7.4 h on every June
+    /// weekday; June 2026 is exported through the real payroll host under the seeded 37-hour version (closing flex 0.00). HK/OK26
+    /// is then published with a 32-hour weekly norm applying from Monday 4 May 2026: June's worklist row lands (TASK-14823-T's
+    /// half) and the export record is untouched. A GlobalAdmin's <c>POST /api/payroll/recalculate</c> of June answers 200 and pays
+    /// the month under the NEW version: the correction's closing flex is <b>22.00</b> (22 weekdays x (7.40 - 6.40)), where it was
+    /// 0.00. The worklist row is then resolved <c>RECALCULATED</c> (200) and the resolve is audited: one
+    /// <c>BackdateWorklistRowResolved</c> outbox event and one audit row for the employee.
+    ///
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; argued statically). On the code before the stack <c>/recalculate</c>
+    /// priced June on the compiled 37 h, so the closing flex after is 0.00 and the <c>22.00</c> assertion fails; the worklist
+    /// assertions are TASK-14823's and pass after it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Recalculate_PaysNewVersion_ResolvedRecalculatedAudited()
+    {
+        var admin = AdminAt(Clock); // boots the Backend host before anyone is seeded
+        const string employeeId = "EMP-S148-RECALC-PAYS";
+        var jun01 = new DateOnly(2026, 6, 1);
+        var jun30 = new DateOnly(2026, 6, 30);
+        await SeedEmployeeAsync(employeeId, "STY01", "HK");
+        await SeedWeekdayHoursAsync(employeeId, "HK", Ok26, jun01, jun30);
+        await SeedApprovedMonthAsync(employeeId, "STY01", "HK", Ok26, jun01, jun30);
+
+        var exported = await CalculateAndExportAsync(employeeId, "HK", Ok26, "STY01", jun01, jun30);
+        AssertOk(exported);
+        Assert.Equal((decimal?)0.00m, ReadResult(exported.Json).ClosingFlexBalance);
+        var recordBefore = await ReadExportRecordAsync(employeeId, 2026, 6);
+
+        await CreateAndPublishAsync(admin, HkBody(32m), "2026-05-04");
+
+        var rows = await ReadRowsAsync(employeeId);
+        Assert.Single(rows, r => r.Kind == "EXPORTED_MONTH" && r.Year == 2026 && r.Month == 6);
+        Assert.Equal(recordBefore, await ReadExportRecordAsync(employeeId, 2026, 6));
+
+        var recalculated = await RecalculateAsync(employeeId, "HK", Ok26, "STY01", jun01, jun30);
+        AssertOk(recalculated);
+        using (var doc = JsonDocument.Parse(recalculated.Json))
+        {
+            Assert.Equal(0.00m, doc.RootElement.GetProperty("closingFlexBalanceBefore").GetDecimal());
+            Assert.Equal(22.00m, doc.RootElement.GetProperty("closingFlexBalanceAfter").GetDecimal());
+        }
+
+        var worklistId = await ScalarAsync<Guid>(
+            "SELECT worklist_id FROM hr_backdate_worklist WHERE employee_id = @e AND kind = 'EXPORTED_MONTH' AND year = 2026 AND month = 6 AND resolved_at IS NULL",
+            ("e", employeeId));
+        var version = await ScalarAsync<long>("SELECT version FROM hr_backdate_worklist WHERE worklist_id = @id", ("id", worklistId));
+        using (var resolve = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+                   HttpMethod.Post, $"/api/hr/backdate-worklist/{worklistId}/resolve",
+                   """{"resolution":"RECALCULATED","reason":"Recalculated June 2026 under the new HK configuration"}""", version)))
+        {
+            Assert.True(resolve.StatusCode == HttpStatusCode.OK,
+                $"resolve expected 200, got {(int)resolve.StatusCode}: {await resolve.Content.ReadAsStringAsync()}");
+        }
+
+        Assert.Equal(1L, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @s AND event_type = 'BackdateWorklistRowResolved'",
+            ("s", $"employee-{employeeId}")));
+        Assert.Equal(1L, await CountAsync(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @e",
+            ("e", employeeId)));
     }
 
     // ─── AC-C2f ──────────────────────────────────────────────────────────────────

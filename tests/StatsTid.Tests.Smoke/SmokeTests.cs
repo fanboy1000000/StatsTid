@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
+using StatsTid.SharedKernel.Config;
 
 namespace StatsTid.Tests.Smoke;
 
@@ -102,7 +103,10 @@ public class SmokeTests
                 new { employeeId = "SMOKE001", date = "2024-04-05", hours = 7.4m, agreementCode = "AC", okVersion = "OK24" },
             },
             periodStart = "2024-04-01",
-            periodEnd = "2024-04-07"
+            periodEnd = "2024-04-07",
+            // S148 BC-P5 (ADR-043 D12): the engine computes only with the configuration the request carries and answers a
+            // request without one 400; the compiled AC/OK24 config is the one the profile above names.
+            config = CentralAgreementConfigs.GetConfig("AC", "OK24"),
         };
 
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{RuleEngineUrl}/api/rules/evaluate")
@@ -308,6 +312,108 @@ public class SmokeTests
         WithAuth(complianceRequest);
         var complianceResponse = await _client.SendAsync(complianceRequest);
         Assert.NotEqual(HttpStatusCode.ServiceUnavailable, complianceResponse.StatusCode);
+    }
+
+    /// <summary>
+    /// S148 BC-P6 (the S73 recorded debt, <c>docs/WORKFLOW.md:310</c>): the Backend to Rule Engine <c>check-overtime-governance</c>
+    /// hop through the composed stack. <c>GET /api/overtime/emp001/governance</c> (emp001: AC, OK24, seeded) answers
+    /// <b>200</b> with <c>ruleId</c> <c>OVERTIME_GOVERNANCE_CHECK</c>. The discriminating failure is the route's <b>503</b>
+    /// ("Overtime governance check service unavailable"): a broken hop, a missing forwarded bearer, or an engine refusal (the
+    /// route now sends the compiled config; a request without one is answered 400 by the engine, which the route turns
+    /// into this 503) all land there. Read-only.
+    /// </summary>
+    [Fact]
+    public async Task Backend_OvertimeGovernanceHop_ComposedStack()
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{BackendUrl}/api/overtime/emp001/governance?periodStart=2026-03-01&periodEnd=2026-03-31&overtimeHours=5");
+        WithAuth(request);
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("OVERTIME_GOVERNANCE_CHECK", body.GetProperty("ruleId").GetString());
+    }
+
+    /// <summary>
+    /// S148 BC-P6 / T-BC-3 (a): the Orchestrator's <c>rule-evaluation</c> path (POST <c>/api/orchestrator/execute</c>, which
+    /// dispatches the caller's parameters to the Rule Engine's <c>evaluate</c> with the compiled config of the forwarded profile
+    /// added, <c>TaskDispatcher.cs</c>): a <c>NORM_CHECK_37H</c> request for emp001 (AC, OK24) answers 200 with the task's
+    /// status <c>completed</c>. The discriminating failure is status <c>failed</c> (HTTP 422): a refused config marks the task
+    /// failed. Read-only (the task row is the Orchestrator's own record).
+    /// </summary>
+    [Fact]
+    public async Task Orchestrator_RuleEvaluationPath_ComposedStack()
+    {
+        var parameters = new
+        {
+            ruleId = "NORM_CHECK_37H",
+            profile = new
+            {
+                employeeId = "emp001",
+                agreementCode = "AC",
+                okVersion = "OK24",
+                employmentCategory = "Standard",
+                partTimeFraction = 1.0m,
+            },
+            entries = new[]
+            {
+                new { employeeId = "emp001", date = "2099-01-05", hours = 7.4m, agreementCode = "AC", okVersion = "OK24" },
+            },
+            periodStart = "2099-01-05",
+            periodEnd = "2099-01-11",
+        };
+
+        var task = await ExecuteOrchestratorTaskAsync("rule-evaluation", parameters);
+
+        Assert.Equal("completed", task.GetProperty("status").GetString());
+    }
+
+    /// <summary>
+    /// S148 BC-P6 / T-BC-3 (a): the Orchestrator's <c>weekly-calculation</c> pipeline (POST <c>/api/orchestrator/execute</c>,
+    /// <c>WeeklyCalculationPipeline.cs</c>) for emp001 over a far-future week (Monday 5 to Sunday 11 January 2099, no hours
+    /// recorded): the task is <c>completed</c> and its output holds <b>four</b> rule results (norm, supplement, overtime,
+    /// absence) and a <c>flexBalance</c>. The discriminating failure: the pipeline swallows a refused call, so a refused
+    /// config would leave only the absence result (the three config-reading calls dropped) and no flex balance; the count of four
+    /// is what a missing config turns red.
+    /// </summary>
+    [Fact]
+    public async Task Orchestrator_WeeklyCalculationPath_ComposedStack()
+    {
+        var parameters = new
+        {
+            employeeId = "emp001",
+            agreementCode = "AC",
+            okVersion = "OK24",
+            periodStart = "2099-01-05",
+            periodEnd = "2099-01-11",
+            weeklyNormHours = 37.0m,
+            partTimeFraction = 1.0m,
+            previousFlexBalance = 0.0m,
+        };
+
+        var task = await ExecuteOrchestratorTaskAsync("weekly-calculation", parameters);
+
+        Assert.Equal("completed", task.GetProperty("status").GetString());
+        var output = task.GetProperty("outputData");
+        Assert.Equal(4, output.GetProperty("ruleResults").GetArrayLength());
+        Assert.NotEqual(JsonValueKind.Null, output.GetProperty("flexBalance").ValueKind);
+    }
+
+    private async Task<JsonElement> ExecuteOrchestratorTaskAsync(string taskType, object parameters)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{OrchestratorUrl}/api/orchestrator/execute")
+        {
+            Content = JsonContent.Create(new { taskType, parameters }),
+        };
+        WithAuth(request);
+
+        var response = await _client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(response.StatusCode == HttpStatusCode.OK, $"{taskType} expected 200 (task completed), got {(int)response.StatusCode}: {body}");
+        return body;
     }
 
     /// <summary>
