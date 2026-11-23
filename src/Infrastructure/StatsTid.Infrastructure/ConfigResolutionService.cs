@@ -7,12 +7,15 @@ namespace StatsTid.Infrastructure;
 
 /// <summary>
 /// The agreement configuration in force on a day (ADR-014, ADR-017 D3, ADR-043 D12): the one dated,
-/// fail-closed lookup the Backend's screen reads of the configuration go through. Two kinds of read do not yet: the two
-/// month figures (Teamoversigt's expected norm and the balance summary's month norm) still read the ACTIVE row until
-/// TASK-14828, and the Rule Engine (and so payroll's pricing) still takes the compiled tables until TASK-14826 and
-/// TASK-14827 send it the configuration resolved here. Both hosts register it as the same singleton
-/// as <see cref="ConfigResolutionService"/>, which implements it. Of the production callers only
-/// <c>DailyNormCalculator</c> takes this interface (so a Unit fixture can fake the lookup); the Backend
+/// fail-closed lookup the configuration reads go through — the Backend's screens (the two month figures included),
+/// the compliance check's dated runs and payroll's pricing. The Rule Engine reads no configuration of its own and
+/// computes with the one each request carries. The two legacy callers of the engine, the overtime-governance route
+/// and the Orchestrator's weekly pipeline and rule-evaluation task, send the compiled configuration instead until
+/// they retire (R-8; each read carries its shortcut comment). Both hosts register it as the same singleton
+/// as <see cref="ConfigResolutionService"/>, which implements it. Of the production callers
+/// <c>DailyNormCalculator</c> (the Backend's per-day norm, the two month figures, the compliance runs and the
+/// Skema month's served minimum rest, each resolved once per stretch of unchanged days) and payroll's
+/// <c>PeriodCalculationService</c> take this interface (so a Unit fixture can fake the lookup); the Backend
 /// handlers that read a configuration themselves inject the concrete class.
 /// </summary>
 public interface IAgreementConfigLookup
@@ -34,9 +37,10 @@ public interface IAgreementConfigLookup
     /// <summary>
     /// The central layer alone, in force on <paramref name="asOf"/>: the same read and the same refusals as
     /// the first layer of <see cref="ResolveAsync"/>, with no override and no profile. For members no
-    /// override or profile column can change: today its only callers are the overtime routes, for the
-    /// compensation model and choice. TASK-14828 will also use it for days with no employment record, which
-    /// price the central layer only.
+    /// override or profile column can change, and for days with no employment record: its callers are the
+    /// overtime routes (the compensation model and choice) and, through <c>DailyNormCalculator</c>, the
+    /// balance summary's merarbejde flag and the two month figures' days when no record covers the month's
+    /// end (N-2).
     /// </summary>
     /// <exception cref="ConfigLookupUnavailableException">The read failed with a database error.</exception>
     /// <exception cref="NoConfigInForceException">No published central version is in force on the day.</exception>
@@ -70,8 +74,8 @@ public interface IAgreementConfigLookup
 /// version is <see cref="NoConfigInForceException"/>, and the lookup logs each refusal once. The tables
 /// compiled into SharedKernel's configuration classes are never this lookup's answer (ADR-014; init.sql
 /// seeds the database). The Backend answers both refusals through one mapping
-/// (<c>ConfigLookupRefusalMiddleware</c>). Payroll registers the lookup but does not call it yet, so it
-/// maps neither; TASK-14827 adds payroll's own mapping, a 503 and a 422 (wave-5 batch-C ruling 12).</para>
+/// (<c>ConfigLookupRefusalMiddleware</c>); payroll answers them with its own 503 and 422 (wave-5 batch-C
+/// ruling 12).</para>
 ///
 /// <para>No cache, no <c>(conn, tx)</c> overload and no lock: each read opens its own connection, so a caller
 /// may call the lookup before or inside its own transaction without taking the pay-inputs lock (S148 PIL,
@@ -282,8 +286,8 @@ public sealed class ConfigResolutionService : IAgreementConfigLookup
 /// <summary>
 /// A read of the agreement configuration failed with a database error (P-13): the lookup refuses rather
 /// than substitute a compiled value. The original exception is <see cref="Exception.InnerException"/>. The
-/// Backend answers it with a fixed 503 (<c>ConfigLookupRefusalMiddleware</c>). Payroll does not call the
-/// lookup yet, so it maps nothing; TASK-14827 adds payroll's own 503 (wave-5 batch-C ruling 12).
+/// Backend answers it with a fixed 503 (<c>ConfigLookupRefusalMiddleware</c>); payroll with its own 503
+/// (wave-5 batch-C ruling 12).
 /// </summary>
 public sealed class ConfigLookupUnavailableException : Exception
 {
@@ -301,7 +305,10 @@ public sealed class ConfigLookupUnavailableException : Exception
 /// No published central version of (<see cref="AgreementCode"/>, <see cref="OkVersion"/>) is in force on
 /// <see cref="Day"/> (P-13): refused by name, never answered with a compiled value. The members serve the
 /// server log only; no response body carries them (ADR-040 D7). The Backend answers it with a fixed named
-/// 500 (<c>config_not_in_force</c>, <c>ConfigLookupRefusalMiddleware</c>).
+/// 500 (<c>config_not_in_force</c>, <c>ConfigLookupRefusalMiddleware</c>), except in two ruled places: on the day
+/// after a Skema month, where it serves no minimum rest (ruling 17), and on a weekday no dated record covers in
+/// the month's expected hours, where the day reads its key's month-end configuration or counts 0.00 h (the T14b
+/// stack's 5a ruling T2). Payroll answers it with its own 422 (wave-5 batch-C ruling 12).
 /// </summary>
 public sealed class NoConfigInForceException : Exception
 {

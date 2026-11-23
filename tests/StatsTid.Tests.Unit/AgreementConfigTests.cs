@@ -1,4 +1,5 @@
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.SharedKernel.Config;
+using StatsTid.Tests.Shared;
 
 namespace StatsTid.Tests.Unit;
 
@@ -7,7 +8,7 @@ public class AgreementConfigTests
     [Fact]
     public void AC_OK24_HasMerarbejde_NoOvertime()
     {
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
 
         Assert.True(config.HasMerarbejde);
         Assert.False(config.HasOvertime);
@@ -17,7 +18,7 @@ public class AgreementConfigTests
     [Fact]
     public void HK_OK24_HasOvertime_NoMerarbejde()
     {
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
 
         Assert.True(config.HasOvertime);
         Assert.False(config.HasMerarbejde);
@@ -27,7 +28,7 @@ public class AgreementConfigTests
     [Fact]
     public void PROSA_OK24_HasOvertime_SupplementsEnabled()
     {
-        var config = AgreementConfigProvider.GetConfig("PROSA", "OK24");
+        var config = EngineConfigRequests.Config("PROSA", "OK24");
 
         Assert.True(config.HasOvertime);
         Assert.True(config.EveningSupplementEnabled);
@@ -38,7 +39,7 @@ public class AgreementConfigTests
     [Fact]
     public void AC_OK24_SupplementsDisabled()
     {
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
 
         Assert.False(config.EveningSupplementEnabled);
         Assert.False(config.NightSupplementEnabled);
@@ -49,15 +50,15 @@ public class AgreementConfigTests
     [Fact]
     public void OK26_Exists_ForAllAgreements()
     {
-        Assert.True(AgreementConfigProvider.HasConfig("AC", "OK26"));
-        Assert.True(AgreementConfigProvider.HasConfig("HK", "OK26"));
-        Assert.True(AgreementConfigProvider.HasConfig("PROSA", "OK26"));
+        Assert.True(CentralAgreementConfigs.HasConfig("AC", "OK26"));
+        Assert.True(CentralAgreementConfigs.HasConfig("HK", "OK26"));
+        Assert.True(CentralAgreementConfigs.HasConfig("PROSA", "OK26"));
     }
 
     [Fact]
     public void UnknownAgreement_ThrowsException()
     {
         Assert.Throws<InvalidOperationException>(
-            () => AgreementConfigProvider.GetConfig("UNKNOWN", "OK24"));
+            () => EngineConfigRequests.Config("UNKNOWN", "OK24"));
     }
 }

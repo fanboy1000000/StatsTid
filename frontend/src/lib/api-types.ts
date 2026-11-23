@@ -6599,6 +6599,7 @@ export interface components {
             /** Format: double */
             fullDayNormAtMonthEnd: number | null;
             consumptionBasis: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"][];
+            minimumRest: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"][];
         };
         "StatsTid.Backend.Api.Contracts.SkemaRowPreferenceAbsenceRow": {
             type: string;

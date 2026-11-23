@@ -83,6 +83,8 @@ public sealed class RuleEngineFailureLoggingTests
                 httpClient,
                 ruleId,
                 profile,
+                // S148 TASK-14828-T: CallTimeRuleAsync takes the agreement config after the profile now (ADR-043 D12); the privacy assertions below are unchanged.
+                StatsTid.Tests.Shared.EngineConfigRequests.Config("AC", "OK24"),
                 Array.Empty<TimeEntry>(),
                 new DateOnly(2026, 1, 1),
                 new DateOnly(2026, 1, 31),

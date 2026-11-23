@@ -40,9 +40,14 @@ public sealed class WeeklyCalculationPipeline
         var okVersion = parameters["okVersion"].ToString()!;
         var periodStart = parameters["periodStart"].ToString()!;
         var periodEnd = parameters["periodEnd"].ToString()!;
-        var weeklyNormHours = Convert.ToDecimal(parameters["weeklyNormHours"]);
-        var partTimeFraction = Convert.ToDecimal(parameters["partTimeFraction"]);
-        var previousFlexBalance = Convert.ToDecimal(parameters["previousFlexBalance"]);
+        var weeklyNormHours = ReadDecimal(parameters["weeklyNormHours"]);
+        var partTimeFraction = ReadDecimal(parameters["partTimeFraction"]);
+        var previousFlexBalance = ReadDecimal(parameters["previousFlexBalance"]);
+
+        // POST /api/orchestrator/execute deserializes each parameter as a JsonElement; a direct caller passes a CLR
+        // numeric. Both are read, since Convert.ToDecimal alone throws on a JsonElement (5a ruling T4).
+        static decimal ReadDecimal(object value) =>
+            value is JsonElement json ? json.GetDecimal() : Convert.ToDecimal(value);
 
         var client = _httpClientFactory.CreateClient();
         if (authorizationHeader is not null)
@@ -81,6 +86,13 @@ public sealed class WeeklyCalculationPipeline
         EnsureBackendFetchSucceeded(absencesResponse, absencesJson, "absences", employeeId);
         var absences = JsonSerializer.Deserialize<JsonElement>(absencesJson);
 
+        // The engine reads no configuration of its own (ADR-043 D12), so each evaluate and the flex call send
+        // the compiled one the engine used for this profile before: its agreement and OK version, no position
+        // (R-8). A pair with no compiled entry sends none; the engine refuses that call and it returns null,
+        // as the engine's failure did. evaluate-absence reads no configuration.
+        // shortcut(QUAL-262): the Orchestrator's weekly pipeline evaluates with the compiled agreement config, not the dated configured one, so a published, position or local value does not reach it (R-8); upgrade when the pipeline retires (stage 2, S1-4)
+        var config = StatsTid.SharedKernel.Config.CentralAgreementConfigs.TryGetConfig(agreementCode, okVersion);
+
         // 3. NORM_CHECK_37H
         var normResult = await CallRuleEvaluateAsync(client, new
         {
@@ -88,7 +100,8 @@ public sealed class WeeklyCalculationPipeline
             profile,
             entries,
             periodStart,
-            periodEnd
+            periodEnd,
+            config
         }, ct);
         if (normResult is not null) allLineItems.Add(normResult);
 
@@ -99,7 +112,8 @@ public sealed class WeeklyCalculationPipeline
             profile,
             entries,
             periodStart,
-            periodEnd
+            periodEnd,
+            config
         }, ct);
         if (supplementResult is not null) allLineItems.Add(supplementResult);
 
@@ -110,7 +124,8 @@ public sealed class WeeklyCalculationPipeline
             profile,
             entries,
             periodStart,
-            periodEnd
+            periodEnd,
+            config
         }, ct);
         if (overtimeResult is not null) allLineItems.Add(overtimeResult);
 
@@ -132,7 +147,8 @@ public sealed class WeeklyCalculationPipeline
             absences,
             periodStart,
             periodEnd,
-            previousBalance = previousFlexBalance
+            previousBalance = previousFlexBalance,
+            config
         }, ct);
 
         return new WeeklyCalculationResult

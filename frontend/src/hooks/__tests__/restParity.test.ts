@@ -144,7 +144,8 @@ describe('rest parity table — the screen judges every row as the engine does',
 
       const byDate = new Map<string, RestPeriodWarning>()
       for (const date of datesOf(sc.periodStart, sc.periodEnd)) {
-        for (const w of analyzeRestPeriods(month, boundary, date) ?? []) {
+        // The shared table assumes a minimum rest of 11 h on every day (it carries none).
+        for (const w of analyzeRestPeriods(month, boundary, date, () => 11) ?? []) {
           // Shape first, before any filter can drop a malformed finding.
           const wellFormed =
             typeof w.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(w.date) &&

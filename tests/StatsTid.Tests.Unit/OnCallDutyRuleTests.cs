@@ -1,4 +1,3 @@
-using StatsTid.RuleEngine.Api.Config;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 

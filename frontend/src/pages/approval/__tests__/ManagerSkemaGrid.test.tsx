@@ -40,6 +40,7 @@ const stable = vi.hoisted(() => {
     boundaryWorkTime: [],
     fullDayNormAtMonthEnd: null,
     consumptionBasis: [],
+    minimumRest: [],
   }
   return { data: monthData, loading: false, error: null }
 })

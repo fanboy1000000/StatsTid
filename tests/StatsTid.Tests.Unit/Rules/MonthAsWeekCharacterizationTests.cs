@@ -1,3 +1,4 @@
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 
@@ -108,7 +109,7 @@ public class MonthAsWeekCharacterizationTests
         Assert.Equal(22, entries.Count);
         Assert.Equal(162.80m, entries.Sum(e => e.Hours));
 
-        var result = new RuleRegistry().Evaluate(OvertimeRuleId, Profile("HK"), entries, PeriodStart, PeriodEnd);
+        var result = new RuleRegistry().Evaluate(OvertimeRuleId, Profile("HK"), entries, PeriodStart, PeriodEnd, EngineConfigRequests.ConfigFor(Profile("HK")));
 
         Assert.True(result.Success, $"OVERTIME_CALC failed: {result.ErrorMessage}");
         Assert.Multiple(
@@ -126,7 +127,7 @@ public class MonthAsWeekCharacterizationTests
     [Fact]
     public void September2026_FullTimeHK_NormHoursTotal_16280()
     {
-        var result = new RuleRegistry().Evaluate(NormRuleId, Profile("HK"), SeptemberAtNorm("HK"), PeriodStart, PeriodEnd);
+        var result = new RuleRegistry().Evaluate(NormRuleId, Profile("HK"), SeptemberAtNorm("HK"), PeriodStart, PeriodEnd, EngineConfigRequests.ConfigFor(Profile("HK")));
 
         Assert.True(result.Success, $"NORM_CHECK_37H failed: {result.ErrorMessage}");
         Assert.Multiple(
@@ -146,7 +147,7 @@ public class MonthAsWeekCharacterizationTests
     public void September2026_FullTimeHK_FlexDeltaZero_NoPayout()
     {
         var result = new RuleRegistry().EvaluateFlexBalance(
-            Profile("HK"), SeptemberAtNorm("HK"), Array.Empty<AbsenceEntry>(), PeriodStart, PeriodEnd, previousBalance: 0m);
+            Profile("HK"), SeptemberAtNorm("HK"), Array.Empty<AbsenceEntry>(), PeriodStart, PeriodEnd, previousBalance: 0m, config: EngineConfigRequests.ConfigFor(Profile("HK")));
 
         Assert.True(result.Success);
         Assert.Multiple(
@@ -163,7 +164,7 @@ public class MonthAsWeekCharacterizationTests
     [Fact]
     public void September2026_FullTimeAC_NoMerarbejde()
     {
-        var result = new RuleRegistry().Evaluate(OvertimeRuleId, Profile("AC"), SeptemberAtNorm("AC"), PeriodStart, PeriodEnd);
+        var result = new RuleRegistry().Evaluate(OvertimeRuleId, Profile("AC"), SeptemberAtNorm("AC"), PeriodStart, PeriodEnd, EngineConfigRequests.ConfigFor(Profile("AC")));
 
         Assert.True(result.Success, $"OVERTIME_CALC failed: {result.ErrorMessage}");
         Assert.Multiple(

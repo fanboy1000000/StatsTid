@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Orchestrator.Services;
@@ -107,6 +108,49 @@ public sealed class WeeklyCalculationPipelineFetchFailureTests
 
         Assert.True(result.Success);
         Assert.Equal(EmployeeId, result.EmployeeId);
+    }
+
+    /// <summary>
+    /// S148 T14b FU-T (5a ruling T4). F: <c>POST /api/orchestrator/execute</c> deserializes the request's parameters to
+    /// <c>Dictionary&lt;string, object&gt;</c>, so each value is a <see cref="JsonElement"/>; the task used to throw
+    /// <see cref="InvalidCastException"/> on the first number (<c>Convert.ToDecimal</c> of a JsonElement) before any
+    /// HTTP call. With the request shape the three numbers are read (37, 0.5 and 12.5 here) and the task runs to
+    /// the end: the profile it sends the rule engine carries the numbers read, and <c>isPartTime</c> follows the fraction.
+    /// Red condition: at <c>043c5f35</c> the call throws <see cref="InvalidCastException"/> before any HTTP call.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WithDeserializedRequestParameters_ReadsTheNumbers()
+    {
+        var normRequests = new List<string>();
+        var handler = new RoutingHandler(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path.Contains("/api/time-entries/", StringComparison.Ordinal)
+                || path.Contains("/api/absences/", StringComparison.Ordinal))
+                return Json(HttpStatusCode.OK, "[]");
+
+            using var reader = new StreamReader(req.Content!.ReadAsStream());
+            var body = reader.ReadToEnd();
+            if (body.Contains("\"NORM_CHECK_37H\"", StringComparison.Ordinal))
+                normRequests.Add(body);
+            return Json(HttpStatusCode.OK, """{"ok":true}""");
+        });
+        var pipeline = BuildPipeline(handler);
+
+        const string requestJson = """
+            {"employeeId":"USR01","agreementCode":"AC","okVersion":"OK26","periodStart":"2026-05-04","periodEnd":"2026-05-10",
+             "weeklyNormHours":37,"partTimeFraction":0.5,"previousFlexBalance":12.5}
+            """;
+        var parameters = JsonSerializer.Deserialize<Dictionary<string, object>>(requestJson)!;
+        Assert.IsType<JsonElement>(parameters["weeklyNormHours"]);
+
+        var result = await pipeline.ExecuteAsync(parameters, ct: CancellationToken.None);
+
+        Assert.True(result.Success);
+        var profile = JsonDocument.Parse(Assert.Single(normRequests)).RootElement.GetProperty("profile");
+        Assert.Equal(37m, profile.GetProperty("weeklyNormHours").GetDecimal());
+        Assert.Equal(0.5m, profile.GetProperty("partTimeFraction").GetDecimal());
+        Assert.True(profile.GetProperty("isPartTime").GetBoolean());
     }
 
     // ── construction / helpers ─────────────────────────────────────────────

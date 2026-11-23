@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
+using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -121,7 +123,29 @@ internal static class EmploymentWindowPcsFixture
         OkVersion = "OK24",
         EmploymentCategory = "Standard",
         PartTimeFraction = 1.0m,
+        // S148 TASK-14828-T (TASK-14827's rule): a calculating run is refused without an organisation on the dated
+        // record, so the fixture's profile carries one; the fixtures are not about which organisation it is.
+        OrgId = "STY01",
     };
+
+    /// <summary>
+    /// S148 TASK-14828-T: the fake configuration lookup for every PCS-level fact that calculates or replays but
+    /// is not ABOUT configurations. Payroll refuses to calculate without a lookup (ADR-043 D12, never silent), and
+    /// this fake answers the compiled config of the agreement, OK version and position it is asked about, the one
+    /// the engine would have resolved before the switch, so no expected value moves. A fact about what payroll
+    /// reads from the database does not use it.
+    /// </summary>
+    public sealed class FakeConfigLookup : IAgreementConfigLookup
+    {
+        public Task<AgreementRuleConfig> ResolveAsync(
+            string orgId, string agreementCode, string okVersion, string? position, DateOnly asOf,
+            CancellationToken ct = default)
+            => Task.FromResult(StatsTid.Tests.Shared.EngineConfigRequests.Config(agreementCode, okVersion, position));
+
+        public Task<AgreementRuleConfig> ResolveCentralAsync(
+            string agreementCode, string okVersion, DateOnly asOf, CancellationToken ct = default)
+            => Task.FromResult(StatsTid.Tests.Shared.EngineConfigRequests.Config(agreementCode, okVersion));
+    }
 
     /// <summary>
     /// The WtmNaturalKey snapshot enrollment PCS's export mapper REQUIRES on every EMPLOYED
@@ -220,7 +244,11 @@ internal static class EmploymentWindowPcsFixture
         IEmploymentWindowResolver? windowResolver = null,
         IReadOnlyList<RuleClassification>? ruleSet = null,
         IRecordedHoursReader? hoursReader = null,
-        IFlexLedgerReader? flexLedgerReader = null)
+        IFlexLedgerReader? flexLedgerReader = null,
+        IAgreementConfigLookup? configLookup = null,
+        AgreementConfigRepository? agreementConfigRepo = null,
+        PositionOverrideRepository? positionOverrideRepo = null,
+        LocalAgreementProfileRepository? localAgreementProfileRepo = null)
     {
         // S137 Step-5a (Reviewer WARNING 1): PCS REFUSES a profile resolver without a window
         // resolver — that pairing is the dropped-DI shape that would silently pay a leaver all
@@ -240,7 +268,7 @@ internal static class EmploymentWindowPcsFixture
             Configuration(),
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(ruleSet ?? RuleSet),
-            localAgreementProfileRepo: null,
+            localAgreementProfileRepo: localAgreementProfileRepo,
             profileResolver: profileResolver,
             employmentWindowResolver: windowResolver,
             employeeProfileRepo: null,
@@ -252,12 +280,17 @@ internal static class EmploymentWindowPcsFixture
             priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new NoTransferDates(),
+            // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
+            configLookup: configLookup ?? new FakeConfigLookup(),
             // S146 R-14: the opening comes from the recorded ledger now, never from the caller. A fact that is
             // not about the chain gets an EMPTY ledger (no records), so the month opens at LEDGER_START 0, which
             // is what the former caller-supplied 0m said. A fact that needs a non-zero opening passes
             // InMemoryFlexLedgerReader.ClosedAt(month, closing): an employed P (implicit, no resolver) with a
             // recorded closing -> R-14 case 4a, CHAINED.
-            flexLedgerReader: flexLedgerReader ?? new InMemoryFlexLedgerReader());
+            flexLedgerReader: flexLedgerReader ?? new InMemoryFlexLedgerReader(),
+            // S148 T14b FU-T: the three configuration-date repositories, for the one fact about a failed date read.
+            agreementConfigRepo: agreementConfigRepo,
+            positionOverrideRepo: positionOverrideRepo);
     }
 
     /// <summary>

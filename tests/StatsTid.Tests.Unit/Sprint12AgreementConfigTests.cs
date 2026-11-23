@@ -123,7 +123,7 @@ public class Sprint12AgreementConfigTests
     // S148 QUAL-042 (TASK-14825): re-pointed from the retired GetCentralConfig. The compiled-value assertions of the
     // deleted Sprint7ConfigTests that no other fact pins: AC's on-call flag; HK's four supplements, on-call flag and
     // on-call rate. (AC's overtime / merarbejde / four supplements and HK's overtime / merarbejde stay pinned by
-    // AgreementConfigTests, which reads the same compiled table through AgreementConfigProvider.)
+    // AgreementConfigTests, which reads the same compiled table through CentralAgreementConfigs.)
 
     [Fact]
     public void CentralConfig_AC_OnCallDutyDisabled()

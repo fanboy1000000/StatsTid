@@ -31,6 +31,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The shared engine-request helper has one source file, in the Regression project (S148 R-10). -->
+    <Compile Include="..\StatsTid.Tests.Regression\TestSupport\EngineConfigRequests.cs" Link="TestSupport\EngineConfigRequests.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\SharedKernel\StatsTid.SharedKernel\StatsTid.SharedKernel.csproj" />
     <ProjectReference Include="..\..\src\RuleEngine\StatsTid.RuleEngine.Api\StatsTid.RuleEngine.Api.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\StatsTid.Infrastructure\StatsTid.Infrastructure.csproj" />

@@ -1629,6 +1629,7 @@ export function SkemaPage() {
           dailyNorm={dailyNorm.get(openDayDate) ?? null}
           monthWorkTime={localMonthWorkTime}
           boundaryWorkTime={data?.boundaryWorkTime}
+          minimumRest={data?.minimumRest}
           onPeriodsChange={handlePanelPeriodsChange}
           onAllocationChange={handlePanelAllocationChange}
           onClose={() => setOpenDayDate(null)}

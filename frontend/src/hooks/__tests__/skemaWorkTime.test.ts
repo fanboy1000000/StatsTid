@@ -136,7 +136,7 @@ describe('overlappingPeriodIndices — the S58 overlap mirror', () => {
 
 // S148 3b (RR-1) — the look-back rule: every work end is judged on the 24 elapsed hours before it
 // (Europe/Copenhagen), one finding per day at the lowest value, dated the day the work ends. A
-// finding is `{ date, endsAt, restSeconds }`, the rest unrounded. Kind F for every case whose
+// finding is `{ date, endsAt, restSeconds, minimumHours }`, the rest unrounded. Kind F for every case whose
 // value or shape moved (the pair rule returned `{ gapHours, fromDate, toDate }`); the null cases
 // are R pins.
 describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)', () => {
@@ -145,9 +145,9 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
       wt('2026-03-08', [{ start: '12:00', end: '23:00' }]),
       wt('2026-03-09', [{ start: '07:00', end: '15:00' }]),
     ]
-    // S148 3b (RR-1): { gapHours: 8, fromDate: '2026-03-08', toDate: '2026-03-09' } → { date, endsAt, restSeconds }
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { date: '2026-03-09', endsAt: '15:00', restSeconds: 28800 },
+    // S148 3b (RR-1): { gapHours: 8, fromDate: '2026-03-08', toDate: '2026-03-09' } → { date, endsAt, restSeconds, minimumHours }
+    expect(analyzeRestPeriods(month, [], '2026-03-09', () => 11)).toEqual([
+      { date: '2026-03-09', endsAt: '15:00', restSeconds: 28800, minimumHours: 11 },
     ])
   })
 
@@ -156,7 +156,7 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
       wt('2026-03-08', [{ start: '12:00', end: '20:00' }]),
       wt('2026-03-09', [{ start: '07:00', end: '15:00' }]),
     ]
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toBeNull()
+    expect(analyzeRestPeriods(month, [], '2026-03-09', () => 11)).toBeNull()
   })
 
   it('R6: the earlier day also warns (its work lies inside the judged window), dated the later day', () => {
@@ -164,9 +164,9 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
       wt('2026-03-09', [{ start: '14:00', end: '23:00' }]),
       wt('2026-03-10', [{ start: '08:00', end: '16:00' }]),
     ]
-    // S148 3b (RR-1): { gapHours: 9, fromDate: '2026-03-09', toDate: '2026-03-10' } → { date, endsAt, restSeconds }
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { date: '2026-03-10', endsAt: '16:00', restSeconds: 32400 },
+    // S148 3b (RR-1): { gapHours: 9, fromDate: '2026-03-09', toDate: '2026-03-10' } → { date, endsAt, restSeconds, minimumHours }
+    expect(analyzeRestPeriods(month, [], '2026-03-09', () => 11)).toEqual([
+      { date: '2026-03-10', endsAt: '16:00', restSeconds: 32400, minimumHours: 11 },
     ])
   })
 
@@ -177,33 +177,33 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
       wt('2026-03-10', [{ start: '05:00', end: '13:00' }]),
     ]
     // S148 3b (RR-1): two pairs (6,5 and 6) → two findings, the 9th's 23:00 end and the 10th's 13:00 end
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { date: '2026-03-09', endsAt: '23:00', restSeconds: 23400 },
-      { date: '2026-03-10', endsAt: '13:00', restSeconds: 21600 },
+    expect(analyzeRestPeriods(month, [], '2026-03-09', () => 11)).toEqual([
+      { date: '2026-03-09', endsAt: '23:00', restSeconds: 23400, minimumHours: 11 },
+      { date: '2026-03-10', endsAt: '13:00', restSeconds: 21600, minimumHours: 11 },
     ])
   })
 
   it('R6 month-EDGE: the previous day resolves from the served boundaryWorkTime (date = the 1st)', () => {
     const boundary = [wt('2026-02-28', [{ start: '14:00', end: '22:00' }])]
     const month = [wt('2026-03-01', [{ start: '06:00', end: '14:00' }])]
-    expect(analyzeRestPeriods(month, boundary, '2026-03-01')).toEqual([
-      { date: '2026-03-01', endsAt: '14:00', restSeconds: 28800 },
+    expect(analyzeRestPeriods(month, boundary, '2026-03-01', () => 11)).toEqual([
+      { date: '2026-03-01', endsAt: '14:00', restSeconds: 28800, minimumHours: 11 },
     ])
   })
 
   it('R6 month-EDGE: the next day resolves from the served boundaryWorkTime (date = the last of the month)', () => {
     const boundary = [wt('2026-04-01', [{ start: '06:00', end: '14:00' }])]
     const month = [wt('2026-03-31', [{ start: '14:00', end: '22:00' }])]
-    expect(analyzeRestPeriods(month, boundary, '2026-03-31')).toEqual([
-      { date: '2026-04-01', endsAt: '14:00', restSeconds: 28800 },
+    expect(analyzeRestPeriods(month, boundary, '2026-03-31', () => 11)).toEqual([
+      { date: '2026-04-01', endsAt: '14:00', restSeconds: 28800, minimumHours: 11 },
     ])
   })
 
   it('R6 January year-boundary: 2026-01-01\'s previous day is 2025-12-31 (boundary-served)', () => {
     const boundary = [wt('2025-12-31', [{ start: '15:00', end: '23:00' }])]
     const month = [wt('2026-01-01', [{ start: '08:00', end: '16:00' }])]
-    expect(analyzeRestPeriods(month, boundary, '2026-01-01')).toEqual([
-      { date: '2026-01-01', endsAt: '16:00', restSeconds: 32400 },
+    expect(analyzeRestPeriods(month, boundary, '2026-01-01', () => 11)).toEqual([
+      { date: '2026-01-01', endsAt: '16:00', restSeconds: 32400, minimumHours: 11 },
     ])
   })
 
@@ -212,8 +212,8 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
       wt('2026-03-08', [{ start: '12:00', end: '23:59' }]),
       wt('2026-03-09', []), // a day without intervals — no clock anchor
     ]
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toBeNull()
-    expect(analyzeRestPeriods(month, [], '2026-03-10')).toBeNull() // entirely unserved day
+    expect(analyzeRestPeriods(month, [], '2026-03-09', () => 11)).toBeNull()
+    expect(analyzeRestPeriods(month, [], '2026-03-10', () => 11)).toBeNull() // entirely unserved day
   })
 
   // S148 3b (RR-1): was "an adjacent day without interval data imposes no constraint" (null). The free
@@ -221,8 +221,8 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
   // before 23:30 is 23:30-00:30, one hour, a breach on its own.
   it('a free adjacent day is rest, but a 23-hour day is a breach on its own (1 hour of rest before 23:30)', () => {
     const month = [wt('2026-03-09', [{ start: '00:30', end: '23:30' }])]
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { date: '2026-03-09', endsAt: '23:30', restSeconds: 3600 },
+    expect(analyzeRestPeriods(month, [], '2026-03-09', () => 11)).toEqual([
+      { date: '2026-03-09', endsAt: '23:30', restSeconds: 3600, minimumHours: 11 },
     ])
   })
 
@@ -238,8 +238,8 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
       ]),
     ]
     // The 11:00 and 16:00 ends both see 8,5 h (22:30-07:00); the day's one finding is the earlier end.
-    expect(analyzeRestPeriods(month, [], '2026-03-09')).toEqual([
-      { date: '2026-03-09', endsAt: '11:00', restSeconds: 30600 },
+    expect(analyzeRestPeriods(month, [], '2026-03-09', () => 11)).toEqual([
+      { date: '2026-03-09', endsAt: '11:00', restSeconds: 30600, minimumHours: 11 },
     ])
   })
 
@@ -250,7 +250,7 @@ describe('analyzeRestPeriods — RR-1 the 24 hours before each work end (pure)',
       wt('2026-03-08', [{ start: '12:00', end: '18:00' }]),
       wt('2026-03-09', [{ start: '07:00', end: '15:00' }]),
     ]
-    expect(analyzeRestPeriods(month, boundary, '2026-03-09')).toBeNull()
+    expect(analyzeRestPeriods(month, boundary, '2026-03-09', () => 11)).toBeNull()
   })
 })
 

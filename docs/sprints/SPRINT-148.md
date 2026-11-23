@@ -2922,3 +2922,69 @@ M-40 included [O for the 14 facts of the five classes run].
 - **The Orchestrator's check:** one file. The code change is the memo's write and its two members; the rest is comment.
 - **Found, not fixed:** `UserAgreementCodeRepository.cs:126-127`'s SQL comment says the sibling profile read uses the same tie-break, which it does not. This goes into QUAL-263's follow-up.
 - **FU-4T dispatched** (`test-qa`) on `63a34e6d`: U1's Unit F and R facts (and a Docker N fact only if the fixture can count lookups), U5's assertion, U2's sentence, U4's label, and U10's probe.
+
+**T14b FU-4T returned** (`test-qa`; `cb2a335f` on `63a34e6d`; report `.claude/reviews/S148-T14b-FU-4T-report.md`).
+- **U1:**
+  - Unit F `ComputeMonthNormMemoBoundTests`: a later person's earlier days add no refused lookup. It is red at `e1787c56`: "Expected: 0, Actual: 7".
+  - Unit R: a record-covered day still refuses, on 2 March.
+  - Docker N `ScreenNoRecordRosterOrderTests`, written: a counting decorator around the real lookup in the test host. The roster is ordered by `user_id`. The count is 1 at the tip and 2 with `e1787c56`'s calculator, local only.
+- **U5:** Docker F in `RuleEngineAuthForwardingTests`: the captured governance body carries the seeded "Chef". Red with `043c5f35`'s `OvertimeEndpoints.cs`, local only.
+- **U2, U4:** comment only.
+- **U10:** option (b). `success` is asserted as a boolean; a lived-in stack could hold a real violation that month.
+- **Gate:** build 0 errors, 125 warnings, CA2100 113; Unit 1762 + 2 = 1764; DemoSeed 170; Regression non-Docker 147.
+- **Local cluster:** port 55447, stopped and deleted.
+
+**The T14b stack review, cycle 3** (`e1787c56..cb2a335f`; saved verbatim):
+- **5α** (`S148-T14b-5alpha-c3.md`, Sonnet 5.5): **PASS**.
+- **Codex** (`S148-T14b-5a-codex-c3.raw.md`): **APPROVED**, with no findings. Its cycle-2 W1 is closed.
+- **Fable** (`S148-T14b-5a-reviewer-c3.md`): **APPROVED**. Its "at most once" warning is closed. Four notes:
+  - **The roster test's comments are one day off:** the gap is 10–15 March, since rows are end-exclusive. Fixed, comment only, in the merge.
+  - **The remark for the construction without date repositories left out the month-end question:** a refused month-end fallback is remembered through month end. Fixed, comment only, in the merge.
+  - **QUAL-263 must land with the merge:** done.
+  - **The three new Docker facts go on CI-W5's watch list.**
+- **Per U1, no BLOCKER or WARNING from either lens, so the stack merges** without a further adjudication. Cycles used: 3 of 5.
+
+**The T14b stack merged** (`--no-ff` of `cb2a335f` into master, this commit).
+- **What the owner gets, in plain words:** the agreement settings an administrator publishes now reach pay and every screen that uses them:
+  - payroll, for each piece of a month;
+  - the compliance check, for each stretch of work;
+  - Teamoversigt's and the balance's expected hours, day by day;
+  - Skema's instant rest warning, for each work end.
+  - Before, the Rule Engine read a table compiled into the code. That held for every setting except three old paths (QUAL-262).
+- **Commits:** TASK-14826, 14826-T, 14827, 14828, 14828-T, the REGEN, 14829, then the fix-ups FU-1 to FU-4 and FU-T to FU-4T, and the Orchestrator's remarks. Reviewed in three cycles, with two adjudications (`S148-T14b-5a-adjudication-c1.md`, `-c2.md`).
+- **In the merge commit (Orchestrator, comment and docs only):**
+  - the three `shortcut(pending)` comments retagged `shortcut(QUAL-262)`; the shortcut check gives 19 found, 0 bad;
+  - Fable c3's two comment notes;
+  - the register (below);
+  - this entry.
+- **Register:**
+  - **New rows:** QUAL-262 (the three legacy readers of the compiled table, M; it records T5's governance bind and the weekly pipeline's hard-coded category), QUAL-263 (the two record readers, divergence shown, M), QUAL-264 (the Error log on a tolerated absence, M).
+  - **FIXED:** QUAL-190.
+  - **CLOSED:** QUAL-233 and QUAL-204.
+  - **Updated:** QUAL-145 (the JSON-number defect from 2026-03-01 to T4); QUAL-209 (same-code row starts; U7's label); QUAL-210 (the worklist over-blocks a same-code write); QUAL-226 (stays open, owed to stage 1; T2's rule and U3's clause).
+- **Told to the owner (O-17; told, not asked):**
+  1. **The replay's interim set-fingerprint limit** (TASK-14827, ruling 11). A month calculated after this merge and replayed before TASK-14830, with a retroactive publish in between, could have two pieces swap configurations unseen. No route replays, and TASK-14830 retires the fingerprint.
+  2. **One misconfigured agreement still blanks a whole Teamoversigt response** on a day a record covers (BC-2, B4's one mapping). A day no record covers no longer does (T2).
+  3. **Teamoversigt's agreement and OK-version source changed:** each day's dated record and each day's OK version (BC-8; NR-P6 / BC-P10). This is invisible on seeded data.
+  4. **B-9:** both screens sum each day's configured norm at the month-end fraction; QUAL-226 stays open.
+  5. **T2, the new-agreement rule.** Days before a hire on a brand-new agreement read the month-end configuration, so the leader sees 162.80 h, not an error. In the zero case (no record, nothing in force all month), Teamoversigt shows 0 and the balance summary refuses by name from its separate merarbejde-flag read (the Orchestrator's ruling; both cycle-2 lenses found it sound). A day whose profile row lacks its organisation or agreement-code row counts as a no-record day (U3).
+  6. **T7:** a month with no work at all still sends the compliance engine one run for the first employed day. It is refused by name when that day has no configuration.
+  7. **T15:** a partial record shows a full-time figure, as before the stack.
+  8. **U1:** the promised "ask the refused question once" bound was not met after cycle 2. It is fixed and proven (FU-4, FU-4T).
+  9. **QUAL-190 FIXED:** a database position override now keeps every agreement rule. The refinement's A-10 NOTE is proven for the merge function and fixed; its serializer branch is ruling 22's local run with ruling 19's control arm.
+- **Settled here:**
+  - **T3's F evidence** is the Docker fact `November2026_CalculatesWithNoRecordGap` (U4).
+  - **5α's count mismatch** between the 14826-T and 14828-T reports is not a mismatch. Two greps count different construction forms at `b55a7a96`: a direct `new PeriodCalculationService(` in 22 files, and the named argument `mappingService:` in 10, with 5 in both, so 27 files construct PCS.
+- **Pending CI-W5:**
+  - every Docker fact of the stack;
+  - the three smoke probes (governance 200, the weekly task's four results, compliance 200 with its shape);
+  - PIN-1, PIN-2 and PIN-3;
+  - the "after" timing figure, which gives **N-3's disposition** (an F-row by NR-P3's criterion, or refuted);
+  - CI-M5 (M-9, M-12, M-13, M-15, M-49).
+  - The composed-hop debt for `check-overtime-governance` (`docs/WORKFLOW.md:310`) closes when its smoke 200 is green.
+- **CI-W5 watch list** (a red is triaged before anything else, T16):
+  - the compliance smoke probe and the governance smoke 200, both never run;
+  - `ScreenNoRecordDayNormTests`' exact 500 body;
+  - `ScreenNoRecordRosterOrderTests`, `RuleEngineAuthForwardingTests` and `DatedRecordTimelineParityTests` (local only so far);
+  - the existing mid-week refusal facts `PayrollHostWeeklyTests` and `SplitMonthHostTests` (U4).
+- **After CI-W5:** the small S148 task for QUAL-263 (the resolver's profile read takes the latest start; a profile overlap in the parity fixture; the repository comment). Then TASK-14830 + -T (carrying T14's four remarks), TASK-14831 + -T (carrying T13's 422 `payroll-employment-record-gap`), TASK-14846, and wave 6.

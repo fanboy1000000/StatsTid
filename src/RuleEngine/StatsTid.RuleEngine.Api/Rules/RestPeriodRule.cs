@@ -6,8 +6,9 @@ namespace StatsTid.RuleEngine.Api.Rules;
 
 /// <summary>
 /// Pure function: validates working time compliance against EU directive 2003/88/EC
-/// and Danish Arbejdstidsloven. Checks daily rest (11h), weekly rest, max daily hours,
-/// and 48h/week ceiling. No I/O, fully deterministic, version-aware via AgreementRuleConfig.
+/// and Danish Arbejdstidsloven. Checks daily rest (the agreement's minimum), weekly rest, max
+/// daily hours, and 48h/week ceiling. No I/O, fully deterministic; the agreement's values arrive
+/// as a parameter, one configuration per day (below).
 ///
 /// The four checks carry separately registered classifications (ADR-016 D2) —
 /// <see cref="MaxDailyRuleId"/>, <see cref="DailyRestRuleId"/>, <see cref="WeeklyRestRuleId"/>,
@@ -21,6 +22,15 @@ namespace StatsTid.RuleEngine.Api.Rules;
 /// (max daily, 48h ceiling) sum the project entries' <see cref="TimeEntry.Hours"/>. The rest checks
 /// (daily rest, weekly rest) measure between the clock intervals the employee typed in Skema
 /// (<see cref="ComplianceWorkInterval"/>); they never read a time entry's clock times.
+/// </para>
+///
+/// <para>
+/// <strong>One configuration per day (ADR-043 D12, RR-7).</strong> The caller hands the agreement's
+/// values in as a function of the day, because one period can hold two values of a setting (a
+/// minimum rest of 11 h until a Sunday and 12 h from the Monday). Each check reads the value of its
+/// own day: a work end the minimum rest and derogation setting of its date; a day its maximum hours
+/// and its voluntary flag; a 7-day window the derogation setting of its last day, while the finding
+/// is dated on the window's first day. The 48h/week ceiling reads no configured value.
 /// </para>
 ///
 /// <para>
@@ -73,6 +83,20 @@ public static class RestPeriodRule
         ". Hvilen kan undtagelsesvis nedsættes til 8 timer, højst 1 gang pr. 7 døgn (2 gange efter lokal aftale) og kun med tilsvarende kompenserende hvile umiddelbart efter. StatsTid kontrollerer ingen af delene.";
 
     /// <summary>
+    /// The four compliance checks with one agreement configuration in force on every day: the
+    /// per-day form below with <paramref name="config"/> for each date.
+    /// </summary>
+    public static ComplianceCheckResult Evaluate(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config,
+        IReadOnlyList<ComplianceWorkInterval>? workIntervals = null,
+        TimeZoneInfo? copenhagenZone = null) =>
+        Evaluate(profile, entries, periodStart, periodEnd, _ => config, workIntervals, copenhagenZone);
+
+    /// <summary>
     /// Evaluates all four compliance checks for the given period, tagged with <see cref="RuleId"/>;
     /// the one entry point for the rest checks. Pure function, deterministic, no I/O.
     /// </summary>
@@ -80,6 +104,12 @@ public static class RestPeriodRule
     /// The project entries, which the compliance read takes from two days before
     /// <paramref name="periodStart"/> (ADR-039 D5b, QUAL-253). The hours checks sum their hours
     /// inside the period; the rest checks read only their voluntary-unsocial-hours flag, per day.
+    /// </param>
+    /// <param name="configForDay">
+    /// The agreement configuration in force on a date. The checks ask for a date that carries an
+    /// entry or an interval, never another: on or before <paramref name="periodEnd"/> for every
+    /// value, after it only for a day's voluntary flag. The route builds it from the request's
+    /// dated runs (<see cref="RuleRegistry.ComplianceConfigForDay"/>).
     /// </param>
     /// <param name="workIntervals">
     /// The clock intervals typed in Skema over the same dates, each on the date it was entered on.
@@ -102,7 +132,7 @@ public static class RestPeriodRule
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,
         DateOnly periodEnd,
-        AgreementRuleConfig config,
+        Func<DateOnly, AgreementRuleConfig> configForDay,
         IReadOnlyList<ComplianceWorkInterval>? workIntervals = null,
         TimeZoneInfo? copenhagenZone = null)
     {
@@ -127,7 +157,7 @@ public static class RestPeriodRule
         // 1. Max daily hours check (works for all entries, including hours-only). Hours-summing
         //    checks consume the PERIOD-FILTERED per-day rows so out-of-period hours never leak
         //    into period totals (ADR-039 BLOCKER-2).
-        CheckMaxDailyHours(periodEntries, config, violations, warnings);
+        CheckMaxDailyHours(periodEntries, configForDay, violations, warnings);
 
         // 2 + 3. The rest checks measure work periods built from the intervals alone
         //    (ADR-043 D10); each check then decides which of them the period owns. The daily
@@ -135,15 +165,17 @@ public static class RestPeriodRule
         //    its last midnight is judged as the period sees it whatever the caller sends
         //    (QUAL-253); the weekly check's from every kept interval. The zone is non-null
         //    whenever a stint exists (checked above).
-        var voluntaryDays = VoluntaryDays(entries, config);
+        var voluntaryDays = VoluntaryDays(entries, configForDay);
         var stints = ReconstructStints(intervals, voluntaryDays, periodStart);
         var dailyStints = ReconstructStints(
             intervals.Where(iv => iv.Date <= periodEnd).ToList(), voluntaryDays, periodStart);
-        CheckDailyRest(dailyStints, periodStart, config, copenhagenZone!, violations, warnings);
-        CheckWeeklyRest(stints, periodStart, periodEnd, config, violations, warnings);
+        CheckDailyRest(dailyStints, periodStart, configForDay, copenhagenZone!, violations, warnings);
+        CheckWeeklyRest(stints, periodStart, periodEnd, configForDay, violations, warnings);
 
-        // 4. 48h/week ceiling (works for all entries) — period-filtered per-day rows.
-        CheckWeeklyMaxHours(periodEntries, periodStart, periodEnd, config, violations, warnings);
+        // 4. 48h/week ceiling (works for all entries) — period-filtered per-day rows. It reads no
+        //    configured value (its 48 hours and its averaging are fixed; O-24), so no day's
+        //    configuration is chosen for it and its unused config parameter is handed none.
+        CheckWeeklyMaxHours(periodEntries, periodStart, periodEnd, config: null!, violations, warnings);
 
         // 5. The days whose project hours are not all on the clock (QUAL-234; owner ruling R-22
         //    keeps the list), so the result never looks compliant for a day the rest checks could
@@ -176,7 +208,7 @@ public static class RestPeriodRule
         var violations = new List<ComplianceViolation>();
         var warnings = new List<ComplianceViolation>();
         var periodEntries = NormalizeEntries(entries, periodStart, periodEnd);
-        CheckMaxDailyHours(periodEntries, config, violations, warnings);
+        CheckMaxDailyHours(periodEntries, _ => config, violations, warnings);
         return BuildResult(MaxDailyRuleId, profile, violations, warnings);
     }
 
@@ -273,28 +305,27 @@ public static class RestPeriodRule
 
     /// <summary>
     /// The days whose work is voluntary unsocial hours, exempt from the rest checks
-    /// (SYSTEM_TARGET "Voluntary Unsocial Hours"): the agreement allows it
-    /// (<see cref="AgreementRuleConfig.VoluntaryUnsocialHoursAllowed"/>), the day has at least one
-    /// project entry, and every entry of that day carries
-    /// <see cref="TimeEntry.VoluntaryUnsocialHours"/>. Intervals carry no such flag, so the day's
-    /// entries decide for the day's intervals.
+    /// (SYSTEM_TARGET "Voluntary Unsocial Hours"): the day has at least one project entry, every
+    /// entry of that day carries <see cref="TimeEntry.VoluntaryUnsocialHours"/>, and the agreement in
+    /// force that day allows it (<see cref="AgreementRuleConfig.VoluntaryUnsocialHoursAllowed"/>).
+    /// Intervals carry no such flag, so the day's entries decide for the day's intervals.
     /// </summary>
     private static IReadOnlySet<DateOnly> VoluntaryDays(
-        IReadOnlyList<TimeEntry> entries, AgreementRuleConfig config) =>
-        config.VoluntaryUnsocialHoursAllowed
-            ? entries
-                .GroupBy(e => e.Date)
-                .Where(day => day.All(e => e.VoluntaryUnsocialHours))
-                .Select(day => day.Key)
-                .ToHashSet()
-            : new HashSet<DateOnly>();
+        IReadOnlyList<TimeEntry> entries, Func<DateOnly, AgreementRuleConfig> configForDay) =>
+        entries
+            .GroupBy(e => e.Date)
+            .Where(day => day.All(e => e.VoluntaryUnsocialHours)
+                && configForDay(day.Key).VoluntaryUnsocialHoursAllowed)
+            .Select(day => day.Key)
+            .ToHashSet();
 
     /// <summary>
-    /// Check 1: Max daily hours. Sum hours per day, flag if exceeding MaxDailyHours.
+    /// Check 1: Max daily hours. Sum hours per day, flag a day above the MaxDailyHours in force that
+    /// day.
     /// </summary>
     private static void CheckMaxDailyHours(
         IReadOnlyList<TimeEntry> entries,
-        AgreementRuleConfig config,
+        Func<DateOnly, AgreementRuleConfig> configForDay,
         List<ComplianceViolation> violations,
         List<ComplianceViolation> warnings)
     {
@@ -304,16 +335,17 @@ public static class RestPeriodRule
 
         foreach (var day in dailyHours)
         {
-            if (day.TotalHours > config.MaxDailyHours)
+            var maxDailyHours = configForDay(day.Date).MaxDailyHours;
+            if (day.TotalHours > maxDailyHours)
             {
                 violations.Add(new ComplianceViolation
                 {
                     ViolationType = ComplianceViolationType.MAX_DAILY_HOURS,
                     Date = day.Date,
                     ActualValue = day.TotalHours,
-                    ThresholdValue = config.MaxDailyHours,
+                    ThresholdValue = maxDailyHours,
                     Severity = ComplianceSeverity.VIOLATION,
-                    Message = $"Daglig arbejdstid {day.TotalHours:F1}t overstiger maksimum {config.MaxDailyHours:F1}t"
+                    Message = $"Daglig arbejdstid {day.TotalHours:F1}t overstiger maksimum {maxDailyHours:F1}t"
                 });
             }
         }
@@ -323,8 +355,9 @@ public static class RestPeriodRule
     /// Check 2: Daily rest, the authority's test (arbejdsmiljøloven § 50, BEK nr. 606 § 3,
     /// AT-meddelelse 5.01.1; QUAL-253): every 24 hours must hold at least
     /// <see cref="AgreementRuleConfig.MinimumRestHours"/> unbroken hours of rest. Each work end is
-    /// judged on the 24 elapsed hours before it. Judging at the ends is enough, because the longest
-    /// rest in the window only shrinks while work goes on.
+    /// judged on the 24 elapsed hours before it, against the minimum in force on the end's own date
+    /// (RR-7). Judging at the ends is enough, because the longest rest in the window only shrinks
+    /// while work goes on.
     ///
     /// <list type="bullet">
     /// <item><b>Work.</b> Every interval of every stint that is not wholly voluntary, as elapsed
@@ -349,15 +382,19 @@ public static class RestPeriodRule
     /// earliest end; its message names that end. The verdict compares the true value; the shown
     /// value is rounded down to one decimal, so a rest of 10 h 59 min reads 10.9, never "11.0"
     /// against a minimum of 11.0.</item>
-    /// <item><b>Derogation</b> (<see cref="AgreementRuleConfig.RestPeriodDerogationAllowed"/>): a
-    /// WARNING when the rest is at least <see cref="DerogationFloorHours"/>, else a VIOLATION; the
-    /// warning says what StatsTid does not check.</item>
+    /// <item><b>Derogation</b> (<see cref="AgreementRuleConfig.RestPeriodDerogationAllowed"/>, of the
+    /// end's date): a WARNING when the rest is at least <see cref="DerogationFloorHours"/>, else a
+    /// VIOLATION; the warning says what StatsTid does not check.</item>
+    /// <item><b>The value of the end's date.</b> The minimum and the derogation setting a judged end
+    /// is held to are those in force on its date, so a period whose minimum changes on a Monday
+    /// judges a Sunday end by Sunday's value and a Monday end by Monday's, though their 24 hours
+    /// overlap (ADR-043 D12; RR-7). The finding's threshold and message name that value.</item>
     /// </list>
     /// </summary>
     private static void CheckDailyRest(
         IReadOnlyList<WorkStint> stints,
         DateOnly periodStart,
-        AgreementRuleConfig config,
+        Func<DateOnly, AgreementRuleConfig> configForDay,
         TimeZoneInfo copenhagenZone,
         List<ComplianceViolation> violations,
         List<ComplianceViolation> warnings)
@@ -380,13 +417,13 @@ public static class RestPeriodRule
             .Where(end => end.Date >= periodStart);
 
         var failingByDay = judgedEnds
-            .Select(end => (End: end, RestHours: LongestRestHours(work, end.Instant)))
-            .Where(judged => judged.RestHours < config.MinimumRestHours)
+            .Select(end => (End: end, RestHours: LongestRestHours(work, end.Instant), Config: configForDay(end.Date)))
+            .Where(judged => judged.RestHours < judged.Config.MinimumRestHours)
             .GroupBy(judged => judged.End.Date)
             .Select(day => day.OrderBy(judged => judged.RestHours).ThenBy(judged => judged.End.Instant).First())
             .OrderBy(judged => judged.End.Date);
 
-        foreach (var (end, restHours) in failingByDay)
+        foreach (var (end, restHours, config) in failingByDay)
         {
             var severity = config.RestPeriodDerogationAllowed && restHours >= DerogationFloorHours
                 ? ComplianceSeverity.WARNING
@@ -511,12 +548,20 @@ public static class RestPeriodRule
     /// NOT manufacture a false extra worked-day on D+1 that could flip a compliant 6-day week into a
     /// flagged 7-day week (research §1 interim ruling: count the shift under its start-day only).
     /// </para>
+    ///
+    /// <para>
+    /// A flagged window is a WARNING or a VIOLATION by the
+    /// <see cref="AgreementRuleConfig.RestPeriodDerogationAllowed"/> in force on the window's LAST
+    /// day, the same later-day rule the daily check follows (RR-7), while the finding is dated on the
+    /// window's FIRST day: when the setting changes inside a window, the date shown and the day whose
+    /// setting decided differ.
+    /// </para>
     /// </summary>
     private static void CheckWeeklyRest(
         IReadOnlyList<WorkStint> stints,
         DateOnly periodStart,
         DateOnly periodEnd,
-        AgreementRuleConfig config,
+        Func<DateOnly, AgreementRuleConfig> configForDay,
         List<ComplianceViolation> violations,
         List<ComplianceViolation> warnings)
     {
@@ -546,7 +591,7 @@ public static class RestPeriodRule
             // If all 7 days have work, no weekly rest day exists
             if (daysWorked == 7)
             {
-                var severity = config.RestPeriodDerogationAllowed
+                var severity = configForDay(windowEnd).RestPeriodDerogationAllowed
                     ? ComplianceSeverity.WARNING
                     : ComplianceSeverity.VIOLATION;
 

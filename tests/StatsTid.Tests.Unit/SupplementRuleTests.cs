@@ -1,4 +1,4 @@
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 
@@ -30,7 +30,7 @@ public class SupplementRuleTests
     public void AC_AllSupplementsDisabled_ReturnsEmpty()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
         var monday = new DateOnly(2024, 4, 6); // Saturday
         var entries = new List<TimeEntry>
         {
@@ -47,7 +47,7 @@ public class SupplementRuleTests
     public void HK_EveningWork_ReturnsEveningSupplement()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var tuesday = new DateOnly(2024, 4, 9);
         var entries = new List<TimeEntry>
         {
@@ -67,7 +67,7 @@ public class SupplementRuleTests
     public void HK_NightWork_ReturnsNightSupplement()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var wednesday = new DateOnly(2024, 4, 10);
         // 23:00 to 02:00 = 3 hours night work (crosses midnight)
         var entries = new List<TimeEntry>
@@ -88,7 +88,7 @@ public class SupplementRuleTests
     public void HK_SaturdayWork_ReturnsWeekendSupplement_AtSaturdayRate()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var saturday = new DateOnly(2024, 4, 6);
         var entries = new List<TimeEntry>
         {
@@ -107,7 +107,7 @@ public class SupplementRuleTests
     public void HK_SundayWork_ReturnsWeekendSupplement_AtSundayRate()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var sunday = new DateOnly(2024, 4, 7);
         var entries = new List<TimeEntry>
         {
@@ -126,7 +126,7 @@ public class SupplementRuleTests
     public void HK_HolidayWork_ReturnsHolidaySupplement()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         // Juledag 2024 = Dec 25, Wednesday
         var holiday = new DateOnly(2024, 12, 25);
         var entries = new List<TimeEntry>
@@ -146,7 +146,7 @@ public class SupplementRuleTests
     public void Holiday_TakesPrecedence_OverWeekend()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         // Nytaarsdag 2028 = Jan 1 is a Saturday
         var nytaarsdag = new DateOnly(2028, 1, 1);
         var entries = new List<TimeEntry>
@@ -165,7 +165,7 @@ public class SupplementRuleTests
     public void NoStartEndTime_NoSupplements()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var monday = new DateOnly(2024, 4, 8);
         var entries = new List<TimeEntry>
         {
@@ -197,7 +197,7 @@ public class SupplementRuleTests
     public void PROSA_EveningWork_SameAsHK()
     {
         var profile = CreateProfile("PROSA");
-        var config = AgreementConfigProvider.GetConfig("PROSA", "OK24");
+        var config = EngineConfigRequests.Config("PROSA", "OK24");
         var tuesday = new DateOnly(2024, 4, 9);
         var entries = new List<TimeEntry>
         {

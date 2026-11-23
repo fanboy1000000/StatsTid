@@ -29,20 +29,25 @@ import { MondayDatePicker } from './MondayDatePicker'
 
 // ── Field metadata. ──
 //
+// The note on the two fields whose only reader is the overtime-governance warning, which still
+// uses the agreement's built-in values (R-8, until stage 2). Weekly norm and flex cap reach pay.
+const NOT_IN_PAY_NOTE =
+  'Påvirker endnu ikke lønberegningen. Advarslerne om overarbejde bruger stadig aftalens indbyggede værdi.'
+
 // Four overridable fields — must mirror the backend's ProfileSaveRequest /
 // LocalAgreementProfile. Adding a fifth requires schema + alignment-policy
 // changes upstream; this list is the UI side of that contract.
 type OverridableNumberField = 'weeklyNormHours' | 'maxFlexBalance' | 'maxOvertimeHoursPerPeriod'
 type OverridableBoolField = 'overtimeRequiresPreApproval'
 
-const OVERRIDABLE_NUMBER_FIELDS: { key: OverridableNumberField; label: string; backendName: string }[] = [
+const OVERRIDABLE_NUMBER_FIELDS: { key: OverridableNumberField; label: string; backendName: string; note?: string }[] = [
   { key: 'weeklyNormHours',           label: 'Ugentlig normtimer',         backendName: 'WeeklyNormHours' },
   { key: 'maxFlexBalance',            label: 'Maks. flexsaldo',            backendName: 'MaxFlexBalance' },
-  { key: 'maxOvertimeHoursPerPeriod', label: 'Maks. overarbejde pr periode', backendName: 'MaxOvertimeHoursPerPeriod' },
+  { key: 'maxOvertimeHoursPerPeriod', label: 'Maks. overarbejde pr periode', backendName: 'MaxOvertimeHoursPerPeriod', note: NOT_IN_PAY_NOTE },
 ]
 
-const OVERRIDABLE_BOOL_FIELDS: { key: OverridableBoolField; label: string; backendName: string }[] = [
-  { key: 'overtimeRequiresPreApproval', label: 'Overarbejde kraever forhaandsgodkendelse', backendName: 'OvertimeRequiresPreApproval' },
+const OVERRIDABLE_BOOL_FIELDS: { key: OverridableBoolField; label: string; backendName: string; note?: string }[] = [
+  { key: 'overtimeRequiresPreApproval', label: 'Overarbejde kraever forhaandsgodkendelse', backendName: 'OvertimeRequiresPreApproval', note: NOT_IN_PAY_NOTE },
 ]
 
 // Read-only central fields — every AgreementConfig field that is NOT one of the
@@ -278,23 +283,6 @@ export function ProfileEditor({
         </div>
       </Card>
 
-      <p
-        data-testid="stage0-label"
-        role="note"
-        style={{
-          margin: 0,
-          padding: '12px 16px',
-          border: '1px solid var(--color-info)',
-          borderLeftWidth: 4,
-          background: 'var(--color-info-light)',
-          color: 'var(--color-text)',
-          fontSize: '0.875rem',
-        }}
-      >
-        <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
-        endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
-      </p>
-
       {staleConflict && (
         <Alert variant="warning">
           Din redigering var baseret paa en forældet tilstand. Profilen er blevet opdateret
@@ -335,6 +323,7 @@ export function ProfileEditor({
                 key={spec.key}
                 id={`override-${spec.key}`}
                 label={spec.label}
+                note={spec.note}
                 draft={draft}
                 centralValue={central}
                 fieldError={fieldError}
@@ -354,6 +343,7 @@ export function ProfileEditor({
                 key={spec.key}
                 id={`override-${spec.key}`}
                 label={spec.label}
+                note={spec.note}
                 draft={draft}
                 centralValue={central}
                 fieldError={fieldError}
@@ -405,13 +395,16 @@ interface NumberOverrideRowProps {
   centralValue: number | null
   fieldError: ProfileFieldError | undefined
   disabled: boolean
+  /** A static per-field note, associated with the field's controls (aria-describedby). */
+  note?: string
   onToggle: (enabled: boolean) => void
   onTextChange: (text: string) => void
 }
 
 function NumberOverrideRow({
-  id, label, draft, centralValue, fieldError, disabled, onToggle, onTextChange,
+  id, label, draft, centralValue, fieldError, disabled, note, onToggle, onTextChange,
 }: NumberOverrideRowProps) {
+  const noteId = note ? `${id}-note` : undefined
   return (
     <FormField label={label} htmlFor={id} error={fieldErrorMessage(fieldError)}>
       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
@@ -421,6 +414,7 @@ function NumberOverrideRow({
           checked={draft.enabled}
           onChange={(e) => onToggle(e.target.checked)}
           disabled={disabled}
+          describedBy={noteId}
         />
         {draft.enabled ? (
           <Input
@@ -430,6 +424,7 @@ function NumberOverrideRow({
             value={draft.text}
             onChange={(e) => onTextChange(e.target.value)}
             disabled={disabled}
+            aria-describedby={noteId}
             error={Boolean(fieldError)}
           />
         ) : (
@@ -438,6 +433,11 @@ function NumberOverrideRow({
           </span>
         )}
       </div>
+      {note && (
+        <p id={noteId} style={{ margin: '0.25rem 0 0', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
+          {note}
+        </p>
+      )}
     </FormField>
   )
 }
@@ -449,13 +449,16 @@ interface BoolOverrideRowProps {
   centralValue: boolean | null
   fieldError: ProfileFieldError | undefined
   disabled: boolean
+  /** A static per-field note, associated with the field's controls (aria-describedby). */
+  note?: string
   onToggle: (enabled: boolean) => void
   onValueChange: (value: boolean) => void
 }
 
 function BoolOverrideRow({
-  id, label, draft, centralValue, fieldError, disabled, onToggle, onValueChange,
+  id, label, draft, centralValue, fieldError, disabled, note, onToggle, onValueChange,
 }: BoolOverrideRowProps) {
+  const noteId = note ? `${id}-note` : undefined
   return (
     <FormField label={label} htmlFor={id} error={fieldErrorMessage(fieldError)}>
       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
@@ -465,6 +468,7 @@ function BoolOverrideRow({
           checked={draft.enabled}
           onChange={(e) => onToggle(e.target.checked)}
           disabled={disabled}
+          describedBy={noteId}
         />
         {draft.enabled ? (
           <Checkbox
@@ -473,6 +477,7 @@ function BoolOverrideRow({
             checked={draft.value}
             onChange={(e) => onValueChange(e.target.checked)}
             disabled={disabled}
+            describedBy={noteId}
           />
         ) : (
           <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
@@ -480,6 +485,11 @@ function BoolOverrideRow({
           </span>
         )}
       </div>
+      {note && (
+        <p id={noteId} style={{ margin: '0.25rem 0 0', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
+          {note}
+        </p>
+      )}
     </FormField>
   )
 }

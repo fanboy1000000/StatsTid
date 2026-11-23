@@ -49,6 +49,10 @@ public static class ComplianceEndpoints
             // The clock intervals typed in Skema: the rest checks' input (ADR-043 D10).
             WorkTimeProjectionRepository workTimeProjectionRepo,
             IEmploymentProfileResolver profileResolver,
+            // The dated records of the checked window and the configuration in force on each day that
+            // carries work, resolved once per stretch (ADR-043 D12; ruling 18).
+            DbConnectionFactory connectionFactory,
+            Services.DailyNormCalculator dailyNormCalculator,
             // S137 / ADR-040 D7/D10 — the employment-window fact, read server-side (never on the wire).
             IEmploymentWindowResolver windowResolver,
             OrgScopeValidator scopeValidator,
@@ -341,32 +345,23 @@ public static class ComplianceEndpoints
                 coverageFault = ex;
             }
 
-            if (profile is null)
+            // The one employment_record_gap answer (ruling 18): the first employed day without a
+            // record, and a day of the checked window that carries work without one, give the same body
+            // and the same date-free log. THE EXCEPTION IS DELIBERATELY NOT ATTACHED (S141 / TASK-14114):
+            // `EmployeeProfileNotFoundException` embeds its as-of date in its MESSAGE, and that date can be
+            // the hire date, which this log must never carry (ADR-040 D7). The discriminator recovers the
+            // only thing the exception told us: WHICH record is missing (employment_profile when no profile
+            // row covers the day; when one does, the resolver's exception on the first employed day is
+            // reported as agreement_code, and a work day names agreement_code or organisation). That
+            // distinction is what HR needs and it carries no date. `scope` names which day, without its date.
+            IResult EmploymentRecordGap(string missingRecord, string scope)
             {
-                // S141 / TASK-14114 cross-domain finding — THE EXCEPTION IS DELIBERATELY NOT ATTACHED,
-                // and this line used to contradict the comment eleven lines above it.
-                //
-                // `EmployeeProfileNotFoundException` embeds its as-of date in its MESSAGE, and the
-                // as-of date here is `firstEmployedDay` — which for a mid-month starter IS THE HIRE
-                // DATE. Passing the exception to the logger therefore wrote an employment date into
-                // the very log this site's own comment says must never carry one (ADR-040 D7). It was
-                // a live leak, not a hypothetical: the payroll agent proved the equivalent one at its
-                // own site by reverting its fix and observing the hire date appear in the output where
-                // the caller's period start was a different day.
-                //
-                // Losing the stack trace costs nothing here — the throw site is one known call — and
-                // the discriminator below recovers the only thing the exception told us that the null
-                // path did not: WHICH record is missing. A null means no profile row covers the day;
-                // a fault means a profile row does, but no agreement-code row does. That distinction
-                // is what HR needs and it carries no date.
                 complianceLogger.LogError(
                     "employment_record_gap: compliance read for {EmployeeId} {Year}-{Month:00} cannot be " +
-                    "computed because no effective-dated employment record covers the first employed day of " +
-                    "the month. Missing record: {MissingRecord}. This employee should appear on the HR " +
-                    "follow-up 'cannot register' list (HRP-015), which names which record is missing and " +
-                    "whether a scheduled one will close it.",
-                    employeeId, year, month,
-                    coverageFault is null ? "employment_profile" : "agreement_code");
+                    "computed because no effective-dated employment record covers {Scope}. Missing record: " +
+                    "{MissingRecord}. This employee should appear on the HR follow-up 'cannot register' list " +
+                    "(HRP-015), which names which record is missing and whether a scheduled one will close it.",
+                    employeeId, year, month, scope, missingRecord);
 
                 return Results.Json(
                     new
@@ -379,6 +374,75 @@ public static class ComplianceEndpoints
                     statusCode: 500);
             }
 
+            if (profile is null)
+            {
+                return EmploymentRecordGap(
+                    coverageFault is null ? "employment_profile" : "agreement_code",
+                    "the first employed day of the month");
+            }
+
+            // ── The agreement configurations in force across the window (ADR-043 D12; RR-7) ──
+            // The engine reads no configuration of its own: it judges each work end by the minimum rest in
+            // force on its own date, so the request carries dated runs { from, to, agreementCode, config }.
+            // Only the days of [readStart, monthEnd] that carry an entry or an interval are resolved
+            // (ruling 18; the engine needs a run for exactly those days up to periodEnd, S10), each with its
+            // own dated record (agreement, position, organisation; never users.primary_org_id) at its own
+            // OK version, the full chain. The records are read once for the window and each configuration
+            // once per stretch (DailyNormCalculator), so consecutive work days of one stretch share one run;
+            // the runs carry no registration, so a leader's withheld days reveal nothing (RES-002). A day
+            // that carries work with no complete record is the record gap above. A lookup refusal leaves
+            // the handler before the engine call and the Backend's one mapping answers it (B4).
+            var daysWithWork = normalizedEntries.Select(entry => entry.Date)
+                .Concat(workTimeRows
+                    .Where(row => row.Intervals.Any(iv =>
+                        TryParseTimeToSeconds(iv.Start, out var startSec)
+                        && TryParseTimeToSeconds(iv.End, out var endSec)
+                        && endSec > startSec))
+                    .Select(row => row.Date))
+                .Where(date => date <= monthEnd)
+                .Distinct()
+                .Order()
+                .ToList();
+
+            Services.DatedRecordTimeline records;
+            await using (var recordConn = connectionFactory.Create())
+            {
+                await recordConn.OpenAsync(ct);
+                records = await Services.DatedRecordTimeline.ReadAsync(
+                    recordConn, new[] { employeeId }, readStart, monthEnd, ct);
+            }
+
+            var configRuns = new List<(DateOnly From, DateOnly To, string AgreementCode, AgreementRuleConfig Config)>();
+            foreach (var day in daysWithWork)
+            {
+                var (record, missingRecord) = records.On(employeeId, day);
+                if (record is null)
+                    return EmploymentRecordGap(missingRecord!, "a day of the checked window that carries work");
+
+                var config = await dailyNormCalculator.ResolveConfigAsync(
+                    record.OrgId, record.AgreementCode, record.Position, day, monthEnd, ct);
+                // One stretch's configuration is one object, so a work day joins the run before it only when it
+                // lies in the same stretch (and so the same agreement and OK version).
+                if (configRuns.Count > 0 && ReferenceEquals(configRuns[^1].Config, config))
+                    configRuns[^1] = configRuns[^1] with { To = day };
+                else
+                    configRuns.Add((day, day, record.AgreementCode, config));
+            }
+
+            // A month with no day carrying work still asks the engine (its answer is then empty), and the engine
+            // refuses a request without runs (S6): one run for the first employed day, the day `profile` above
+            // was resolved for.
+            if (configRuns.Count == 0)
+            {
+                var (record, missingRecord) = records.On(employeeId, firstEmployedDay.Value);
+                if (record is null)
+                    return EmploymentRecordGap(missingRecord!, "the first employed day of the month");
+                configRuns.Add((firstEmployedDay.Value, firstEmployedDay.Value, record.AgreementCode,
+                    await dailyNormCalculator.ResolveConfigAsync(
+                        record.OrgId, record.AgreementCode, record.Position, firstEmployedDay.Value,
+                        firstEmployedDay.Value, ct)));
+            }
+
             var complianceRequest = new
             {
                 profile,
@@ -386,6 +450,9 @@ public static class ComplianceEndpoints
                 periodStart = monthStart,
                 periodEnd = monthEnd,
                 workIntervals,
+                configs = configRuns
+                    .Select(run => new { from = run.From, to = run.To, agreementCode = run.AgreementCode, config = run.Config })
+                    .ToList(),
             };
 
             var response = await httpClient.PostAsJsonAsync(

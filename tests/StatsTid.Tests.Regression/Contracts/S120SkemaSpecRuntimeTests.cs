@@ -11,7 +11,7 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// <summary>
 /// S120 / TASK-12002 — the per-route spec≡runtime gate for the SKEMA family drained in
 /// retrofit Pass 7 (TASK-12000): the month GET (THE program's LARGEST composite — the FULL
-/// 17-top-level-member tree asserted), the save POST (<c>{saved}</c> — the event-sourced
+/// 18-top-level-member tree asserted (S148 AC-S0-4c: plus minimumRest)), the save POST (<c>{saved}</c> — the event-sourced
 /// write's receipt, P3-fenced), and the row-preferences PUT (the SHARED
 /// <c>SkemaRowPreferencesResponse</c> record — one shape, two surfaces).
 ///
@@ -41,12 +41,14 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
 {
     private const string Org = "S120SKM1";
 
-    /// <summary>The EXACT 17 top-level members of <c>SkemaMonthResponse</c> — THE composite.</summary>
+    /// <summary>The EXACT 18 top-level members of <c>SkemaMonthResponse</c> — THE composite.</summary>
     private static readonly string[] MonthKeys =
     {
         "year", "month", "daysInMonth", "projects", "absenceTypes", "entries", "absences",
         "workTime", "dailyNorm", "approval", "employeeDeadline", "managerDeadline",
         "rowPreferences", "catalogs", "boundaryWorkTime", "fullDayNormAtMonthEnd", "consumptionBasis",
+        // S148 AC-S0-4c (TASK-14828 item 7): the served minimum rest per day
+        "minimumRest",
     };
 
     /// <summary>The EXACT 6 members of <c>SkemaApprovalInfo</c> (the wrapper's 4th member).</summary>
@@ -101,7 +103,7 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>THE composite through the matcher with the FULL top-level tree asserted: the
-    /// exact 17-member key set; the per-day arrays at month length (31 rows for March, the
+    /// exact 18-member key set (S148 AC-S0-4c: was 17, plus minimumRest); the per-day arrays at month length (31 rows for March, the
     /// dailyNorm/consumptionBasis sibling shape, weekday 7.4 / weekend 0 for the full-time AC
     /// profile); the shared 3-member absence-type row on BOTH its projections (legacy field +
     /// catalogs — the S72-B1 anti-drift identity); the R4 rowPreferences container
@@ -147,6 +149,16 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
             Assert.Equal(0m, FindDay(rows, "2026-03-01").GetProperty("hours").GetDecimal());   // Sunday
         }
         Assert.Equal(7.4m, root.GetProperty("fullDayNormAtMonthEnd").GetDecimal()); // the R10 scalar
+
+        // S148 AC-S0-4c (TASK-14828 item 7): the served minimum rest, one row per day of [monthStart, monthEnd + 1] (32 rows
+        // for March), the same two-member day row; the configured 11 h on every day the seeded record covers (2 March, and
+        // 1 April, the day after the month).
+        var minimumRest = root.GetProperty("minimumRest").EnumerateArray().ToList();
+        Assert.Equal(32, minimumRest.Count);
+        foreach (var row in minimumRest)
+            S118ContractAssert.AssertExactKeySet(row, DayHoursRowKeys, "minimumRest row");
+        Assert.Equal(11m, FindDay(minimumRest, "2026-03-02").GetProperty("hours").GetDecimal());
+        Assert.Equal(11m, FindDay(minimumRest, "2026-04-01").GetProperty("hours").GetDecimal());
 
         // The shared absence-type row on BOTH projections (one computation, two projections).
         var legacyTypes = root.GetProperty("absenceTypes").EnumerateArray().ToList();

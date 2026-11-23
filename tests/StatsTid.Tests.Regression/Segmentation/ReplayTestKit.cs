@@ -105,6 +105,8 @@ internal static class ReplayTestKit
             priorPeriodApprovalReader: approval,
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new TestFixtures.NoTransferDates(),
+            // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
+            configLookup: new StatsTid.Tests.Shared.EngineConfigRequests.CompiledLookup(),
             flexLedgerReader: ledger);
         Ledgers.Add(pcs, ledger);
         return pcs;
@@ -382,6 +384,8 @@ internal static class ReplayTestKit
                 EmploymentCategory = "Standard",
                 PartTimeFraction = row.Fraction,
                 Position = row.Position,
+                // S148 TASK-14828-T: a calculating run is refused without an organisation on the dated record.
+                OrgId = "STY01",
             });
         }
     }

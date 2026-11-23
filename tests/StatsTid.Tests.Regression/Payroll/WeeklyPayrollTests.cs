@@ -9,7 +9,7 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -354,8 +354,9 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
     /// <item>The request carries 30-31 March as context: the timeline call's entries include both days and its
     /// first piece starts on 30 March.</item>
     /// <item>The timeline response's config fingerprint equals <c>ConfigFingerprint.Compute</c> over BOTH the OK24
-    /// configuration (30-31 March) and the OK26 configuration (from 1 April): the engine resolves config per day
-    /// (refinement :235) and fingerprints what it actually resolved (:369).</item>
+    /// configuration (30-31 March) and the OK26 configuration (from 1 April): payroll hands the engine, with each
+    /// timeline piece, the configuration in force for that piece (the OK24 piece's and the OK26 piece's, ADR-043 D12),
+    /// and the engine fingerprints the configurations it was handed (refinement :369).</item>
     /// </list>
     ///
     /// Red conditions (Docker-gated, CI-verified): mutation MD-39 (the timeline endpoint resolves one config for the
@@ -378,8 +379,8 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         var call = april.Recorder.Timeline.Single();
         var expectedFingerprint = ConfigFingerprint.Compute(new (string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)[]
         {
-            ("HK", "OK24", null, AgreementConfigProvider.GetConfig("HK", "OK24")),
-            ("HK", "OK26", null, AgreementConfigProvider.GetConfig("HK", "OK26")),
+            ("HK", "OK24", null, EngineConfigRequests.Config("HK", "OK24")),
+            ("HK", "OK26", null, EngineConfigRequests.Config("HK", "OK26")),
         });
         var entryDates = call.EntryHours().Select(e => e.Date).ToList();
 
@@ -707,6 +708,8 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
             priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)),
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new Segmentation.TestFixtures.NoTransferDates(),
+            // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
+            configLookup: new StatsTid.Tests.Shared.EngineConfigRequests.CompiledLookup(),
             // S146 R-14: the production reader over payroll_export_records (the full schema is applied); a fact that
             // needs a non-zero opening seeds a ledger record with FlexLedgerSeed, the rest read an empty ledger.
             flexLedgerReader: new PostgresFlexLedgerReader(_db));

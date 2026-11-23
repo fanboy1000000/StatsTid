@@ -34,4 +34,10 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- S148 TASK-14828-T (BC-P5, T-BC-2 (a)): the Rule Engine reads no configuration of its own (ADR-043 D12), so the direct
+         engine probe sends the compiled AC/OK24 config from the one table that holds it; no hand copy to drift. -->
+    <ProjectReference Include="..\..\src\SharedKernel\StatsTid.SharedKernel\StatsTid.SharedKernel.csproj" />
+  </ItemGroup>
+
 </Project>

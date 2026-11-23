@@ -1,3 +1,4 @@
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 
@@ -44,7 +45,7 @@ public class RuleRegistryDispatchTests
 
         var result = registry.EvaluateTimeRule(
             CallInWorkRule.RuleId,
-            profile, entries, Monday, Sunday);
+            profile, entries, Monday, Sunday, EngineConfigRequests.ConfigFor(profile));
 
         Assert.True(result.Success);
         Assert.Equal(CallInWorkRule.RuleId, result.RuleId);
@@ -67,7 +68,7 @@ public class RuleRegistryDispatchTests
 
         var result = registry.EvaluateTimeRule(
             TravelTimeRule.RuleId,
-            profile, entries, Monday, Sunday);
+            profile, entries, Monday, Sunday, EngineConfigRequests.ConfigFor(profile));
 
         Assert.True(result.Success);
         Assert.Equal(TravelTimeRule.RuleId, result.RuleId);
@@ -95,7 +96,7 @@ public class RuleRegistryDispatchTests
         // Use the backward-compatible Evaluate (which routes through EvaluateTimeRule internally)
         var result = registry.Evaluate(
             NormCheckRule.RuleId,
-            profile, entries, Monday, Sunday);
+            profile, entries, Monday, Sunday, EngineConfigRequests.ConfigFor(profile));
 
         Assert.True(result.Success);
         Assert.Equal(NormCheckRule.RuleId, result.RuleId);
@@ -116,7 +117,7 @@ public class RuleRegistryDispatchTests
         // Use the backward-compatible Evaluate overload (routes through EvaluateTimeRule)
         var result = registry.Evaluate(
             CallInWorkRule.RuleId,
-            profile, entries, Monday, Sunday);
+            profile, entries, Monday, Sunday, EngineConfigRequests.ConfigFor(profile));
 
         Assert.True(result.Success);
         Assert.Equal(CallInWorkRule.RuleId, result.RuleId);

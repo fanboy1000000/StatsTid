@@ -1,4 +1,4 @@
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 
@@ -54,7 +54,7 @@ public class OvertimeRuleTests
     public void AC_ExcessHours_ProducesMerarbejde_NotOvertime()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
         // 40 hours in one week = 3 hours excess
         var entries = new List<TimeEntry>
         {
@@ -78,7 +78,7 @@ public class OvertimeRuleTests
     public void AC_NeverProducesOvertime50()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 10m),
@@ -98,7 +98,7 @@ public class OvertimeRuleTests
     public void HK_38Hours_ProducesOvertime50Only()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7.6m),
@@ -121,7 +121,7 @@ public class OvertimeRuleTests
     public void HK_42Hours_ProducesOvertime50_And_Overtime100()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 8.4m),
@@ -149,7 +149,7 @@ public class OvertimeRuleTests
     public void HK_BelowNorm_NoOvertime()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7.0m),
@@ -167,7 +167,7 @@ public class OvertimeRuleTests
     public void PROSA_Overtime_SameAsHK()
     {
         var profile = CreateProfile("PROSA");
-        var config = AgreementConfigProvider.GetConfig("PROSA", "OK24");
+        var config = EngineConfigRequests.Config("PROSA", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7.8m),
@@ -187,7 +187,7 @@ public class OvertimeRuleTests
     public void PartTime50_ProRatedThresholds()
     {
         var profile = CreateProfile("HK", partTime: 0.5m);
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         // Part-time norm = 18.5h, threshold50=18.5, threshold100=20
         // 20h work = 1.5h overtime50
         var entries = new List<TimeEntry>
@@ -209,7 +209,7 @@ public class OvertimeRuleTests
     public void ExactlyAtNorm_NoOvertime()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7.4m),
@@ -229,7 +229,7 @@ public class OvertimeRuleTests
     public void HK_NeverProducesMerarbejde()
     {
         var profile = CreateProfile("HK");
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 10m),
@@ -248,7 +248,7 @@ public class OvertimeRuleTests
     public void AC_ExactlyAtNorm_NoMerarbejde()
     {
         var profile = CreateProfile("AC");
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7.4m),

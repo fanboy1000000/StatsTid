@@ -9,6 +9,7 @@ using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Normalization;
 using StatsTid.SharedKernel.Segmentation;
+using System.Data.Common;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -184,9 +185,10 @@ public sealed class PeriodCalculationService
     private readonly UserAgreementCodeRepository? _userAgreementCodeRepo;
     // S148 TASK-14818 (QUAL-182, ADR-043 D12; ruling B2): optional repositories for the dated agreement
     // configs and position overrides — feed the AgreementConfigPromotion and PositionOverrideEffective
-    // boundaries, so a month in which a new version starts splits at that day (ReadConfigVersionDatesAsync).
-    // Null-tolerant like _userAgreementCodeRepo: when null, both sources stay empty. The payroll host
-    // registers neither until TASK-14825 (DV-8), so no payroll run splits on them before wave 5.
+    // boundaries, so a month in which a new version starts splits at that day (ReadConfigVersionDatesAsync),
+    // and cut the opening week's context pieces the same way (ContextVersionDatesAsync), so every part is
+    // priced on the version in force on its own days. Null-tolerant like _userAgreementCodeRepo: when null,
+    // both sources stay empty. The payroll host registers both (QUAL-184).
     private readonly AgreementConfigRepository? _agreementConfigRepo;
     private readonly PositionOverrideRepository? _positionOverrideRepo;
     // S145 TASK-14508 (rulings R14, R25): the ONE source of the hours a calculation consumes —
@@ -221,11 +223,19 @@ public sealed class PeriodCalculationService
     // the local-profile runs, so each part asks its own institution's local-profile history for activation dates.
     // Optional in the constructor, but NEVER SILENT and with no mode: every planning or calculating call that
     // reads the histories throws InvalidOperationException naming the registration when it is absent
-    // (RequireOrganisationHistoryReader). Today no paid figure depends on the organisation; once the T14b stack
-    // sends each part's own configuration to the engine, each part is priced under its own institution's rules,
-    // and a month planned without its transfer cuts would then price a part under the wrong institution's. The
-    // refusal keeps such a plan from being made. Replay never reads it (ADR-016 D10: it never plans).
+    // (RequireOrganisationHistoryReader). Each part is priced under its own institution's local profile (the
+    // configuration resolved per piece, ADR-043 D12), so a month planned without its transfer cuts would price a
+    // part under the wrong institution's rules. The refusal keeps such a plan from being made. Replay never reads
+    // it (ADR-016 D10: it never plans; it re-resolves from the organisation frozen on each piece, R42).
     private readonly IOrganisationHistoryReader? _organisationHistoryReader;
+    // ADR-043 D12 (P-13; TASK-14825's lookup, ruling B8): the agreement configuration in force, central → position
+    // override → the institution's local profile, as of a day. Every calculation resolves one configuration per
+    // timeline piece (a run in which nothing that selects a version changes) before its first rule-engine call and
+    // sends it with the piece and with the segment's per-segment calls; the Rule Engine computes only with the
+    // configuration a request carries. Optional in the constructor, but NEVER SILENT and with no mode: every
+    // calculation and replay that reaches config resolution throws InvalidOperationException naming the
+    // registration when it is absent (RequireConfigLookup); no compiled configuration is ever substituted.
+    private readonly IAgreementConfigLookup? _configLookup;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -320,6 +330,17 @@ public sealed class PeriodCalculationService
         Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: true) }
     };
 
+    // Wave-5 batch-C ruling 15: the options the Rule Engine REQUEST bodies of evaluate and evaluate-timeline are
+    // written with — the same camelCase naming as JsonOptions, without its string-enum converter, so an enum (the
+    // configuration's NormModel) goes on the wire as a number. The engine host configures no JSON options and binds
+    // enums as numbers only; a converter there would flip its response enums, which the Backend's engine reads take
+    // as numbers. Responses are still read through JsonOptions, which accepts both forms. JsonOptions itself stays as
+    // it is: it also writes and reads segments_jsonb, whose string encoding is load-bearing (see above).
+    private static readonly JsonSerializerOptions EngineRequestOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
     public PeriodCalculationService(
         IHttpClientFactory httpClientFactory,
         PayrollMappingService mappingService,
@@ -338,7 +359,8 @@ public sealed class PeriodCalculationService
         IEmploymentWindowResolverInTx? employmentWindowResolverInTx = null,
         AgreementConfigRepository? agreementConfigRepo = null,
         PositionOverrideRepository? positionOverrideRepo = null,
-        IOrganisationHistoryReader? organisationHistoryReader = null)
+        IOrganisationHistoryReader? organisationHistoryReader = null,
+        IAgreementConfigLookup? configLookup = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -434,6 +456,10 @@ public sealed class PeriodCalculationService
         // ReadPlanHistoriesAsync), so a replay-only instance needs no reader. Unlike the readers above it has no
         // "check does not apply" case: every planning and calculating call needs the transfer dates.
         _organisationHistoryReader = organisationHistoryReader;
+        // NOT enforced here: the refusal runs at call time, when config resolution is reached
+        // (RequireConfigLookup), so a plan-only instance needs no lookup. Like the organisation reader it has no
+        // "check does not apply" case: every calculation and replay resolves a configuration for each piece.
+        _configLookup = configLookup;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
 
@@ -467,11 +493,10 @@ public sealed class PeriodCalculationService
     ///
     /// <para>
     /// <b>Why it throws (plain language).</b> A transfer from one institution to another inside a month splits
-    /// the month, so that each part can be priced under its own institution's rules (ADR-043 D12). Today no paid
-    /// figure depends on the organisation; once the T14b stack sends each part's own configuration to the engine,
-    /// it will. A service built without the reader cannot see a transfer, and a month planned as one piece would
-    /// then pay part of it under the wrong institution's rules, silently. The refusal, by name, keeps such a plan
-    /// from being made now.
+    /// the month, so that each part is priced under its own institution's rules: each piece is sent with the
+    /// configuration resolved for its own organisation (ADR-043 D12). A service built without the reader cannot
+    /// see a transfer, and a month planned as one piece would pay part of it under the wrong institution's rules,
+    /// silently. The refusal, by name, keeps such a plan from being made.
     /// </para>
     /// </summary>
     private IOrganisationHistoryReader RequireOrganisationHistoryReader() =>
@@ -510,6 +535,31 @@ public sealed class PeriodCalculationService
             "ProjectionHoursReader.cs; it registers IRecordedHoursReader -> ProjectionHoursReader and the two " +
             "read-model repositories it reads). Test fixtures that calculate or replay must pass an " +
             "IRecordedHoursReader (an in-memory one is fine) as the hoursReader constructor argument.");
+
+    /// <summary>
+    /// The never-silent check for the agreement-configuration lookup (ADR-043 D12, P-13), called FIRST by
+    /// <see cref="ResolvePieceConfigsAsync"/>, before any configuration is read, on every calculation and replay,
+    /// with no mode (the rule of <see cref="RequireOrganisationHistoryReader"/>).
+    ///
+    /// <para>
+    /// <b>Why it throws (plain language).</b> The Rule Engine computes only with the agreement configuration a
+    /// request carries. A service built without the lookup cannot know the configuration in force on a day, and
+    /// pricing on the configuration compiled into the code instead would pay on values nobody chose, which ADR-043
+    /// D12 rules out. So the month is refused, by name, before any rule-engine call and before anything is written.
+    /// </para>
+    /// </summary>
+    private IAgreementConfigLookup RequireConfigLookup() =>
+        _configLookup ?? throw new InvalidOperationException(
+            "PeriodCalculationService was asked to calculate or replay a month, which needs the agreement " +
+            "configuration in force for each stretch of it, on a service constructed WITHOUT an " +
+            "IAgreementConfigLookup. The Rule Engine computes only with the configuration a request carries, and " +
+            "payroll never substitutes the compiled one (ADR-043 D12), so the month is refused before any rule-engine " +
+            "call and nothing is written. Fix the wiring: the Payroll host must register IAgreementConfigLookup -> " +
+            "ConfigResolutionService (the same singleton) in src/Integrations/StatsTid.Integrations.Payroll/Program.cs " +
+            "(beside the AgreementConfigRepository and PositionOverrideRepository registrations). Test fixtures that " +
+            "calculate or replay must pass an IAgreementConfigLookup as the configLookup constructor argument (a fake " +
+            "answering the configuration of the requested agreement and OK version, declared with a comment, when the " +
+            "fixture is not about configurations).");
 
     // -------------------------------------------------------------------
     // Public outcome / audit-state types
@@ -1106,16 +1156,30 @@ public sealed class PeriodCalculationService
     /// <item><see cref="SegmentProfiles"/> — each plan segment's dated profile, in segment order
     /// (<c>null</c> for a NOT_EMPLOYED segment, which is skipped), which the per-segment lane and the
     /// wage-type mapping use;</item>
-    /// <item><see cref="SettlementCutoff"/> — the leaver's settlement cutoff (R41), or <c>null</c>.</item>
+    /// <item><see cref="SettlementCutoff"/> — the leaver's settlement cutoff (R41), or <c>null</c>;</item>
+    /// <item><see cref="Configs"/> — the agreement configuration in force over each piece, index-aligned with
+    /// <see cref="Pieces"/> (ADR-043 D12).</item>
     /// </list>
     /// A forward calculation derives them from the histories admission read
     /// (<see cref="DeriveEvaluationInputsAsync"/>); a replay builds them from its manifest's frozen
-    /// <see cref="PlanInputs"/> alone (<see cref="FrozenEvaluationInputs"/>, TASK-14513).
+    /// <see cref="PlanInputs"/> alone (<see cref="FrozenEvaluationInputs"/>, TASK-14513), and re-resolves the
+    /// configurations from the frozen keys (<see cref="ResolvePieceConfigsAsync"/>).
     /// </summary>
     private sealed record EvaluationInputs(
         IReadOnlyList<FrozenPiece> Pieces,
         IReadOnlyList<EmploymentProfile?> SegmentProfiles,
-        DateOnly? SettlementCutoff);
+        DateOnly? SettlementCutoff)
+    {
+        /// <summary>
+        /// The configuration in force over each piece, <c>Configs[i]</c> for <c>Pieces[i]</c>. Each piece is one
+        /// run: nothing that selects a version (the OK version, agreement, position, organisation, an applies-from
+        /// date or a local-profile activation) changes inside it, so the configuration in force on its first day is
+        /// in force on every day of it. The timeline call sends it with the piece; a segment's per-segment calls send
+        /// the configuration of the piece covering the segment's first day, which is the segment's own piece.
+        /// Evaluation refuses inputs whose configurations do not cover every piece.
+        /// </summary>
+        public IReadOnlyList<AgreementRuleConfig> Configs { get; init; } = Array.Empty<AgreementRuleConfig>();
+    }
 
     /// <summary>
     /// Derives the <see cref="EvaluationInputs"/> from the employee histories: "employed?" before "what
@@ -1123,7 +1187,10 @@ public sealed class PeriodCalculationService
     /// record refuses the month (<c>employment_record_gap</c>) before anything is evaluated. The context
     /// days' pieces come first (they precede the period); then each EMPLOYED segment's dated profile —
     /// the one planning already resolved for the segment's wage-type key when there is one, so the engine
-    /// and the export see the same record (A4) — which both lanes use.
+    /// and the export see the same record (A4) — which both lanes use. Then, still before any rule-engine call,
+    /// the configuration in force over each piece (ADR-043 D12; <see cref="ResolvePieceConfigsAsync"/>), with
+    /// the organisation the dated record gave the piece, never the request body's. A piece whose record carries
+    /// no organisation is refused as a record gap (<c>user_organisations</c>), on every path (ruling 14).
     /// </summary>
     private async Task<EvaluationInputs> DeriveEvaluationInputsAsync(
         PlannedCalculation plan,
@@ -1176,11 +1243,66 @@ public sealed class PeriodCalculationService
             segmentProfiles[s] = segmentProfile;
             pieces.Add(new FrozenPiece(
                 segment.StartDate, segment.EndDate,
-                segmentProfile.PartTimeFraction, segmentProfile.AgreementCode, segmentProfile.Position));
+                segmentProfile.PartTimeFraction, segmentProfile.AgreementCode, segmentProfile.Position)
+            { OrgId = segmentProfile.OrgId });
         }
 
+        // ADR-043 D12 (P-13): the configuration in force over every piece, resolved here, before any rule-engine
+        // call, so a lookup refusal (ConfigLookupUnavailableException, NoConfigInForceException) propagates as
+        // itself and nothing is evaluated or written. Ruling 14 (one rule, no mode): a piece whose record carries
+        // no organisation cannot be resolved (the lookup's organisation is required) and could not be replayed, so
+        // it is refused as the record gap it is, naming the table HR repairs. Without a profile resolver the
+        // caller's profile is the record, so the same rule refuses a caller profile with no organisation.
+        var configs = await ResolvePieceConfigsAsync(
+            pieces, () => RecordGap("user_organisations", profile.EmployeeId, plan), ct);
+
         return new EvaluationInputs(
-            pieces, segmentProfiles, SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd));
+            pieces, segmentProfiles, SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd))
+        {
+            Configs = configs,
+        };
+    }
+
+    /// <summary>
+    /// The agreement configuration in force over each of <paramref name="pieces"/>, index-aligned (ADR-043 D12;
+    /// TASK-14825's lookup): the full chain central → position override → the institution's local profile,
+    /// through <see cref="IAgreementConfigLookup.ResolveAsync"/> as of the piece's first day, with the piece's own
+    /// keys only: its organisation, its agreement code, the OK version of its first day (ADR-003; never a
+    /// caller's) and its position (<c>null</c> = no override layer). One read per piece is enough because a piece
+    /// is a run (see <see cref="EvaluationInputs.Configs"/>). A forward calculation and a replay share it: the
+    /// forward pieces carry the dated record's organisation, a replay's the organisation frozen on them, so a
+    /// replay reads no profile, agreement-code or organisation history (R42).
+    ///
+    /// <para>
+    /// Never silent (<see cref="RequireConfigLookup"/>, first, before anything is read) and never compiled: a read
+    /// failure (<see cref="ConfigLookupUnavailableException"/>) and a day with no published version in force
+    /// (<see cref="NoConfigInForceException"/>) propagate as themselves; the lookup logs each refusal once. A piece
+    /// without an organisation is refused with <paramref name="withoutOrganisation"/>, the caller's own refusal
+    /// (a forward calculation's record gap; a replay refuses such a manifest earlier, in
+    /// <see cref="FrozenEvaluationInputs"/>).
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<AgreementRuleConfig>> ResolvePieceConfigsAsync(
+        IReadOnlyList<FrozenPiece> pieces, Func<Exception> withoutOrganisation, CancellationToken ct)
+    {
+        var lookup = RequireConfigLookup();
+
+        foreach (var piece in pieces)
+        {
+            if (string.IsNullOrEmpty(piece.OrgId))
+                throw withoutOrganisation();
+        }
+
+        var configs = new AgreementRuleConfig[pieces.Count];
+        for (var i = 0; i < pieces.Count; i++)
+        {
+            var piece = pieces[i];
+            configs[i] = await lookup.ResolveAsync(
+                piece.OrgId!, piece.AgreementCode, OkVersionResolver.ResolveVersion(piece.From), piece.Position,
+                piece.From, ct);
+        }
+
+        return configs;
     }
 
     /// <summary>
@@ -1294,6 +1416,17 @@ public sealed class PeriodCalculationService
         var segmentProfiles = inputs.SegmentProfiles;
         var settlementCutoff = inputs.SettlementCutoff;
 
+        // ADR-043 D12: every piece carries the configuration resolved for it (forward: DeriveEvaluationInputsAsync;
+        // replay: ReplayAsync), and the engine computes only with what a request carries. Inputs without them are a
+        // defect in this service, refused before any call rather than sent to the engine configless.
+        var configs = inputs.Configs;
+        if (configs.Count != pieces.Count)
+        {
+            throw new InvalidOperationException(
+                $"PeriodCalculationService evaluation invariant violated: {pieces.Count} timeline piece(s) but " +
+                $"{configs.Count} resolved configuration(s). ManifestId={plan.ManifestId}.");
+        }
+
         // S145 R-12 — the ONE derivation of the agreement this period is evaluated under: the first EMPLOYED
         // segment's piece, or empty for a plan with no EMPLOYED segment. The success result, the R-6 refused
         // result and the legacy completed event below all report it; never the request body's agreement.
@@ -1344,7 +1477,7 @@ public sealed class PeriodCalculationService
             callsAttempted++;
             timeline = await CallTimelineAsync(
                 client, plan.EmployeeId, plan.PeriodStart, plan.PeriodEnd, settlementCutoff,
-                pieces, timelineEntries, timelineAbsences, openingFlexBalance, ct);
+                pieces, configs, timelineEntries, timelineAbsences, openingFlexBalance, ct);
             if (timeline is null)
                 callsFailed++;
         }
@@ -1383,8 +1516,16 @@ public sealed class PeriodCalculationService
             var segmentEntries = normalizedEntries.Where(e => e.Date >= segment.StartDate && e.Date <= segment.EndDate).ToList();
             var segmentAbsences = absences.Where(a => a.Date >= segment.StartDate && a.Date <= segment.EndDate).ToList();
 
+            // A segment is one run, and its piece is the one covering its first day (forward: the piece built for
+            // it; replay: the frozen piece its profile was built from), so its per-segment calls carry that
+            // piece's configuration (ADR-043 D12).
+            var segmentConfig = ConfigCovering(pieces, configs, segment.StartDate)
+                ?? throw new InvalidOperationException(
+                    $"PeriodCalculationService evaluation invariant violated: no timeline piece covers the first day " +
+                    $"of EMPLOYED segment {s}. ManifestId={plan.ManifestId}.");
+
             var lane = await EvaluateSegmentAsync(
-                client, segmentProfile, segmentEntries, segmentAbsences,
+                client, segmentProfile, segmentConfig, segmentEntries, segmentAbsences,
                 segment.StartDate, segment.EndDate, ct);
             callsAttempted += lane.Attempted;
             callsFailed += lane.Failures;
@@ -2262,8 +2403,9 @@ public sealed class PeriodCalculationService
     /// Before this task it was asked once, with the request body's organisation, agreement and OK version; every other
     /// planning input already came from the dated record (R-10, R-11, R-12, A4), so a stale body for a past
     /// month could invent a boundary (cutting the month for nothing) or miss one (calculating as one piece a
-    /// month that should split), and the manifest's cause summary would record the wrong reason. No paid
-    /// figure depends on it: the Rule Engine applies no local profile, so a profile is a boundary source only.
+    /// month that should split), and the manifest's cause summary would record the wrong reason. Each part is
+    /// priced on the local profile in force on its first day (the configuration resolved per piece, ADR-043 D12),
+    /// so a missed activation would price part of a month under the wrong profile.
     /// A replay never comes here (it loads the frozen plan and never plans).
     /// </para>
     ///
@@ -2375,13 +2517,15 @@ public sealed class PeriodCalculationService
         var activations = new List<(DateOnly EffectiveFrom, Guid ProfileId)>();
         foreach (var run in runs)
         {
-            activations.AddRange(await _localAgreementProfileRepo.GetActivationsInPeriodAsync(
-                run.Key.OrgId,
-                run.Key.AgreementCode,
-                run.Key.OkVersion,
-                run.AfterExclusive,
-                run.ToInclusive,
-                ct));
+            activations.AddRange(await ConfigDatesOrUnavailableAsync(
+                () => _localAgreementProfileRepo.GetActivationsInPeriodAsync(
+                    run.Key.OrgId,
+                    run.Key.AgreementCode,
+                    run.Key.OkVersion,
+                    run.AfterExclusive,
+                    run.ToInclusive,
+                    ct),
+                LocalProfileActivationDates));
         }
 
         // Already in date order (disjoint ascending runs, each read ordered by effective_from); the stable
@@ -2483,8 +2627,8 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
-    /// Reads only. Each list is empty when its repository is not wired: direct-construction fixtures, and the
-    /// payroll host until TASK-14825 registers the two repositories (DV-8).
+    /// Reads only. Each list is empty when its repository is not wired (direct-construction fixtures); the payroll
+    /// host registers both (QUAL-184).
     /// </para>
     /// </summary>
     private async Task<(IReadOnlyList<(DateOnly Date, string AgreementCode)> Promotions,
@@ -2585,8 +2729,10 @@ public sealed class PeriodCalculationService
                 configCuts, (record, day) => (record.AgreementCode, OkVersionResolver.ResolveVersion(day)));
             foreach (var run in runs)
             {
-                var dates = await _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
-                    run.Key.AgreementCode, run.Key.OkVersion, run.AfterExclusive, run.ToInclusive, ct);
+                var dates = await ConfigDatesOrUnavailableAsync(
+                    () => _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
+                        run.Key.AgreementCode, run.Key.OkVersion, run.AfterExclusive, run.ToInclusive, ct),
+                    AgreementConfigVersionDates);
                 promotions.AddRange(dates.Select(date => (date, run.Key.AgreementCode)));
             }
         }
@@ -2600,9 +2746,11 @@ public sealed class PeriodCalculationService
                     : (record.AgreementCode, OkVersionResolver.ResolveVersion(day), record.Position));
             foreach (var run in runs)
             {
-                var dates = await _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
-                    run.Key.AgreementCode, run.Key.OkVersion, run.Key.PositionCode,
-                    run.AfterExclusive, run.ToInclusive, ct);
+                var dates = await ConfigDatesOrUnavailableAsync(
+                    () => _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
+                        run.Key.AgreementCode, run.Key.OkVersion, run.Key.PositionCode,
+                        run.AfterExclusive, run.ToInclusive, ct),
+                    PositionOverrideVersionDates);
                 overrideDates.AddRange(dates.Select(date => (date, run.Key.PositionCode)));
             }
         }
@@ -2665,13 +2813,15 @@ public sealed class PeriodCalculationService
     /// faithfully (S145 / TASK-14513, refinement A7; rulings R14, R15, R41, R42).
     ///
     /// <para>
-    /// <b>Plain language.</b> A payslip must be provable after the fact. A replay never asks today's world
-    /// anything that could have changed since the month was calculated. It reads what the calculation recorded
-    /// about its own inputs on the manifest (<see cref="PlanInputs"/>), re-reads the hours rows the calculation
-    /// recorded (by their event ids, so a row the employee has since re-saved is still found), and re-runs the
-    /// evaluation. Inputs that are data are checked against their record; inputs that are code (agreement
-    /// configs, the arithmetic version) are checked through the fingerprint and marker the Rule Engine returns.
-    /// Anything that no longer matches refuses the replay by name instead of producing a different figure.
+    /// <b>Plain language.</b> A payslip must be provable after the fact. A replay asks today's world nothing
+    /// about the employee that could have changed since the month was calculated. It reads what the calculation
+    /// recorded about its own inputs on the manifest (<see cref="PlanInputs"/>), re-reads the hours rows the
+    /// calculation recorded (by their event ids, so a row the employee has since re-saved is still found), and
+    /// re-runs the evaluation. Inputs that are data are checked against their record. The agreement configurations
+    /// are not on the manifest yet (TASK-14830 freezes them): until then they are looked up again for the keys
+    /// frozen on each piece, and they and the arithmetic version are checked through the fingerprint and marker
+    /// the Rule Engine returns. Anything that no longer matches refuses the replay by name instead of producing a
+    /// different figure.
     /// </para>
     ///
     /// <para>
@@ -2683,12 +2833,18 @@ public sealed class PeriodCalculationService
     /// <item>no (complete) frozen inputs on the manifest — every pre-S145 manifest, the ADR-016:242 exception —
     /// → <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
     /// <item>the plan from the manifest (<see cref="PeriodPlanner.FromManifest"/>), and the evaluation inputs from
-    /// the frozen pieces and cutoff alone (<see cref="FrozenEvaluationInputs"/>);</item>
+    /// the frozen pieces and cutoff alone (<see cref="FrozenEvaluationInputs"/>); a piece without a frozen
+    /// organisation → <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
     /// <item>the recorded hours rows, re-read by event id (<see cref="IRecordedHoursReader.ReadByEventIdsAsync"/>,
     /// current or superseded); a genuinely absent id → <see cref="ReplayRefusedException.EntriesMissing"/>;</item>
     /// <item>the digests recomputed over the rows as re-read →
     /// <see cref="ReplayRefusedException.EntriesDigestMismatch"/> /
     /// <see cref="ReplayRefusedException.AbsencesDigestMismatch"/>;</item>
+    /// <item>each piece's agreement configuration, re-resolved from its frozen keys
+    /// (<see cref="ResolvePieceConfigsAsync"/>; until TASK-14830 freezes them, wave-5 batch-C ruling 11): no
+    /// published version in force today → <see cref="ReplayRefusedException.ConfigChanged"/>; an unreadable
+    /// configuration database → the lookup's <see cref="ConfigLookupUnavailableException"/>; a service built
+    /// without the lookup → <see cref="InvalidOperationException"/>;</item>
     /// <item>evaluation (<see cref="EvaluateAsync"/>, no manifest minted), on the frozen opening balance;</item>
     /// <item>the engine's marker, then its fingerprints, compared with the record →
     /// <see cref="ReplayRefusedException.EvaluationModelChanged"/> /
@@ -2700,13 +2856,13 @@ public sealed class PeriodCalculationService
     ///
     /// <para>
     /// <b>Evaluation only, never admission (R42).</b> A replay proves what WAS calculated. Whether the previous
-    /// month is approved TODAY, today's employment window, today's agreement or profile history and today's
-    /// hours rows cannot change whether that result is reproducible. So a replay never consults the
+    /// month is approved TODAY, today's employment window, today's agreement, profile or organisation history and
+    /// today's hours rows cannot change whether that result is reproducible. So a replay never consults the
     /// <see cref="IPriorPeriodApprovalReader"/>, the agreement-code repository, the
-    /// <see cref="IEmploymentWindowResolver"/>, the <see cref="IEmploymentProfileResolver"/> or
-    /// <see cref="IRecordedHoursReader.ReadCurrentAsync"/>, and a replay on a service built without an approval
-    /// reader succeeds. The planner's refusal, the week check and the months-in-order check are calculation
-    /// rules.
+    /// <see cref="IEmploymentWindowResolver"/>, the <see cref="IEmploymentProfileResolver"/>, the
+    /// <see cref="IOrganisationHistoryReader"/> or <see cref="IRecordedHoursReader.ReadCurrentAsync"/>, and a replay
+    /// on a service built without an approval reader succeeds. The planner's refusal, the week check and the
+    /// months-in-order check are calculation rules.
     /// </para>
     ///
     /// <para>
@@ -2749,8 +2905,9 @@ public sealed class PeriodCalculationService
                     : "the manifest's frozen inputs are incomplete (a member is null or empty)");
 
         // 2. The plan (today's rule set re-asserts the D9 invariants, as on a forward calculation) and the
-        //    evaluation inputs from the frozen pieces and cutoff alone: no employment window, no profile or
-        //    agreement history, no dated profile read (R41, R42).
+        //    evaluation inputs from the frozen pieces and cutoff alone: no employment window, no profile,
+        //    agreement or organisation history, no dated profile read (R41, R42). Their configurations follow
+        //    the hours checks (step 3b), so the refusal order is unchanged.
         var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
         var inputs = FrozenEvaluationInputs(plan, frozen);
 
@@ -2759,6 +2916,34 @@ public sealed class PeriodCalculationService
             plan.EmployeeId, frozen.EntryEventIds, frozen.AbsenceEventIds, ct);
         EnsureRecordedRowsPresent(plan, frozen, recordedHours);
         EnsureHoursDigestsMatch(plan, frozen, recordedHours);
+
+        // 3b. The agreement configurations (ADR-043 D12; wave-5 batch-C ruling 11): the engine computes only with
+        //     the configuration each piece carries, and a manifest does not hold them yet (TASK-14830 freezes them).
+        //     Until then each frozen piece's configuration is re-resolved through the lookup from the piece's frozen
+        //     keys alone (its organisation, agreement, position and the OK version of its first day), so no profile,
+        //     agreement-code or organisation history is read (R42). A key with no published version in force today
+        //     cannot reproduce the calculation: refused as a changed configuration. One that resolves to different
+        //     values is refused after evaluation by the fingerprint check (step 5). A read failure propagates as the
+        //     lookup's own exception. (Every piece carries an organisation: FrozenEvaluationInputs refused the rest.)
+        try
+        {
+            inputs = inputs with
+            {
+                Configs = await ResolvePieceConfigsAsync(
+                    inputs.Pieces,
+                    () => Refuse(
+                        ReplayRefusedException.ManifestWithoutFrozenInputs, manifestId, plan.EmployeeId,
+                        "a frozen piece carries no organisation"),
+                    ct),
+            };
+        }
+        catch (NoConfigInForceException)
+        {
+            throw Refuse(
+                ReplayRefusedException.ConfigChanged, manifestId, plan.EmployeeId,
+                "no published agreement configuration is in force today for a frozen piece's agreement, OK version, " +
+                "position and organisation");
+        }
 
         // 4. Evaluation only (R42), on the frozen opening balance. emitAuditEvents:false — a replay re-evaluates
         //    but does NOT mint a new SegmentManifestCreated or PeriodCalculationCompleted event (ADR-016 D10
@@ -2815,9 +3000,28 @@ public sealed class PeriodCalculationService
     /// frozen record with no piece covering an EMPLOYED segment's start cannot be replayed faithfully, so it is
     /// refused as a manifest without (complete) frozen inputs. A forward calculation always freezes one piece per
     /// EMPLOYED segment, starting on that segment's first day, so that is a damaged record, never a month.
+    ///
+    /// <para>
+    /// <b>The organisation (wave-5 batch-C ruling 11).</b> A replay re-resolves each piece's configuration from the
+    /// keys frozen on it (<see cref="ResolvePieceConfigsAsync"/>, after the hours checks), the organisation among
+    /// them, because the local profile is chosen by organisation. A piece that carries none cannot be re-resolved
+    /// without reading today's organisation history, which a replay never does (R42), so it is refused here, with
+    /// the frozen-inputs checks, as a manifest without (complete) frozen inputs: TASK-14830's final rule, early.
+    /// The configurations themselves are left empty here and set by the replay.
+    /// </para>
     /// </summary>
     private EvaluationInputs FrozenEvaluationInputs(PlannedCalculation plan, PlanInputs frozen)
     {
+        foreach (var frozenPiece in frozen.Pieces)
+        {
+            if (string.IsNullOrEmpty(frozenPiece.OrgId))
+            {
+                throw Refuse(
+                    ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
+                    "a frozen piece carries no organisation, so its agreement configuration cannot be re-resolved");
+            }
+        }
+
         var segmentProfiles = new EmploymentProfile?[plan.Segments.Count];
         for (int s = 0; s < plan.Segments.Count; s++)
         {
@@ -2839,16 +3043,18 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// S145 / TASK-14513 — the employment profile a replay evaluates a segment with, built from the frozen piece
-    /// covering it: the piece's part-time fraction, agreement code and position, and the OK version of
-    /// <paramref name="asOf"/> (a pure function of the date, ADR-003). These are the profile fields the Rule
-    /// Engine reads (agreement, OK version and position select the config; the absence rule scales by the
-    /// fraction); the wage-type mapping reads only the employee id.
+    /// covering it: the piece's part-time fraction, agreement code, position and organisation, and the OK version
+    /// of <paramref name="asOf"/> (a pure function of the date, ADR-003). The engine reads the agreement and OK
+    /// version (checked against the configuration the call carries, which the same piece's keys selected) and the
+    /// fraction (the absence rule scales by it); the wage-type mapping reads only the employee id.
     ///
     /// <para>
-    /// <b>What is not frozen.</b> The employment category and the organisation are read by no rule and by no
-    /// export line, so a piece does not carry them (refinement A7 freezes the per-piece inputs rules read; a rule
-    /// that starts reading another field adds it to the piece and bumps the evaluation-model marker). The replay
-    /// profile leaves the category empty and the organisation unset rather than guessing values.
+    /// <b>What is frozen, and what is not.</b> The organisation is frozen on the piece (wave-5 batch-C ruling 11)
+    /// because it selects the local profile when the replay re-resolves the configuration, and the profile carries
+    /// it so the per-segment calls run under the same keys as the piece; no rule reads it. The employment category
+    /// is read by no rule and by no export line, so a piece does not carry it (refinement A7 freezes the per-piece
+    /// inputs rules read; a rule that starts reading another field adds it to the piece and bumps the
+    /// evaluation-model marker); the replay profile leaves it empty rather than guessing a value.
     /// </para>
     /// </summary>
     private static EmploymentProfile ProfileFromPiece(string employeeId, FrozenPiece piece, DateOnly asOf) => new()
@@ -2860,7 +3066,7 @@ public sealed class PeriodCalculationService
         IsPartTime = piece.PartTimeFraction < 1.0m,
         PartTimeFraction = piece.PartTimeFraction,
         Position = piece.Position,
-        OrgId = null,
+        OrgId = piece.OrgId,
     };
 
     /// <summary>
@@ -3396,12 +3602,15 @@ public sealed class PeriodCalculationService
     /// feeds them to the planner; admission's checks and the per-plan lane's timeline use the same values.
     /// A transfer date is cut wherever a profile date is (the <c>EmployeeProfileChange</c> boundary, the
     /// context pieces) and also cuts the local-profile runs, so each part has one institution.
+    /// <see cref="SameAgreementCodeRowStarts"/> is the subset of the agreement-code dates on which the code
+    /// provably does not change; only the week check reads it (<see cref="EnsureNoMidWeekAgreementChange"/>).
     /// </summary>
     private sealed record PlanHistories(
         IReadOnlyList<EmploymentWindow>? EmploymentWindows,
         IReadOnlyList<DateOnly>? EmployeeProfileEffectiveDates,
         IReadOnlyList<DateOnly>? AgreementCodeEffectiveDates,
-        IReadOnlyList<DateOnly> OrganisationEffectiveDates)
+        IReadOnlyList<DateOnly> OrganisationEffectiveDates,
+        IReadOnlySet<DateOnly> SameAgreementCodeRowStarts)
     {
         /// <summary>
         /// S145 / TASK-14512 (A4) — the employee's dated record at each EMPLOYED candidate segment start,
@@ -3434,6 +3643,12 @@ public sealed class PeriodCalculationService
     /// context days. The planner turns only dates inside <c>(periodStart, periodEnd]</c> into
     /// boundaries (<c>BoundaryDetector.IsInsidePeriod</c>), so the extra dates change no plan and are
     /// not filtered twice. Both reads skip when their repository is not wired.</item>
+    /// <item><b>The same-code row starts</b> — each agreement-code date <c>d</c> on which the dated agreement-code
+    /// read (<see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/>, the read the profile resolver builds every
+    /// piece's agreement from) returns a code for <c>d − 1</c> and the same code for <c>d</c>: a second history row
+    /// with the same agreement, which the week check does not count as a change. A date with no code for
+    /// <c>d − 1</c> is not in the set, so it stays a change (the repository's "over-detect is safe" asymmetry).
+    /// The planner's boundary feed, the agreement-code dates themselves, is unchanged.</item>
     /// <item><b>The organisation change dates</b> (the transfers, ADR-040 D4) — over the same days as the
     /// two reads above, through <see cref="IOrganisationHistoryReader"/>. This read never skips: the method
     /// first refuses a service built without the reader (<see cref="RequireOrganisationHistoryReader"/>),
@@ -3464,16 +3679,31 @@ public sealed class PeriodCalculationService
         }
 
         IReadOnlyList<DateOnly>? agreementDates = null;
+        var sameCodeRowStarts = new HashSet<DateOnly>();
         if (_userAgreementCodeRepo is not null)
         {
             agreementDates = await _userAgreementCodeRepo.GetEffectiveFromDatesAsync(
                 employeeId, afterExclusive: afterExclusive, toInclusive: periodEnd, ct);
+
+            // The week check's rule is "a week cannot be judged under two agreements" (Q5 (c)), so a row start is a
+            // change only when the code differs across it (QUAL-209). Only an affirmatively equal code clears a date:
+            // no code for d − 1 keeps it a change. The date never resolves at DateOnly.MinValue.
+            foreach (var date in agreementDates)
+            {
+                if (date > DateOnly.MinValue
+                    && await _userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, date.AddDays(-1), ct) is { } before
+                    && string.Equals(
+                        before, await _userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, date, ct), StringComparison.Ordinal))
+                {
+                    sameCodeRowStarts.Add(date);
+                }
+            }
         }
 
         var organisationDates = await organisationHistoryReader.GetEffectiveFromDatesAsync(
             employeeId, afterExclusive: afterExclusive, toInclusive: periodEnd, ct);
 
-        return new PlanHistories(windows, profileDates, agreementDates, organisationDates);
+        return new PlanHistories(windows, profileDates, agreementDates, organisationDates, sameCodeRowStarts);
     }
 
     /// <summary>
@@ -3545,8 +3775,10 @@ public sealed class PeriodCalculationService
     /// <para>
     /// <b>Where a piece ends.</b> At every profile, agreement-code or organisation change (a transfer)
     /// inside the context days, so each piece carries one fraction, agreement and position and lies in one
-    /// institution; each piece's profile is resolved at its first day by the same dated resolution as a
-    /// segment's (<see cref="ResolveProfileAtAsync"/>),
+    /// institution, and at every new configuration version or local-profile activation of that key there
+    /// (<see cref="ContextVersionDatesAsync"/>, ruling 13), so each piece is one run with one configuration
+    /// (ADR-043 D12); each piece's profile, organisation included, is resolved at its first day by the same dated
+    /// resolution as a segment's (<see cref="ResolveProfileAtAsync"/>),
     /// fail-closed on a missing employment record. A change ON the period's first day needs no
     /// split here: the first segment starts there.
     /// </para>
@@ -3580,17 +3812,118 @@ public sealed class PeriodCalculationService
         }
         edges.Add(plan.PeriodStart);
 
+        // Wave-5 batch-C ruling 13 (ADR-043 D12): each stretch between the edges above has one key (agreement, OK
+        // version, position, organisation); a new published configuration version, position-override version or
+        // local-profile activation of that key inside the stretch also ends a piece, so every context piece is one
+        // run and is priced on the configuration in force on its own days. The cuts come from the three date reads
+        // only (ContextVersionDatesAsync); the planner reads the same sources for the period itself.
+        var stretchStart = contextStart;
+        foreach (var stretchEnd in edges.ToList())
+        {
+            foreach (var d in await ContextVersionDatesAsync(callerProfile, stretchStart, stretchEnd.AddDays(-1), plan, ct))
+                edges.Add(d);
+            stretchStart = stretchEnd;
+        }
+
         var from = contextStart;
         foreach (var edge in edges)
         {
             var piecesProfile = await ResolveProfileAtAsync(callerProfile, from, plan, ct);
             pieces.Add(new FrozenPiece(
                 from, edge.AddDays(-1),
-                piecesProfile.PartTimeFraction, piecesProfile.AgreementCode, piecesProfile.Position));
+                piecesProfile.PartTimeFraction, piecesProfile.AgreementCode, piecesProfile.Position)
+            { OrgId = piecesProfile.OrgId });
             from = edge;
         }
 
         return pieces;
+    }
+
+    /// <summary>
+    /// Ruling 13 — the dates inside <c>(<paramref name="from"/>, <paramref name="to"/>]</c>, a stretch of context
+    /// days with one key, on which a new configuration of that key comes into force: a published agreement-config
+    /// version's applies-from date (<see cref="AgreementConfigRepository.GetPublishedAppliesFromDatesAsync"/>), a
+    /// position-override version's (<see cref="PositionOverrideRepository.GetVersionAppliesFromDatesAsync"/>, when
+    /// the record has a position) and a local-profile activation of the record's organisation
+    /// (<see cref="LocalAgreementProfileRepository.GetActivationsInPeriodAsync"/>, when it has one). The key is the
+    /// employee's dated record on <paramref name="from"/> (<see cref="ResolveProfileAtAsync"/>, the read the piece
+    /// itself is built from) with that day's OK version. The lower bound is strict, as in the planner's reads: a
+    /// version dated the stretch's first day is its starting state. Reads only through the repositories this
+    /// service already holds; with none wired (direct-construction fixtures) it reads nothing, not even the record.
+    /// </summary>
+    private async Task<IReadOnlyList<DateOnly>> ContextVersionDatesAsync(
+        EmploymentProfile callerProfile, DateOnly from, DateOnly to, PlannedCalculation plan, CancellationToken ct)
+    {
+        var dates = new List<DateOnly>();
+        if (to <= from
+            || (_agreementConfigRepo is null && _positionOverrideRepo is null && _localAgreementProfileRepo is null))
+        {
+            return dates;
+        }
+
+        var record = await ResolveProfileAtAsync(callerProfile, from, plan, ct);
+        var okVersion = OkVersionResolver.ResolveVersion(from);
+
+        if (_agreementConfigRepo is not null)
+        {
+            dates.AddRange(await ConfigDatesOrUnavailableAsync(
+                () => _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
+                    record.AgreementCode, okVersion, from, to, ct),
+                AgreementConfigVersionDates));
+        }
+
+        if (_positionOverrideRepo is not null && !string.IsNullOrEmpty(record.Position))
+        {
+            dates.AddRange(await ConfigDatesOrUnavailableAsync(
+                () => _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
+                    record.AgreementCode, okVersion, record.Position, from, to, ct),
+                PositionOverrideVersionDates));
+        }
+
+        if (_localAgreementProfileRepo is not null && !string.IsNullOrEmpty(record.OrgId))
+        {
+            var activations = await ConfigDatesOrUnavailableAsync(
+                () => _localAgreementProfileRepo.GetActivationsInPeriodAsync(
+                    record.OrgId, record.AgreementCode, okVersion, from, to, ct),
+                LocalProfileActivationDates);
+            dates.AddRange(activations.Select(a => a.EffectiveFrom));
+        }
+
+        return dates;
+    }
+
+    /// <summary>The three configuration-date sources, named in <see cref="ConfigLookupUnavailableException.Layer"/>
+    /// and the server log (never in a response body), in the lookup's layer names with the Backend's
+    /// "version-date" suffix (<c>DailyNormCalculator</c>), so one search finds both hosts' refusals.</summary>
+    private const string AgreementConfigVersionDates = "central agreement configuration version-date";
+    private const string PositionOverrideVersionDates = "position override version-date";
+    private const string LocalProfileActivationDates = "local agreement profile version-date";
+
+    /// <summary>
+    /// Runs one configuration-date read: the agreement-config, position-override and local-profile version dates
+    /// that cut the period (<see cref="ReadLocalProfileActivationsAsync"/>, <see cref="ReadConfigVersionDatesAsync"/>)
+    /// and the context days (<see cref="ContextVersionDatesAsync"/>). These reads decide where one configuration
+    /// stops and the next starts, so an unreadable configuration database is the lookup's own outcome: a database
+    /// error (<see cref="DbException"/>, which <c>NpgsqlException</c> is) becomes
+    /// <see cref="ConfigLookupUnavailableException"/> with the original as its inner exception, which both
+    /// calculating routes answer with their fixed 503 <c>payroll-config-unavailable</c> (ADR-043 D12, P-13; wave-5
+    /// batch-C ruling 12). <see cref="OperationCanceledException"/> and every other exception (a defect, not an
+    /// outage) propagate unchanged, as in the lookup's own read (<c>ConfigResolutionService</c>) and the Backend's
+    /// date reads (<c>DailyNormCalculator</c>). The reads run while the plan is built, before any rule-engine call
+    /// or write, so nothing is calculated or written.
+    /// </summary>
+    private async Task<T> ConfigDatesOrUnavailableAsync<T>(Func<Task<T>> read, string source)
+    {
+        try
+        {
+            return await read();
+        }
+        catch (DbException ex)
+        {
+            _logger.LogWarning(ex,
+                "The {Source} read failed; the calculation is refused as payroll-config-unavailable", source);
+            throw new ConfigLookupUnavailableException(source, ex);
+        }
     }
 
     /// <summary>
@@ -3830,6 +4163,15 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
+    /// <b>The same agreement is not a change (QUAL-209).</b> A date in
+    /// <see cref="PlanHistories.SameAgreementCodeRowStarts"/> is dropped as well: the dated agreement-code read gives
+    /// the same code for <c>d − 1</c> as for <c>d</c>, so the row starting there continues the agreement (a
+    /// backdated hire's two rows, a gap insert next to a same-code row). Only that affirmative match drops a date; a
+    /// date with no code for <c>d − 1</c> stays a change. The planner's segments are cut at every row start as
+    /// before; only this refusal reads the codes.
+    /// </para>
+    ///
+    /// <para>
     /// Pure over the histories: it reads nothing and writes nothing. The exception's message names the
     /// employee, the period and the change date for diagnosis; the host's 422 is built without it.
     /// </para>
@@ -3839,12 +4181,17 @@ public sealed class PeriodCalculationService
         if (histories.AgreementCodeEffectiveDates is not { Count: > 0 } dates)
             return;
 
-        // R43: drop the hire-dated rows — a date whose previous day the employee was not employed on.
+        // R43: drop the hire-dated rows — a date whose previous day the employee was not employed on. QUAL-209: drop
+        // the rows that continue the same agreement.
         var changes = new List<DateOnly>(dates.Count);
         foreach (var date in dates)
         {
-            if (date > DateOnly.MinValue && IsEmployedOn(histories.EmploymentWindows, date.AddDays(-1)))
+            if (date > DateOnly.MinValue
+                && IsEmployedOn(histories.EmploymentWindows, date.AddDays(-1))
+                && !histories.SameAgreementCodeRowStarts.Contains(date))
+            {
                 changes.Add(date);
+            }
         }
         if (changes.Count == 0)
             return;
@@ -3958,6 +4305,21 @@ public sealed class PeriodCalculationService
         {
             if (day >= piece.From && day <= piece.To)
                 return piece;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The configuration of the first of <paramref name="pieces"/> covering <paramref name="day"/> (the piece
+    /// <see cref="PieceCovering"/> finds), from the index-aligned <paramref name="configs"/>, or <c>null</c>.
+    /// </summary>
+    private static AgreementRuleConfig? ConfigCovering(
+        IReadOnlyList<FrozenPiece> pieces, IReadOnlyList<AgreementRuleConfig> configs, DateOnly day)
+    {
+        for (var i = 0; i < pieces.Count; i++)
+        {
+            if (day >= pieces[i].From && day <= pieces[i].To)
+                return configs[i];
         }
         return null;
     }
@@ -4133,10 +4495,13 @@ public sealed class PeriodCalculationService
     /// absence (<c>/api/rules/evaluate-absence</c>), run in parallel. Since S145 / TASK-14511 the
     /// norm check, overtime / merarbejde and flex are NOT evaluated here: the per-plan lane evaluates
     /// them once for the whole plan, week by week, and there is no per-segment flex carry any more.
+    /// The two <c>evaluate</c> calls carry <paramref name="segmentConfig"/>, the configuration resolved for the
+    /// segment's run (ADR-043 D12); the absence route reads no configuration and gets none.
     /// </summary>
     private async Task<SegmentLaneResults> EvaluateSegmentAsync(
         HttpClient client,
         EmploymentProfile segmentProfile,
+        AgreementRuleConfig segmentConfig,
         IReadOnlyList<TimeEntry> segmentEntries,
         IReadOnlyList<AbsenceEntry> segmentAbsences,
         DateOnly segmentStart,
@@ -4144,9 +4509,9 @@ public sealed class PeriodCalculationService
         CancellationToken ct)
     {
         var supplementTask = CallTimeRuleAsync(
-            client, SupplementRuleId, segmentProfile, segmentEntries, segmentStart, segmentEnd, ct);
+            client, SupplementRuleId, segmentProfile, segmentConfig, segmentEntries, segmentStart, segmentEnd, ct);
         var onCallTask = CallTimeRuleAsync(
-            client, OnCallRuleId, segmentProfile, segmentEntries, segmentStart, segmentEnd, ct);
+            client, OnCallRuleId, segmentProfile, segmentConfig, segmentEntries, segmentStart, segmentEnd, ct);
         var absenceTask = CallAbsenceRuleAsync(
             client, segmentProfile, segmentAbsences, segmentStart, segmentEnd, ct);
 
@@ -4328,10 +4693,18 @@ public sealed class PeriodCalculationService
     // Private helpers — HTTP calls to Rule Engine (PAT-005)
     // ---------------------------------------------------------------
 
+    /// <summary>
+    /// One per-segment <c>POST /api/rules/evaluate</c> (supplement or on-call). The body is the engine's
+    /// <c>EvaluateRequest</c>: the rule id, the segment's profile, its entries, its dates and <c>config</c>, the
+    /// configuration resolved for the segment's run, which the engine computes with (ADR-043 D12; a request without
+    /// one, or with another agreement's or OK version's, is refused by the engine's fixed 400). Written with
+    /// <see cref="EngineRequestOptions"/>, so the configuration's enum goes as a number (ruling 15).
+    /// </summary>
     private async Task<CalculationResult?> CallTimeRuleAsync(
         HttpClient client,
         string ruleId,
         EmploymentProfile profile,
+        AgreementRuleConfig config,
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,
         DateOnly periodEnd,
@@ -4345,11 +4718,12 @@ public sealed class PeriodCalculationService
                 profile,
                 entries,
                 periodStart,
-                periodEnd
+                periodEnd,
+                config,
             };
 
             var response = await client.PostAsJsonAsync(
-                $"{_ruleEngineUrl}/api/rules/evaluate", payload, JsonOptions, ct);
+                $"{_ruleEngineUrl}/api/rules/evaluate", payload, EngineRequestOptions, ct);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -4420,7 +4794,9 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// S145 / TASK-14511 — the per-plan lane's one rule-engine call:
     /// <c>POST /api/rules/evaluate-timeline</c>, which evaluates overtime / merarbejde, the norm check
-    /// and flex for the whole plan, week by week. Returns the engine's response, or <c>null</c> when the
+    /// and flex for the whole plan, week by week, each piece with the configuration resolved for it
+    /// (<paramref name="configs"/>, index-aligned with <paramref name="pieces"/>; ADR-043 D12). Returns the
+    /// engine's response, or <c>null</c> when the
     /// call failed — the same failure contract as the per-segment calls: never silent (a bounded
     /// diagnostic is logged and the calculation is refused, S145 ruling R-6), and never a guess (no
     /// result is synthesized for the three rules).
@@ -4451,6 +4827,7 @@ public sealed class PeriodCalculationService
         DateOnly periodEnd,
         DateOnly? settlementCutoff,
         IReadOnlyList<FrozenPiece> pieces,
+        IReadOnlyList<AgreementRuleConfig> configs,
         IReadOnlyList<TimeEntry> entries,
         IReadOnlyList<AbsenceEntry> absences,
         decimal openingFlexBalance,
@@ -4458,25 +4835,40 @@ public sealed class PeriodCalculationService
     {
         try
         {
-            // The body of EvaluateTimelineRequest (Rule Engine contract, TASK-14505). Each piece
-            // serializes as { from, to, partTimeFraction, agreementCode, position }; the OK version is
-            // not sent — the engine derives it from the dates and splits a piece at 1 April itself.
+            // The body of EvaluateTimelineRequest (Rule Engine contract, TASK-14505). Each piece is sent as
+            // { from, to, partTimeFraction, agreementCode, position, config }: the frozen piece's values and the
+            // configuration resolved for it (configs[i] for pieces[i], ADR-043 D12), which the engine computes with.
+            // The piece's organisation is not sent: no rule reads it (it is frozen for replay's re-resolution only,
+            // so the evaluation-model marker does not move). The OK version is not sent either: the engine derives
+            // it from the dates and refuses a piece that spans two OK versions or whose config names another
+            // agreement or OK version (its fixed 400); every piece of a calendar month lies in one OK version,
+            // because the plan is cut at 1 April and the month's context days lie in the month before it (both
+            // calculating routes take whole calendar months only, R-47).
             // S146 TASK-14605: the engine's wire field keeps its name, previousFlexBalance; its value is the
-            // opening derived from the ledger (or frozen on the manifest, for a replay).
+            // opening derived from the ledger (or frozen on the manifest, for a replay). Written with
+            // EngineRequestOptions, so the configuration's enum goes as a number (ruling 15).
             var payload = new
             {
                 employeeId,
                 periodStart,
                 periodEnd,
                 settlementCutoff,
-                pieces,
+                pieces = pieces.Select((piece, i) => new
+                {
+                    piece.From,
+                    piece.To,
+                    piece.PartTimeFraction,
+                    piece.AgreementCode,
+                    piece.Position,
+                    Config = configs[i],
+                }),
                 entries,
                 absences,
                 previousFlexBalance = openingFlexBalance,
             };
 
             var response = await client.PostAsJsonAsync(
-                $"{_ruleEngineUrl}/api/rules/evaluate-timeline", payload, JsonOptions, ct);
+                $"{_ruleEngineUrl}/api/rules/evaluate-timeline", payload, EngineRequestOptions, ct);
 
             if (!response.IsSuccessStatusCode)
             {

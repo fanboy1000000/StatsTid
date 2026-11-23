@@ -1,4 +1,3 @@
-using StatsTid.RuleEngine.Api.Config;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
@@ -204,19 +203,25 @@ public sealed class RuleRegistry
     /// <summary>
     /// Backward-compatible Evaluate for simple time-entry rules (NormCheck and the
     /// other config-aware time rules). Routes both legacy and S20-decomposed norm ids
-    /// to the appropriate entry point.
+    /// to the appropriate entry point, with the caller's <paramref name="config"/>. The config is
+    /// checked before the rule id (<see cref="ProfileConfig"/>), so a request without one, or with
+    /// one that is not the profile's own, is refused whatever rule it names.
     /// </summary>
+    /// <exception cref="AgreementConfigRefusedException">The config is missing or not the profile's own.</exception>
     public CalculationResult Evaluate(
         string ruleId,
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,
-        DateOnly periodEnd)
+        DateOnly periodEnd,
+        AgreementRuleConfig? config)
     {
+        var checkedConfig = ProfileConfig(profile, config);
+
         // All time rules are now config-aware
         if (ConfigAwareTimeRules.Contains(ruleId))
         {
-            return EvaluateTimeRule(ruleId, profile, entries, periodStart, periodEnd);
+            return EvaluateTimeRule(ruleId, profile, entries, periodStart, periodEnd, checkedConfig);
         }
 
         return new CalculationResult
@@ -243,27 +248,34 @@ public sealed class RuleRegistry
     /// <c>NORM_CHECK_ANNUAL</c> → <see cref="TimelineNormMode.Annual"/>. Supplement, on-call,
     /// call-in and travel rules are untouched.
     /// </para>
+    ///
+    /// <para>
+    /// Every rule runs on the caller's <paramref name="config"/>, checked to be the profile's own
+    /// (<see cref="ProfileConfig"/>; ADR-043 D12, A-10).
+    /// </para>
     /// </summary>
+    /// <exception cref="AgreementConfigRefusedException">The config is missing or not the profile's own.</exception>
     public CalculationResult EvaluateTimeRule(
         string ruleId,
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,
-        DateOnly periodEnd)
+        DateOnly periodEnd,
+        AgreementRuleConfig? config)
     {
-        var config = AgreementConfigProvider.GetConfig(profile.AgreementCode, profile.OkVersion, profile.Position);
+        var checkedConfig = ProfileConfig(profile, config);
 
         return ruleId switch
         {
-            NormCheckRule.RuleId          => EvaluateNormOnCore(ruleId, null, profile, entries, periodStart, periodEnd, config),
-            NormCheckRule.WeeklyRuleId    => EvaluateNormOnCore(ruleId, TimelineNormMode.Weekly, profile, entries, periodStart, periodEnd, config),
-            NormCheckRule.MultiWeekRuleId => EvaluateNormOnCore(ruleId, TimelineNormMode.MultiWeek, profile, entries, periodStart, periodEnd, config),
-            NormCheckRule.AnnualRuleId    => EvaluateNormOnCore(ruleId, TimelineNormMode.Annual, profile, entries, periodStart, periodEnd, config),
-            SupplementRule.RuleId         => SupplementRule.Evaluate(profile, entries, periodStart, periodEnd, config),
-            OvertimeRule.RuleId           => EvaluateOvertimeOnCore(profile, entries, periodStart, periodEnd, config),
-            OnCallDutyRule.RuleId         => OnCallDutyRule.Evaluate(profile, entries, periodStart, periodEnd, config),
-            CallInWorkRule.RuleId         => CallInWorkRule.Evaluate(profile, entries, periodStart, periodEnd, config),
-            TravelTimeRule.RuleId         => TravelTimeRule.Evaluate(profile, entries, periodStart, periodEnd, config),
+            NormCheckRule.RuleId          => EvaluateNormOnCore(ruleId, null, profile, entries, periodStart, periodEnd, checkedConfig),
+            NormCheckRule.WeeklyRuleId    => EvaluateNormOnCore(ruleId, TimelineNormMode.Weekly, profile, entries, periodStart, periodEnd, checkedConfig),
+            NormCheckRule.MultiWeekRuleId => EvaluateNormOnCore(ruleId, TimelineNormMode.MultiWeek, profile, entries, periodStart, periodEnd, checkedConfig),
+            NormCheckRule.AnnualRuleId    => EvaluateNormOnCore(ruleId, TimelineNormMode.Annual, profile, entries, periodStart, periodEnd, checkedConfig),
+            SupplementRule.RuleId         => SupplementRule.Evaluate(profile, entries, periodStart, periodEnd, checkedConfig),
+            OvertimeRule.RuleId           => EvaluateOvertimeOnCore(profile, entries, periodStart, periodEnd, checkedConfig),
+            OnCallDutyRule.RuleId         => OnCallDutyRule.Evaluate(profile, entries, periodStart, periodEnd, checkedConfig),
+            CallInWorkRule.RuleId         => CallInWorkRule.Evaluate(profile, entries, periodStart, periodEnd, checkedConfig),
+            TravelTimeRule.RuleId         => TravelTimeRule.Evaluate(profile, entries, periodStart, periodEnd, checkedConfig),
             _ => new CalculationResult
             {
                 RuleId = ruleId,
@@ -325,8 +337,9 @@ public sealed class RuleRegistry
 
     /// <summary>
     /// R8 — what a legacy single-period call means under the weekly core: a one-piece timeline
-    /// <c>[periodStart, periodEnd]</c> at the profile's fraction and config (resolved from the
-    /// profile's own OK version, as before), with <c>SettlementCutoff = periodEnd</c>. The period
+    /// <c>[periodStart, periodEnd]</c> at the profile's fraction and the caller's config (checked
+    /// to be the profile's own, <see cref="ProfileConfig"/>), with
+    /// <c>SettlementCutoff = periodEnd</c>. The period
     /// is the settlement window: it settles the weeks whose Sunday — or, for its last week, the
     /// period's last day — lies inside it, and days outside it are not evaluated.
     /// </summary>
@@ -366,35 +379,40 @@ public sealed class RuleRegistry
 
     /// <summary>
     /// Evaluates flex balance over a legacy single period (R8: on the weekly core, one piece,
-    /// settled on the period's last day at that day's cap).
+    /// settled on the period's last day at that day's cap), with the caller's config.
     /// </summary>
+    /// <exception cref="AgreementConfigRefusedException">The config is missing or not the profile's own.</exception>
     public FlexBalanceResult EvaluateFlexBalance(
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         IReadOnlyList<AbsenceEntry> absences,
         DateOnly periodStart,
         DateOnly periodEnd,
-        decimal previousBalance) =>
-        EvaluateFlexBalanceWithPayout(profile, entries, absences, periodStart, periodEnd, previousBalance).Flex;
+        decimal previousBalance,
+        AgreementRuleConfig? config) =>
+        EvaluateFlexBalanceWithPayout(profile, entries, absences, periodStart, periodEnd, previousBalance, config).Flex;
 
     /// <summary>
     /// As <see cref="EvaluateFlexBalance"/>, plus the core's <c>FLEX_PAYOUT</c> line (dated on the
     /// settlement day, null when nothing exceeds the cap). An invalid period yields an
-    /// unsuccessful result and no payout.
+    /// unsuccessful result and no payout. The config is checked first (<see cref="ProfileConfig"/>),
+    /// so a refused config is the route's 400 with its fixed sentence, never that unsuccessful result.
     /// </summary>
+    /// <exception cref="AgreementConfigRefusedException">The config is missing or not the profile's own.</exception>
     public (FlexBalanceResult Flex, CalculationLineItem? Payout) EvaluateFlexBalanceWithPayout(
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         IReadOnlyList<AbsenceEntry> absences,
         DateOnly periodStart,
         DateOnly periodEnd,
-        decimal previousBalance)
+        decimal previousBalance,
+        AgreementRuleConfig? config)
     {
-        var config = AgreementConfigProvider.GetConfig(profile.AgreementCode, profile.OkVersion, profile.Position);
+        var checkedConfig = ProfileConfig(profile, config);
         try
         {
             var core = WeeklyTimelineCore.Evaluate(LegacyTimeline(
-                profile, entries, absences, periodStart, periodEnd, config, previousBalance, null, NormCheckRule.RuleId));
+                profile, entries, absences, periodStart, periodEnd, checkedConfig, previousBalance, null, NormCheckRule.RuleId));
             return (core.Flex, core.FlexPayout);
         }
         catch (TimelineInputException)
@@ -415,20 +433,20 @@ public sealed class RuleRegistry
     }
 
     /// <summary>
-    /// S145 / TASK-14505 — <c>POST /api/rules/evaluate-timeline</c>: resolves each request piece's
-    /// config per OK-version date (a piece crossing 1 April is split there, so the core never
-    /// resolves), runs <see cref="WeeklyTimelineCore"/>, and fingerprints exactly the configs it
-    /// resolved (<see cref="ConfigFingerprint"/>). Throws <see cref="TimelineInputException"/> for
-    /// an invalid request; the route answers 400.
+    /// S145 / TASK-14505 — <c>POST /api/rules/evaluate-timeline</c>: takes each request piece's
+    /// config from the piece (ADR-043 D12, R-8), runs <see cref="WeeklyTimelineCore"/>, and
+    /// fingerprints exactly those configs, one per piece with its agreement code, OK version and
+    /// position (<see cref="ConfigFingerprint"/>). Throws <see cref="TimelineInputException"/> for
+    /// an invalid request, with one fixed, value-free sentence (SEC-039) that the route answers as
+    /// 400; across all pieces it checks, in this order: each piece's shape; that every piece carries
+    /// a config; that each piece lies inside one OK version; that each piece's config names the
+    /// piece's agreement code and the OK version of its days (A-10).
     /// </summary>
     public TimelineEvaluation EvaluateTimeline(EvaluateTimelineRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Pieces is null)
             throw new TimelineInputException("Pieces are required.");
-
-        var resolvedPieces = new List<ResolvedPiece>();
-        var resolvedConfigs = new List<(string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)>();
 
         foreach (var piece in request.Pieces)
         {
@@ -440,16 +458,27 @@ public sealed class RuleRegistry
                 throw new TimelineInputException("Every piece needs an AgreementCode.");
             if (piece.PartTimeFraction <= 0m || piece.PartTimeFraction > 1m)
                 throw new TimelineInputException("A piece's PartTimeFraction must be greater than 0 and at most 1.");
+        }
 
-            foreach (var (from, to, okVersion) in SplitAtOkVersions(piece.From, piece.To))
-            {
-                if (!AgreementConfigProvider.HasConfig(piece.AgreementCode, okVersion))
-                    throw new TimelineInputException("No agreement configuration exists for a piece's agreement and OK version.");
+        if (request.Pieces.Any(piece => piece.Config is null))
+            throw new TimelineInputException("Every piece needs a Config.");
 
-                var config = AgreementConfigProvider.GetConfig(piece.AgreementCode, okVersion, piece.Position);
-                resolvedPieces.Add(new ResolvedPiece(from, to, piece.PartTimeFraction, config));
-                resolvedConfigs.Add((piece.AgreementCode, okVersion, piece.Position, config));
-            }
+        var okVersions = request.Pieces
+            .Select(piece => SingleOkVersion(piece.From, piece.To)
+                ?? throw new TimelineInputException("A piece may not span two OK versions."))
+            .ToList();
+
+        var resolvedPieces = new List<ResolvedPiece>();
+        var resolvedConfigs = new List<(string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)>();
+        for (var i = 0; i < request.Pieces.Count; i++)
+        {
+            var piece = request.Pieces[i];
+            var config = piece.Config!;
+            if (!IsOwnConfig(config, piece.AgreementCode, okVersions[i]))
+                throw new TimelineInputException("A piece's Config names another agreement code or OK version than the piece.");
+
+            resolvedPieces.Add(new ResolvedPiece(piece.From, piece.To, piece.PartTimeFraction, config));
+            resolvedConfigs.Add((piece.AgreementCode, okVersions[i], piece.Position, config));
         }
 
         var core = WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
@@ -499,6 +528,114 @@ public sealed class RuleRegistry
 
         return runs;
     }
+
+    // -----------------------------------------------------------------------------
+    // The agreement configuration a request hands the engine (ADR-043 D12, R-8, A-10). The
+    // engine reads no configuration of its own, so a request without one is refused rather than
+    // answered from compiled values, and a config that is not the request's own (another
+    // agreement code or OK version, compared ordinally) is refused rather than obeyed. The
+    // position is not checked: a config names none. Every refusal is one fixed, value-free
+    // sentence (SEC-039) that the route answers as 400 { success: false, error }.
+    // -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// The config of a profile-shaped request (<c>evaluate</c>, <c>evaluate-flex</c>,
+    /// <c>check-overtime-governance</c>), checked: present, then naming the profile's agreement
+    /// code and OK version. Only the profile is compared, never dates: these routes' callers send
+    /// the profile's own OK version.
+    /// </summary>
+    /// <exception cref="AgreementConfigRefusedException">The config is missing or not the profile's own.</exception>
+    public static AgreementRuleConfig ProfileConfig(EmploymentProfile profile, AgreementRuleConfig? config)
+    {
+        if (config is null)
+            throw new AgreementConfigRefusedException("An agreement configuration is required.");
+        if (!IsOwnConfig(config, profile.AgreementCode, profile.OkVersion))
+            throw new AgreementConfigRefusedException(
+                "The agreement configuration names another agreement code or OK version than the profile.");
+        return config;
+    }
+
+    /// <summary>
+    /// The config in force on each day of a <c>check-compliance</c> request, from its dated runs
+    /// (<see cref="CheckComplianceRequest.Configs"/>), checked in this order: runs present; every
+    /// run with a From on or before its To, an agreement code and a config, and no two overlapping;
+    /// every run inside one OK version; every run's config naming its agreement code and its days'
+    /// OK version; every date on or before the period's end that carries an entry or an interval
+    /// inside a run. The function returned gives a date inside a run that run's config, and a
+    /// later date (after the period's end) outside every run the latest run's: there the checks
+    /// read only a day's voluntary flag. The checks read no other date (see
+    /// <see cref="RestPeriodRule"/>), so any other date is an internal fault.
+    /// </summary>
+    /// <exception cref="AgreementConfigRefusedException">The runs are missing, malformed, over two
+    /// OK versions, not their own, or leave a day with work uncovered.</exception>
+    public static Func<DateOnly, AgreementRuleConfig> ComplianceConfigForDay(CheckComplianceRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Configs is null || request.Configs.Count == 0)
+            throw new AgreementConfigRefusedException("Configs are required.");
+
+        const string malformed =
+            "Every config run needs a From on or before its To, an AgreementCode and a Config, and runs may not overlap.";
+        if (request.Configs.Any(run => run is null || run.From is null || run.To is null || run.From > run.To
+                || string.IsNullOrWhiteSpace(run.AgreementCode) || run.Config is null))
+            throw new AgreementConfigRefusedException(malformed);
+
+        var runs = request.Configs
+            .Select(run => (From: run.From!.Value, To: run.To!.Value, AgreementCode: run.AgreementCode!, Config: run.Config!))
+            .OrderBy(run => run.From)
+            .ToList();
+        for (var i = 1; i < runs.Count; i++)
+        {
+            if (runs[i].From <= runs[i - 1].To)
+                throw new AgreementConfigRefusedException(malformed);
+        }
+
+        var okVersions = runs
+            .Select(run => SingleOkVersion(run.From, run.To)
+                ?? throw new AgreementConfigRefusedException("A config run may not span two OK versions."))
+            .ToList();
+
+        for (var i = 0; i < runs.Count; i++)
+        {
+            if (!IsOwnConfig(runs[i].Config, runs[i].AgreementCode, okVersions[i]))
+                throw new AgreementConfigRefusedException(
+                    "A config run's Config names another agreement code or OK version than the run.");
+        }
+
+        var periodEnd = request.PeriodEnd;
+        var daysWithWork = (request.Entries ?? []).Select(entry => entry.Date)
+            .Concat((request.WorkIntervals ?? []).Select(interval => interval.Date))
+            .Where(date => date <= periodEnd);
+        if (daysWithWork.Any(date => !runs.Exists(run => run.From <= date && date <= run.To)))
+            throw new AgreementConfigRefusedException(
+                "Every day up to PeriodEnd that carries an entry or an interval needs a config run.");
+
+        var latest = runs[^1].Config;
+        return date =>
+        {
+            foreach (var run in runs)
+            {
+                if (run.From <= date && date <= run.To)
+                    return run.Config;
+            }
+
+            return date > periodEnd
+                ? latest
+                : throw new InvalidOperationException("No config run covers a day the compliance checks read.");
+        };
+    }
+
+    /// <summary>The OK version of every day of <c>[from, to]</c>, or null when the days fall under two.</summary>
+    private static string? SingleOkVersion(DateOnly from, DateOnly to)
+    {
+        var runs = SplitAtOkVersions(from, to);
+        return runs.Count == 1 ? runs[0].OkVersion : null;
+    }
+
+    /// <summary>A config is a request's own when it names the same agreement code and OK version.</summary>
+    private static bool IsOwnConfig(AgreementRuleConfig config, string agreementCode, string okVersion) =>
+        string.Equals(config.AgreementCode, agreementCode, StringComparison.Ordinal)
+        && string.Equals(config.OkVersion, okVersion, StringComparison.Ordinal);
 }
 
 /// <summary>
@@ -509,3 +646,24 @@ public sealed record TimelineEvaluation(
     TimelineCoreResult Core,
     IReadOnlyList<string> ConfigFingerprints,
     string EvaluationModel);
+
+/// <summary>
+/// A request refused for the agreement configuration it hands the engine: missing, malformed, or
+/// not the profile's or run's own (ADR-043 D12, R-8, A-10). Its message is one fixed, value-free
+/// sentence (SEC-039), which the route answers as <c>400 { success: false, error }</c>. The
+/// timeline's refusals are <see cref="TimelineInputException"/>s, which its route answers the same way.
+/// </summary>
+public sealed class AgreementConfigRefusedException : ArgumentException
+{
+    public AgreementConfigRefusedException(string message) : base(message)
+    {
+    }
+
+    public AgreementConfigRefusedException()
+    {
+    }
+
+    public AgreementConfigRefusedException(string message, Exception innerException) : base(message, innerException)
+    {
+    }
+}

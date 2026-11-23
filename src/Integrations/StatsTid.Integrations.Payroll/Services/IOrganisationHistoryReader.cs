@@ -9,11 +9,11 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <para>
 /// <b>Why it matters (plain language).</b> An employee who moves from one institution to another on the 15th
 /// works the first half of the month under the first institution's local agreement profile and the second
-/// half under the new one's. Today the plan uses each part's institution to ask that institution's own
-/// local-profile history for activation dates (a boundary source), and no paid figure depends on it; once the
-/// T14b stack sends each part's own configuration to the engine, each part is priced under its own institution's
-/// rules. A month planned as one piece would ask only one of them, so a transfer date splits the month now,
-/// through the existing <c>EmployeeProfileChange</c> boundary (no boundary kind of its own).
+/// half under the new one's. Each part asks its own institution's local-profile history for activation dates (a
+/// boundary source), and payroll resolves each part's configuration with that institution and sends it to the
+/// engine, so each part is priced under its own institution's rules: paid figures depend on these dates. A month
+/// planned as one piece would ask only one of them, so a transfer date splits the month, through the existing
+/// <c>EmployeeProfileChange</c> boundary (no boundary kind of its own).
 /// </para>
 ///
 /// <para>
@@ -31,7 +31,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// in a comment. The dependency is optional in the service's constructor but never silent: a calculation or a
 /// planning call on a service without it throws <see cref="InvalidOperationException"/> naming the missing
 /// registration, because a month planned without its transfer cuts would be priced under the wrong
-/// institution's rules once those reach pay. Production registers <see cref="PostgresOrganisationHistoryReader"/>.
+/// institution's rules. Production registers <see cref="PostgresOrganisationHistoryReader"/>.
 /// </para>
 /// </summary>
 public interface IOrganisationHistoryReader

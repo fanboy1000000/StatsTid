@@ -618,6 +618,8 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
             priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new TestFixtures.NoTransferDates(),
+            // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
+            configLookup: new StatsTid.Tests.Shared.EngineConfigRequests.CompiledLookup(),
             // S146 R-14: a correction/ledger fact over the database: the production reader over payroll_export_records.
             flexLedgerReader: new PostgresFlexLedgerReader(_harness.Factory));
     }

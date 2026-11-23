@@ -1,5 +1,5 @@
 using System.Reflection;
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 
@@ -264,7 +264,7 @@ public class SickCodeCreditThroughEngineTests
     private static TimelineCoreResult Run(
         string agreement, decimal opening, IReadOnlyList<TimeEntry> entries, IReadOnlyList<AbsenceEntry> absences)
     {
-        var config = AgreementConfigProvider.GetConfig(agreement, "OK26");
+        var config = EngineConfigRequests.Config(agreement, "OK26");
         return WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
             "EMP-S147", Monday, Sunday, Sunday,
             [new ResolvedPiece(Monday, Sunday, 1.0m, config)],

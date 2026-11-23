@@ -29,12 +29,24 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "rule
 
 app.MapPost("/api/rules/evaluate", (EvaluateRequest request, RuleRegistry registry) =>
 {
-    var result = registry.Evaluate(
-        request.RuleId,
-        request.Profile,
-        request.Entries,
-        request.PeriodStart,
-        request.PeriodEnd);
+    // The five routes that read an agreement configuration take it from the request (ADR-043
+    // D12, R-8) and answer a refused one 400 { success: false, error } with a fixed, value-free
+    // sentence (SEC-039; RuleRegistry.ProfileConfig, ComplianceConfigForDay, EvaluateTimeline).
+    CalculationResult result;
+    try
+    {
+        result = registry.Evaluate(
+            request.RuleId,
+            request.Profile,
+            request.Entries,
+            request.PeriodStart,
+            request.PeriodEnd,
+            request.Config);
+    }
+    catch (AgreementConfigRefusedException ex)
+    {
+        return Results.BadRequest(new { success = false, error = ex.Message });
+    }
 
     return result.Success ? Results.Ok(result) : Results.BadRequest(result);
 }).RequireAuthorization("Authenticated");
@@ -54,13 +66,23 @@ app.MapPost("/api/rules/evaluate-flex", (EvaluateFlexRequest request, RuleRegist
 {
     // S145 R8: a one-piece timeline on the weekly core; the payout line is the core's, dated on
     // the settlement day (for a legacy call, the period's last day — as before).
-    var (result, payoutItem) = registry.EvaluateFlexBalanceWithPayout(
-        request.Profile,
-        request.Entries,
-        request.Absences,
-        request.PeriodStart,
-        request.PeriodEnd,
-        request.PreviousBalance);
+    FlexBalanceResult result;
+    CalculationLineItem? payoutItem;
+    try
+    {
+        (result, payoutItem) = registry.EvaluateFlexBalanceWithPayout(
+            request.Profile,
+            request.Entries,
+            request.Absences,
+            request.PeriodStart,
+            request.PeriodEnd,
+            request.PreviousBalance,
+            request.Config);
+    }
+    catch (AgreementConfigRefusedException ex)
+    {
+        return Results.BadRequest(new { success = false, error = ex.Message });
+    }
 
     if (!result.Success)
     {
@@ -72,10 +94,11 @@ app.MapPost("/api/rules/evaluate-flex", (EvaluateFlexRequest request, RuleRegist
 
 // S145 / TASK-14505 — the week-by-week evaluation payroll calls once per plan: overtime /
 // merarbejde per settled Monday–Sunday week (dated on its settlement day), the norm check over the
-// period's own covered days, and flex settled once on the period's last covered day. The engine
-// resolves each piece's config per OK-version date and returns the fingerprint of exactly the
-// configs it resolved plus the evaluation-model marker, which payroll records for replay
-// (refinement A7). Pure apart from HTTP: the registry and the core do no I/O (ADR-002).
+// period's own covered days, and flex settled once on the period's last covered day. Each piece
+// carries its own config, which must name the piece's agreement code and the OK version of its
+// days (ADR-043 D12, A-10), and the response carries the fingerprint of exactly those configs plus
+// the evaluation-model marker, which payroll records for replay (refinement A7). Pure apart from
+// HTTP: the registry and the core do no I/O (ADR-002).
 app.MapPost("/api/rules/evaluate-timeline", (EvaluateTimelineRequest request, RuleRegistry registry) =>
 {
     TimelineEvaluation evaluation;
@@ -138,18 +161,35 @@ app.MapPost("/api/rules/validate-entitlement", (ValidateEntitlementRequest reque
 
 app.MapPost("/api/rules/check-compliance", (CheckComplianceRequest request) =>
 {
-    var config = StatsTid.RuleEngine.Api.Config.AgreementConfigProvider.GetConfig(
-        request.Profile.AgreementCode, request.Profile.OkVersion, request.Profile.Position);
+    // Each check reads the config in force on its own day, from the request's dated runs (RR-7).
+    Func<DateOnly, AgreementRuleConfig> configForDay;
+    try
+    {
+        configForDay = RuleRegistry.ComplianceConfigForDay(request);
+    }
+    catch (AgreementConfigRefusedException ex)
+    {
+        return Results.BadRequest(new { success = false, error = ex.Message });
+    }
+
     var result = RestPeriodRule.Evaluate(
-        request.Profile, request.Entries, request.PeriodStart, request.PeriodEnd, config,
+        request.Profile, request.Entries, request.PeriodStart, request.PeriodEnd, configForDay,
         request.WorkIntervals, CopenhagenBusinessDate.Zone);
     return Results.Ok(result);
 }).RequireAuthorization("Authenticated");
 
 app.MapPost("/api/rules/check-overtime-governance", (CheckOvertimeGovernanceRequest request) =>
 {
-    var config = StatsTid.RuleEngine.Api.Config.AgreementConfigProvider.GetConfig(
-        request.Profile.AgreementCode, request.Profile.OkVersion, request.Profile.Position);
+    AgreementRuleConfig config;
+    try
+    {
+        config = RuleRegistry.ProfileConfig(request.Profile, request.Config);
+    }
+    catch (AgreementConfigRefusedException ex)
+    {
+        return Results.BadRequest(new { success = false, error = ex.Message });
+    }
+
     var result = OvertimeGovernanceRule.Evaluate(
         request.Profile, request.OvertimeHoursInPeriod, request.HasPreApproval,
         request.PeriodStart, request.PeriodEnd, config);

@@ -1,4 +1,4 @@
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
@@ -270,8 +270,8 @@ public class OkVersionRuntimeRegressionTests
             e => Assert.Equal("OK26", OkVersionResolver.ResolveVersion(e.Date)));
 
         // Per-segment configs
-        var configOk24 = AgreementConfigProvider.GetConfig("HK", "OK24");
-        var configOk26 = AgreementConfigProvider.GetConfig("HK", "OK26");
+        var configOk24 = EngineConfigRequests.Config("HK", "OK24");
+        var configOk26 = EngineConfigRequests.Config("HK", "OK26");
 
         Assert.Equal("OK24", configOk24.OkVersion);
         Assert.Equal("OK26", configOk26.OkVersion);

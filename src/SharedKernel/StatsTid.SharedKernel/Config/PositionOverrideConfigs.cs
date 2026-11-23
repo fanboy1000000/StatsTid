@@ -57,8 +57,14 @@ public static class PositionOverrideConfigs
     }
 
     /// <summary>
-    /// Applies a position override to a base AgreementRuleConfig, producing a new config
-    /// with overridden fields merged. Null override fields preserve the base value.
+    /// Applies a position override to a base AgreementRuleConfig: a new config that carries every
+    /// member of the base, except that each of the override's three members
+    /// (<see cref="PositionConfigOverride.WeeklyNormHours"/>, <see cref="PositionConfigOverride.MaxFlexBalance"/>,
+    /// <see cref="PositionConfigOverride.NormPeriodWeeks"/>) replaces the base value when it is set; a
+    /// null override member keeps the base value. Every override the database holds reaches pay and the
+    /// rest checks through this merge (ADR-043 D12). <see cref="AgreementRuleConfig"/> is a class built
+    /// by the explicit initializer below, so a member added to it must be added here too, or the merged
+    /// config silently takes that member's default (QUAL-190).
     /// </summary>
     public static AgreementRuleConfig ApplyOverride(AgreementRuleConfig baseConfig, PositionConfigOverride positionOverride)
     {
@@ -94,9 +100,16 @@ public static class PositionOverrideConfigs
             WorkingTravelRate = baseConfig.WorkingTravelRate,
             NonWorkingTravelRate = baseConfig.NonWorkingTravelRate,
             NormPeriodWeeks = positionOverride.NormPeriodWeeks ?? baseConfig.NormPeriodWeeks,
-            // S122 / TASK-12200 field-loss fix: the four overtime-governance fields were dropped
-            // here, so AC position keys resolved the CLR-default compensation model instead of the
-            // base config's. No PositionConfigOverride varies these — always carry the base value.
+            // No PositionConfigOverride varies the members below, so each carries the base value; a
+            // member left out here would take its default instead (QUAL-190; S122 TASK-12200 for the
+            // four overtime-governance members).
+            NormModel = baseConfig.NormModel,
+            AnnualNormHours = baseConfig.AnnualNormHours,
+            MaxDailyHours = baseConfig.MaxDailyHours,
+            MinimumRestHours = baseConfig.MinimumRestHours,
+            RestPeriodDerogationAllowed = baseConfig.RestPeriodDerogationAllowed,
+            WeeklyMaxHoursReferencePeriod = baseConfig.WeeklyMaxHoursReferencePeriod,
+            VoluntaryUnsocialHoursAllowed = baseConfig.VoluntaryUnsocialHoursAllowed,
             DefaultCompensationModel = baseConfig.DefaultCompensationModel,
             EmployeeCompensationChoice = baseConfig.EmployeeCompensationChoice,
             MaxOvertimeHoursPerPeriod = baseConfig.MaxOvertimeHoursPerPeriod,

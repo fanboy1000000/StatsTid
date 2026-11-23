@@ -1,4 +1,4 @@
-using StatsTid.RuleEngine.Api.Config;
+using StatsTid.Tests.Shared;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Models;
 
@@ -55,7 +55,7 @@ public class FlexBalanceRuleTests
     public void ExactNorm_ZeroDelta()
     {
         var profile = CreateProfile();
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7.4m),
@@ -76,7 +76,7 @@ public class FlexBalanceRuleTests
     public void OverNorm_PositiveDelta()
     {
         var profile = CreateProfile();
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 8m),
@@ -96,7 +96,7 @@ public class FlexBalanceRuleTests
     public void UnderNorm_NegativeDelta()
     {
         var profile = CreateProfile();
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7m),
@@ -116,7 +116,7 @@ public class FlexBalanceRuleTests
     public void VacationDay_GrantsNormCredit()
     {
         var profile = CreateProfile();
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         // 4 work days + 1 vacation day
         var entries = new List<TimeEntry>
         {
@@ -144,7 +144,7 @@ public class FlexBalanceRuleTests
     public void ClampToMaxBalance()
     {
         var profile = CreateProfile();
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24"); // Max = 100
+        var config = EngineConfigRequests.Config("HK", "OK24"); // Max = 100
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 10m),
@@ -164,7 +164,7 @@ public class FlexBalanceRuleTests
     public void CarryoverPreviousBalance()
     {
         var profile = CreateProfile();
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 7.4m),
@@ -185,7 +185,7 @@ public class FlexBalanceRuleTests
     public void LeaveWithoutPay_ReducesNorm()
     {
         var profile = CreateProfile();
-        var config = AgreementConfigProvider.GetConfig("HK", "OK24");
+        var config = EngineConfigRequests.Config("HK", "OK24");
         // 3 work days + 1 day leave without pay
         var entries = new List<TimeEntry>
         {
@@ -213,7 +213,7 @@ public class FlexBalanceRuleTests
     public void AutoPayoutExcess_FlaggedCorrectly()
     {
         var profile = CreateProfile("AC"); // Max 150
-        var config = AgreementConfigProvider.GetConfig("AC", "OK24");
+        var config = EngineConfigRequests.Config("AC", "OK24");
         var entries = new List<TimeEntry>
         {
             CreateEntry(Monday, 12m),

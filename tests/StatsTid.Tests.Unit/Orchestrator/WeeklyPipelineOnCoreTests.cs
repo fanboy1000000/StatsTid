@@ -6,7 +6,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using StatsTid.Orchestrator.Services;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
+using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Models;
+using StatsTid.Tests.Shared;
 
 namespace StatsTid.Tests.Unit.Orchestrator;
 
@@ -85,6 +87,17 @@ public sealed class WeeklyPipelineOnCoreTests
 
         Assert.True(result.Success);
 
+        // S148 TASK-14828 (F against TASK-14826-T tip: the pipeline sent no config): every evaluate request carries a config
+        // equal, member by member, to the compiled config for its agreement and OK version (the shared helper's).
+        Assert.NotEmpty(handler.Evaluated);
+        foreach (var sent in handler.Evaluated)
+        {
+            Assert.NotNull(sent.Config);
+            var expected = EngineConfigRequests.Config("HK", "OK26");
+            foreach (var property in typeof(AgreementRuleConfig).GetProperties())
+                Assert.Equal(property.GetValue(expected), property.GetValue(sent.Config));
+        }
+
         // The overtime call really went to /api/rules/evaluate with OVERTIME_CALC.
         Assert.Contains(handler.EvaluatedRuleIds, id => id == "OVERTIME_CALC");
 
@@ -147,6 +160,7 @@ public sealed class WeeklyPipelineOnCoreTests
         private readonly IReadOnlyList<TimeEntry> _entries;
 
         public List<string> EvaluatedRuleIds { get; } = new();
+        public List<EvaluateRequest> Evaluated { get; } = new();
 
         public InProcessEngineHandler(IReadOnlyList<TimeEntry> entries) => _entries = entries;
 
@@ -169,8 +183,10 @@ public sealed class WeeklyPipelineOnCoreTests
             {
                 var evaluate = JsonSerializer.Deserialize<EvaluateRequest>(body, Web)!;
                 EvaluatedRuleIds.Add(evaluate.RuleId);
+                Evaluated.Add(evaluate);
                 var calculation = _registry.Evaluate(
-                    evaluate.RuleId, evaluate.Profile, evaluate.Entries, evaluate.PeriodStart, evaluate.PeriodEnd);
+                    evaluate.RuleId, evaluate.Profile, evaluate.Entries, evaluate.PeriodStart, evaluate.PeriodEnd,
+                    evaluate.Config);
                 return Json(
                     calculation.Success ? HttpStatusCode.OK : HttpStatusCode.BadRequest,
                     JsonSerializer.Serialize(calculation, Web));

@@ -66,6 +66,7 @@ const month: SkemaMonthData = {
   boundaryWorkTime: [],
   fullDayNormAtMonthEnd: 7.4,
   consumptionBasis: [],
+  minimumRest: [],
 }
 const summary = {
   employeeId: 'emp001', year: 2026, month: 3, flexBalance: 0, flexBalanceMonth: '2026-02', flexDelta: 0,

@@ -589,6 +589,35 @@ public static class SkemaEndpoints
                     Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList()))
                 .ToList();
 
+            // ── S0-4 — the minimum rest in force on each day of [monthStart, monthEnd + 1] (RR-7) ──
+            // The screen's instant rest warning judges each work end by the minimum rest of its own date,
+            // as the compliance check does; a finding can be dated monthEnd + 1 (a night shift begun on the
+            // month's last day) and never before the month (ruling 17). The month's days use the daily-norm
+            // rows' resolution (each day's own dated record, the full chain; null where no dated record covers
+            // the day), so a lookup refusal fails the month through the Backend's one mapping (B4). A record gap
+            // (a profile row without its agreement-code or organisation row) serves null on weekend days only: a
+            // weekday gap already fails the month through the daily-norm rows above (5a ruling T8).
+            // monthEnd + 1 never fails the month: its next OK version's configuration may not be published
+            // yet, so no record or no configuration in force there serves null; an unreadable configuration
+            // still propagates. Configuration values, not registrations: served to a leader too (RES-002).
+            var minimumRest = (await dailyNormCalculator.ResolveConfigsAsync(
+                    employeeId, monthStart, monthEnd, user.PrimaryOrgId, ct))
+                .Select(d => new SkemaDayHoursRow(d.Date, d.Config?.MinimumRestHours))
+                .ToList();
+            decimal? nextBoundaryMinimumRest;
+            try
+            {
+                nextBoundaryMinimumRest = (await dailyNormCalculator.ResolveConfigsAsync(
+                    employeeId, nextBoundaryDay, nextBoundaryDay, user.PrimaryOrgId, ct))[0].Config?.MinimumRestHours;
+            }
+            catch (NoConfigInForceException)
+            {
+                // Ruling 17: a ruled catch of a lookup refusal (B4's exception), this type on this day only. The
+                // lookup's Error log line for this refusal is expected: the month is still served (5a ruling T11).
+                nextBoundaryMinimumRest = null;
+            }
+            minimumRest.Add(new SkemaDayHoursRow(nextBoundaryDay, nextBoundaryMinimumRest));
+
             SkemaApprovalInfo? approval = period is not null
                 ? new SkemaApprovalInfo(
                     PeriodId: period.PeriodId,
@@ -633,7 +662,9 @@ public static class SkemaEndpoints
                 BoundaryWorkTime: boundaryWorkTime,
                 FullDayNormAtMonthEnd: fullDayNormAtMonthEnd,
                 // ── S73 / TASK-7301 additive field (SPRINT-73 R3) ──
-                ConsumptionBasis: consumptionBasis));
+                ConsumptionBasis: consumptionBasis,
+                // ── S0-4 — the minimum rest in force per day (RR-7, ruling 17) ──
+                MinimumRest: minimumRest));
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<SkemaMonthResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
 
