@@ -3107,3 +3107,23 @@ M-40 included [O for the 14 facts of the five classes run].
 - **The Orchestrator's check:** one file, with no public signature change.
 - **Found, not fixed:** a manifest whose segment list is damaged (a gap or an overlap) still makes the one classification call before `PlannedCalculation` refuses it (`:2924`). Those are segment checks, outside V1. Low; below the register floor, so recorded here.
 - **FU-T dispatched** (`test-qa`) on `51ed2bb7`: V1's facts, V3, V4, V5, V6 and V7, with reds at `52ac6683` and `f328d00d` and a local-cluster run.
+
+**TASK-14830 FU-T returned** (`test-qa`, Sonnet 5.5; `271fd4ed` on `51ed2bb7`; report `.claude/reviews/S148-TASK-14830-FU-T-report.md`). Tests only.
+- **New `FrozenInputsRefusalTests` (Unit, 6 facts), each asserting the named refusal with 0 classification calls and 0 engine requests:**
+  - V1's shapes: an empty `ConfigRuns`; a config naming another agreement than its key; another OK version (an extra arm, so each new comparison has its own pin); a piece not covering the first employed day. Each is F, red at `52ac6683`; each comparison mutation turns exactly its own fact red.
+  - V3's organisation rule: F, red under the local mutation that drops it.
+  - V6, a replay on a service with no lookup succeeds byte-identically: F, red at `f328d00d` (`RequireConfigLookup`) and under M-13.
+- **`FrozenConfigReplayTests`:**
+  - V4: at `f328d00d` on a local cluster, the two F facts fail at the refusal assertion and the two R facts pass.
+  - V5: the docstrings are reworded.
+  - V7: the raw config JSON comparison. A mutation of `MinimumRestHours` fails only at the new assertion, and the decimal scale is compared.
+- **The greps:** `ConfigFingerprint` / `replay-config-changed` over `tests` print nothing. `-i configFingerprint` prints only the ruled legacy fixture line.
+- **M-13's frozen list for CI-M5:** `FrozenConfigReplayTests.PublishChangedConfig_ReplayReproducesOriginal` and `FrozenInputsRefusalTests.ReplayWithNoConfigLookup_Succeeds_ByteIdenticalToForward`.
+- **Gate:** build 0 errors, CA2100 113; Unit 1718 + 6 = 1724; DemoSeed 170; Regression non-Docker 147; shortcuts 19 found, 0 bad.
+- **Local cluster:** port 55451, stopped and deleted.
+- **The Orchestrator's checks:** three test files only.
+- **Housekeeping:** the worktrees of TASK-14830, 14830-T and FU-1 are removed; their commits are in the tip.
+- **Cycle 2 dispatched** on `52ac6683..271fd4ed`:
+  - 5α (`## S148 TASK-14830 5α c2`);
+  - Fable (`## S148 TASK-14830 5a reviewer c2`);
+  - Codex (`codex-14830-c2-run.ps1`).
