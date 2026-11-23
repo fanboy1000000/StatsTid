@@ -2758,3 +2758,25 @@ M-40 included [O for the 14 facts of the five classes run].
   - **T19:** the merge paperwork.
 - **Fix-up order:** FU-1 (`payroll-integration`) → FU-2 (`backend-infrastructure`) → FU-T (`test-qa`) → the Orchestrator's two remarks, with FU-3 (`ux`) beside them. Cycle 2 then covers the delta.
 - **Dispatched:** FU-1 and FU-3, both on `043c5f35`.
+
+**T14b FU-1 returned** (`payroll-integration`; `ae04e95d`, `b2304473` on `043c5f35`; report `.claude/reviews/S148-T14b-FU-1-report.md`).
+- **T3:** `ReadPlanHistoriesAsync` reads the agreement code for d − 1 and for d through `UserAgreementCodeRepository.GetByUserIdAtAsync`, the read the pieces use. Only an affirmatively equal pair enters a new private member, `PlanHistories.SameAgreementCodeRowStarts`, and the still-pure `EnsureNoMidWeekAgreementChange` drops those dates after R43's hire filter. `AgreementCodeEffectiveDates` is unchanged, so no cut or PIN-1 value moves. No repository read was added.
+- **T6:** one helper, `ConfigDatesOrUnavailableAsync`, wraps the six configuration-date reads (`DbException` → `ConfigLookupUnavailableException` with the layer name and the inner exception).
+- **T14:** `IOrganisationHistoryReader.cs` remarks made true (comment only; a second untrue phrase in the same file fixed too, declared).
+- **Gate:**
+  - Build 0 errors, 125 warnings, CA2100 113.
+  - Unit 1751, DemoSeed 170, Regression non-Docker 146.
+  - The shortcut check shows the three known sites only.
+- **Local cluster run (port 55441, not CI evidence):**
+  - `November2026_CalculatesWithNoRecordGap` is green at the tip and red with PCS at `043c5f35` (422 `agreement-change-mid-week`).
+  - The week-check classes and PIN-1 pass, 33 of 33.
+  - A scratch Unit probe of T6 is 3 of 3 green at the tip and 3 of 3 red at the base (`NpgsqlException`).
+- **Found, not fixed:** payroll `Program.cs:439-441` says "the lookup logged the detail", which is untrue now for a date read. The file is outside FU-1's list, so the Orchestrator fixes it with T14's comment-only edits.
+
+**T14b FU-3 returned** (`ux`; `a053b994` on `043c5f35`; report `.claude/reviews/S148-T14b-FU-3-report.md`).
+- **T18:** `RestPeriodWarning` gains `minimumHours`, the value the finding was judged by, and the panel names it as is. A finding without one renders no threshold sentence.
+- **Facts:** the "11,5" arm (R: today's lookup gave the same value) and the no-"0 timer" arm (F, red quoted).
+- **Checks:** all five frontend checks exit 0; vitest 101 files, 1213 tests (+2).
+- Its commit touches only frontend files; the Orchestrator cherry-picks it onto the final tip.
+
+**T14b FU-2 dispatched** (`backend-infrastructure`) on `b2304473`: T2, T4, T5, T8, T10 and T11, with a local scratch probe of T2's new-agreement case.
