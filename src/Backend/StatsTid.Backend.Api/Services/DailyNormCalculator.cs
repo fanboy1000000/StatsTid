@@ -347,11 +347,17 @@ public sealed class DailyNormCalculator
     ///   end either. Such a day is already a stand-in (QUAL-226), so it never fails the screen. This is the second
     ///   ruled exception to B4's no-catch rule: exactly <see cref="NoConfigInForceException"/>, exactly on such a
     ///   day, here only. A day a record covers still refuses by name, the month-end record's month-end read still
-    ///   refuses, and <see cref="ConfigLookupUnavailableException"/> always propagates. In the wired host the
-    ///   refusal is asked of the lookup at most once per agreement and OK version per request: the request
-    ///   remembers the days through which nothing can come into force (up to the agreement's next published
-    ///   version start, from the date reads the stretch already makes), so a roster does not pay one refused read
-    ///   and one Error log line per person per day.</description></item>
+    ///   refuses, and <see cref="ConfigLookupUnavailableException"/> always propagates. A refusal on such a day d
+    ///   is remembered for the request on every day on or before the day before the agreement's next published
+    ///   central version start, at most month end (from the date reads the stretch already makes): no published
+    ///   version applies on d, so none applies on an earlier day either (5a ruling U1). So in the wired host such
+    ///   days ask the lookup a question it refuses at most once per agreement and OK version per month computed,
+    ///   however many employees the month is computed for, and both of today's callers (Teamoversigt, the balance
+    ///   summary) compute one month per request: a roster does not pay one refused read and one Error log line
+    ///   per person per day. A calculator built without the date repositories remembers a refusal on d through d
+    ///   only: no day on or before a refused one asks again, so each refused weekday asks once and each later
+    ///   no-record weekday asks anew. Without an HTTP context accessor the memo, like the stretches, lasts one call
+    ///   (the class remark).</description></item>
     /// </list>
     /// No compiled value and no floor: any other lookup refusal propagates (P-13). Every configuration is resolved
     /// once per stretch (the class remark).
@@ -428,9 +434,10 @@ public sealed class DailyNormCalculator
             {
                 // 5a ruling T2: the second ruled catch of a lookup refusal (B4's exception), this type on a weekday
                 // no dated record covers only. The lookup's Error log line for this refusal is expected: the screen
-                // is still served (5a ruling T11). Nothing comes into force before the agreement's next published
-                // version, so the request asks no more for those days.
-                stretches.AddNoneInForce(key, asOf, plan.CentralTo);
+                // is still served (5a ruling T11). No published central version applies on asOf, so none applies on
+                // an earlier day or before the agreement's next central version starts: the request asks no more
+                // for a no-record day on or before CentralTo (5a ruling U1).
+                stretches.AddNoneInForce(key, plan.CentralTo);
                 return null;
             }
         }
@@ -631,22 +638,23 @@ public sealed class DailyNormCalculator
     {
         private readonly Dictionary<StretchKey, List<ConfigStretch>> _byKey = new();
 
-        // 5a ruling T2's memo, written by ComputeMonthNormAsync's no-record days only: per agreement and OK version,
-        // the inclusive ranges on which the lookup refused (no published central version in force), each up to
-        // the day before the next central version start. The central layer alone decides that refusal, so the
-        // range holds for every key of the pair.
-        private readonly Dictionary<(string AgreementCode, string OkVersion), List<(DateOnly From, DateOnly To)>>
-            _noneInForce = new();
+        // 5a rulings T2 and U1's memo, written and read by ComputeMonthNormAsync's no-record weekdays only: per
+        // agreement and OK version, the last day on or before which no published central version is in force. A
+        // refusal on d proves it through the day before the next central version start (CentralTo; d itself for a
+        // calculator without the date repositories) and on every earlier day, since the in-force read takes the
+        // published version dated on or before the day (AgreementConfigRepository.GetInForceAsync): none for d is
+        // none for an earlier day. The central layer alone decides that refusal (ConfigResolutionService), so the
+        // day holds for every key of the pair, and the latest day proved covers every earlier one.
+        private readonly Dictionary<(string AgreementCode, string OkVersion), DateOnly> _noneInForceThrough = new();
 
         public bool NoneInForce(StretchKey key, DateOnly day) =>
-            _noneInForce.TryGetValue((key.AgreementCode, key.OkVersion), out var ranges)
-            && ranges.Exists(range => range.From <= day && day <= range.To);
+            _noneInForceThrough.TryGetValue((key.AgreementCode, key.OkVersion), out var through) && day <= through;
 
-        public void AddNoneInForce(StretchKey key, DateOnly from, DateOnly to)
+        public void AddNoneInForce(StretchKey key, DateOnly through)
         {
-            if (!_noneInForce.TryGetValue((key.AgreementCode, key.OkVersion), out var ranges))
-                _noneInForce[(key.AgreementCode, key.OkVersion)] = ranges = new List<(DateOnly From, DateOnly To)>();
-            ranges.Add((from, to));
+            var pair = (key.AgreementCode, key.OkVersion);
+            if (!_noneInForceThrough.TryGetValue(pair, out var known) || through > known)
+                _noneInForceThrough[pair] = through;
         }
 
         public ConfigStretch? Covering(StretchKey key, DateOnly day) =>
@@ -677,8 +685,9 @@ public sealed record DatedRecord(string AgreementCode, string? Position, string 
 /// overlapping the range, <c>= ANY(@ids)</c>), so a screen reads each employee's records once for the month
 /// instead of once per day (N-3). A day's record follows <see cref="EmploymentProfileResolver"/>'s rules: the
 /// profile row covering the day (joined to its user), end-exclusive (ADR-018 D8), then the organisation row and
-/// the agreement-code row covering it, the latest start winning where rows overlap. A covering profile row
-/// without either of the other two is a record gap, as the resolver's
+/// the agreement-code row covering it, the latest start winning where rows overlap; on overlapping profile rows only
+/// the timeline does, since the resolver's profile read has no order and which row it returns is undefined
+/// (QUAL-263). A covering profile row without either of the other two is a record gap, as the resolver's
 /// <see cref="EmployeeProfileNotFoundException"/> is; the caller decides what a gap means (ADR-023 D3).
 /// </summary>
 public sealed class DatedRecordTimeline
