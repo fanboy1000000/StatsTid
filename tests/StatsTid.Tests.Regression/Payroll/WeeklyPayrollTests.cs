@@ -49,7 +49,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// <para>
 /// <b>Fixture conditions (plan § "Fixture conditions the table relies on").</b>
 /// C-W1: WP1-WP7 and WP9 assert overtime / merarbejde lines (amount, date, key), pieces, <c>NormPeriodWeeks</c>,
-/// fingerprints and refusals; WP11 asserts flex payouts and balances; none of them asserts a
+/// the pieces' configurations and refusals; WP11 asserts flex payouts and balances; none of them asserts a
 /// <c>NORMAL_HOURS</c> line or the norm total (so MD-42 reaches only WP8 and WP10).
 /// C-W2: every context day of WP11 (31 August; 28-30 September) carries exactly the day norm.
 /// C-W3: WP8, WP9, WP11 context days carry exactly the day norm.
@@ -353,15 +353,15 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
     /// (<c>SLS_0210_OK24</c>) in this fact, and the exported line carries the OK26 code <c>SLS_0210</c>.</item>
     /// <item>The request carries 30-31 March as context: the timeline call's entries include both days and its
     /// first piece starts on 30 March.</item>
-    /// <item>The timeline response's config fingerprint equals <c>ConfigFingerprint.Compute</c> over BOTH the OK24
-    /// configuration (30-31 March) and the OK26 configuration (from 1 April): payroll hands the engine, with each
-    /// timeline piece, the configuration in force for that piece (the OK24 piece's and the OK26 piece's, ADR-043 D12),
-    /// and the engine fingerprints the configurations it was handed (refinement :369).</item>
+    /// <item>S148 T15 (NR-P10): the timeline request's pieces carry the OK24 configuration for Monday 30 and Tuesday
+    /// 31 March and the OK26 configuration from Wednesday 1 April (each piece's <c>config.okVersion</c>): payroll hands
+    /// the engine, with each timeline piece, the configuration in force for that piece (ADR-043 D12). This is the
+    /// observation the engine's config fingerprint gave until the fingerprint retired (MD-39's point, refinement :369).</item>
     /// </list>
     ///
-    /// Red conditions (Docker-gated, CI-verified): mutation MD-39 (the timeline endpoint resolves one config for the
-    /// whole timeline, from the first piece): the fingerprint is over OK24 only and the fingerprint assertion
-    /// trips. Mutation MD-20 (30-31 March never read): the week holds 24.00 h and the overtime assertion trips.
+    /// Red conditions (Docker-gated, CI-verified): a payroll that resolved one config for the whole timeline, from
+    /// the first piece (the MD-39 shape): the piece holding 1 April carries OK24 and the config assertion trips.
+    /// Mutation MD-20 (30-31 March never read): the week holds 24.00 h and the overtime assertion trips.
     /// </summary>
     [Fact]
     public async Task OkBoundary_April2026_OvertimeDated5April_OK26Key_ContextCarries30And31March()
@@ -377,11 +377,7 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         var april = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Apr01, Apr30);
 
         var call = april.Recorder.Timeline.Single();
-        var expectedFingerprint = ConfigFingerprint.Compute(new (string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)[]
-        {
-            ("HK", "OK24", null, EngineConfigRequests.Config("HK", "OK24")),
-            ("HK", "OK26", null, EngineConfigRequests.Config("HK", "OK26")),
-        });
+        var configVersions = call.PieceConfigOkVersions();
         var entryDates = call.EntryHours().Select(e => e.Date).ToList();
 
         Assert.Multiple(
@@ -390,7 +386,11 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
             () => Assert.Contains(Mar30, entryDates),
             () => Assert.Contains(Mar31, entryDates),
             () => Assert.Equal(Mar30, call.Pieces().Min(p => p.From)),
-            () => Assert.Equal(new[] { expectedFingerprint }, call.Fingerprints()));
+            // S148 T15 (NR-P10): every piece carries the OK version of its own days, 30-31 March OK24, 1 April on OK26.
+            () => Assert.All(configVersions, v => Assert.Equal(v.To <= Mar31 ? "OK24" : "OK26", v.OkVersion)),
+            () => Assert.Equal("OK24", configVersions.Single(v => v.From <= Mar30 && Mar30 <= v.To).OkVersion),
+            () => Assert.Equal("OK24", configVersions.Single(v => v.From <= Mar31 && Mar31 <= v.To).OkVersion),
+            () => Assert.Equal("OK26", configVersions.Single(v => v.From <= Apr01 && Apr01 <= v.To).OkVersion));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -989,10 +989,16 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
                 .ToList();
         }
 
-        public IReadOnlyList<string> Fingerprints()
+        /// <summary>Each request piece's dates and its <c>config.okVersion</c> (the configuration payroll sent with it).</summary>
+        public IReadOnlyList<(DateOnly From, DateOnly To, string OkVersion)> PieceConfigOkVersions()
         {
-            using var doc = JsonDocument.Parse(ResponseJson);
-            return doc.RootElement.GetProperty("configFingerprints").EnumerateArray().Select(f => f.GetString()!).ToList();
+            using var doc = JsonDocument.Parse(RequestJson);
+            return doc.RootElement.GetProperty("pieces").EnumerateArray()
+                .Select(p => (
+                    DateOnly.Parse(p.GetProperty("from").GetString()!, CultureInfo.InvariantCulture),
+                    DateOnly.Parse(p.GetProperty("to").GetString()!, CultureInfo.InvariantCulture),
+                    p.GetProperty("config").GetProperty("okVersion").GetString()!))
+                .ToList();
         }
 
         public decimal FlexNewBalance()

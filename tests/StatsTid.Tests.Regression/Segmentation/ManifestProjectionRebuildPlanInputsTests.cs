@@ -120,7 +120,9 @@ public sealed class ManifestProjectionRebuildPlanInputsTests : IAsyncLifetime
         Assert.Equal(expected.AsOfOutboxId, actual.AsOfOutboxId);
         Assert.Equal(expected.EntriesDigest, actual.EntriesDigest);
         Assert.Equal(expected.AbsencesDigest, actual.AbsencesDigest);
-        Assert.Equal(expected.ConfigFingerprints, actual.ConfigFingerprints);
+        // S148 T15 (NR-P10): the frozen configurations compare by their JSON (a configuration is a class, so a record
+        // comparison would be by reference), which carries every member of every entry.
+        Assert.Equal(JsonSerializer.Serialize(expected.ConfigRuns), JsonSerializer.Serialize(actual.ConfigRuns));
         Assert.Equal(expected.EvaluationModel, actual.EvaluationModel);
     }
 }

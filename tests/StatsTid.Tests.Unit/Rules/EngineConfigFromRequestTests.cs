@@ -66,8 +66,8 @@ public class EngineConfigFromRequestTests
     /// Kind <b>N</b> (AC-C1e), proved red by mutation <b>M-3</b> (<c>EvaluateTimeline</c> ignores each
     /// piece's config and reads the compiled table), run at the TASK-14826-T gate in a worktree
     /// detached at this pass's tip. Red conditions: under M-3 the <c>NORM_CHECK_37H</c> row reads
-    /// 37.00, so the 32.00 assertion fails. The fingerprint arm follows the config handed in (REF:820):
-    /// the same request with the unmodified compiled config has a different fingerprint.
+    /// 37.00, so the 32.00 assertion fails. The same request with the unmodified compiled config
+    /// reads 37.00, so the answer follows the config handed in (REF:820).
     /// </summary>
     [Fact]
     public void EvaluateTimeline_UsesTheRequestConfig()
@@ -85,8 +85,5 @@ public class EngineConfigFromRequestTests
         Assert.Equal("NORM_CHECK_37H", changed.Core.Norm.RuleId);
         Assert.Equal(32.00m, changed.Core.Norm.NormHoursTotal);
         Assert.Equal(37.00m, unchanged.Core.Norm.NormHoursTotal);
-        var changedPrint = Assert.Single(changed.ConfigFingerprints);
-        var unchangedPrint = Assert.Single(unchanged.ConfigFingerprints);
-        Assert.NotEqual(unchangedPrint, changedPrint);
     }
 }

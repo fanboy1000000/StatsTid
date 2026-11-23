@@ -28,7 +28,8 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// <list type="bullet">
 ///   <item><description><c>POST /api/rules/evaluate-timeline</c>: three results in the fixed order
 ///   OVERTIME_CALC, NORM_CHECK_37H, FLEX_BALANCE. OVERTIME_CALC carries one
-///   <c>ECHO_PIECE|from|to|fraction|agreement|position</c> line per request piece and one
+///   <c>ECHO_PIECE|from|to|fraction|agreement|position</c> line and one
+///   <c>ECHO_CONFIG|from|weeklyNormHours</c> line per request piece, and one
 ///   <c>ECHO_CUTOFF|date-or-NULL</c> line (null is encoded as the word NULL, distinct from any
 ///   date). NORM_CHECK_37H carries one <c>ECHO_ENTRY|date|task|start|end</c> line per request entry,
 ///   CONTEXT DAYS INCLUDED, with the entry's hours in <c>Hours</c>, and one
@@ -42,15 +43,13 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// </list>
 ///
 /// <para>
-/// <b>The two variants.</b> The engine returns the config fingerprints and the evaluation-model
-/// marker it was constructed with (defaults <c>["stub"]</c> and <c>weekly-timeline-v3</c>, the live
-/// engine's marker since S148 / TASK-14811). A replay
-/// PCS built with <c>new ReplayEchoRuleEngine(fingerprints: new[] { "stub-2" })</c> answers differently
-/// at replay time; so does a RECORDING engine built with
+/// <b>The variant.</b> The engine returns the evaluation-model marker it was constructed with (default
+/// <c>weekly-timeline-v3</c>, the live engine's marker since S148 / TASK-14811). A RECORDING engine built with
 /// <c>new ReplayEchoRuleEngine(evaluationModel: "weekly-timeline-v1")</c> (a manifest recorded under the
-/// pre-S147 marker, replayed under today's engine) — the refinement's
+/// pre-S147 marker, replayed under today's engine) is the refinement's
 /// "synthetic config" (rev 3.4 :662): the stored record is never edited, the engine just answers
-/// differently at replay time.
+/// differently at replay time. The engine returns no agreement-config member: the configurations a replay sends
+/// are frozen in the manifest (ADR-043 D12), and a fact reads them from <see cref="Requests"/>.
 /// </para>
 ///
 /// <para>
@@ -61,14 +60,11 @@ internal sealed class ReplayEchoRuleEngine
 {
     private readonly object _lock = new();
     private readonly List<(string Path, string Body)> _requests = new();
-    private readonly IReadOnlyList<string> _fingerprints;
     private readonly string _evaluationModel;
 
     public ReplayEchoRuleEngine(
-        IReadOnlyList<string>? fingerprints = null,
         string evaluationModel = "weekly-timeline-v3") // S148 S0-2 (R-24): v2 -> v3, today's marker
     {
-        _fingerprints = fingerprints ?? new[] { "stub" };
         _evaluationModel = evaluationModel;
     }
 
@@ -122,6 +118,12 @@ internal sealed class ReplayEchoRuleEngine
                 pieceLines.Add(Line(
                     $"ECHO_PIECE|{Str(p, "from")}|{Str(p, "to")}|{fraction}|{Str(p, "agreementCode")}|{Str(p, "position") ?? "NULL"}",
                     0m, periodStart));
+                // The piece's config, one member: the weekly norm it carries, so a replay that sent another
+                // configuration than the one the calculation sent differs in the bytes (S148 TASK-14830-T).
+                var norm = p.TryGetProperty("config", out var cfg) && cfg.ValueKind == JsonValueKind.Object
+                    && cfg.TryGetProperty("weeklyNormHours", out var wn) && wn.ValueKind == JsonValueKind.Number
+                    ? Fmt(wn.GetDecimal()) : "NULL";
+                pieceLines.Add(Line($"ECHO_CONFIG|{Str(p, "from")}|{norm}", 0m, periodStart));
             }
         pieceLines.Add(Line($"ECHO_CUTOFF|{cutoff}", 0m, periodStart));
 
@@ -165,7 +167,6 @@ internal sealed class ReplayEchoRuleEngine
                 effectiveNorm = 0m,
                 excessForPayout = 0m,
             },
-            configFingerprints = _fingerprints,
             evaluationModel = _evaluationModel,
         };
         return Json(payload);

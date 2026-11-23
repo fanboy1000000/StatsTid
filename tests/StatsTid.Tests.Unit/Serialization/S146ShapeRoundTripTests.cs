@@ -250,7 +250,6 @@ public sealed class S146ShapeRoundTripTests
         4_000_000_001L,
         new string('a', 64),
         new string('b', 64),
-        new[] { new string('c', 64) },
         "weekly-timeline-v1")
     {
         OpeningFlexProvenance = provenance,

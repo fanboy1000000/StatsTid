@@ -278,7 +278,7 @@ public sealed class EmploymentEdgesTimelineTests : IAsyncLifetime
     /// <summary>
     /// A fake engine that answers every endpoint with an empty success and records each
     /// <c>/api/rules/evaluate-timeline</c> request (pieces and cutoff). The timeline answer has the response's
-    /// full shape (three result rows, the flex block, a stub fingerprint and the marker).
+    /// full shape (three result rows, the flex block, and the marker).
     /// </summary>
     private sealed class RecordingTimelineEngine : HttpMessageHandler
     {
@@ -327,7 +327,6 @@ public sealed class EmploymentEdgesTimelineTests : IAsyncLifetime
                         previousBalance = 0m, newBalance = 0m, delta = 0m, workedHours = 0m,
                         absenceNormCredits = 0m, effectiveNorm = 0m, excessForPayout = 0m,
                     },
-                    configFingerprints = new[] { "stub" },
                     evaluationModel = WeeklyTimelineCore.EvaluationModel,
                 });
             }

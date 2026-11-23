@@ -266,7 +266,7 @@ public sealed class PcsNeverSilentTests
 
     /// <summary>
     /// A stub Rule Engine that records the request paths and answers every endpoint with an empty success, the
-    /// timeline endpoint with its full response shape (three result rows, the flex block, a stub fingerprint and the
+    /// timeline endpoint with its full response shape (three result rows, the flex block, and the
     /// evaluation-model marker), so a calculation and its replay both complete.
     /// </summary>
     private sealed class StubEngine : HttpMessageHandler
@@ -306,7 +306,6 @@ public sealed class PcsNeverSilentTests
                         previousBalance = 0m, newBalance = 0m, delta = 0m, workedHours = 0m,
                         absenceNormCredits = 0m, effectiveNorm = 0m, excessForPayout = 0m,
                     },
-                    configFingerprints = new[] { "stub" },
                     evaluationModel = WeeklyTimelineCore.EvaluationModel,
                 });
             }
