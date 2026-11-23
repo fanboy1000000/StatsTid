@@ -3377,3 +3377,32 @@ M-40 included [O for the 14 facts of the five classes run].
   - M-7 is re-run only if TASK-14847-T's Part A touches its facts.
   - `EffectiveDatePicker.tsx` becoming a shared file (TASK-14846 FU-1, possibly TASK-14838) goes to TASK-14838's brief.
   - Two old stale phrases are left as they are.
+
+**TASK-14847-T returned** (`test-qa`, Sonnet 5.5; `b59dabca` Part A, `8572b0a0` Part B, on `ed91a98d`; report `.claude/reviews/S148-TASK-14847-T-report.md`). Tests only.
+- **Part A:**
+  - **New facts:** the recording-time 503 wrap and the two catch-filter facts (Unit); the BC-5 guard (Unit); the 503 on both routes (Docker, body byte for byte, nothing written).
+  - **Figure (4), re-staged:** three of three waiters asserted; one recording completed after two timed out at about 15 s.
+  - **The rest:** the W7 red conditions, the W10 comments, and W11's envelope assertion.
+  - **The ruled repair of the pre-hire fact:** the dates asked are `{10 March, 31 March}`, and none is before the hire.
+- **Part B, AC-PIL-i (QUAL-265):**
+  - `PieceCoverageTests` (1)–(4) are F, red at `f493bb32` ("No exception was thrown"); (5) is R, with the pieces exactly 23–28 February and 1–31 March.
+  - `PayrollRecordCoverageTests` (6) and (7) are F, the 422 on both routes with nothing written; (8) and (9) are R, with no false gap.
+  - W4: `ProfileCloseFirst_Export409` is green with its 422 retry.
+- **Mutations (Unit, local):**
+  - M-53 trips exactly the wrap fact.
+  - M-54 trips exactly the BC-5 fact.
+  - M-52 trips its four named facts.
+- **The censuses:** no fixture leaves a calculated month uncovered and expects success.
+- **Gate:** build 0 errors, CA2100 113; Unit 1737 + 9 = 1746; DemoSeed 170; Regression non-Docker 147; shortcuts 20 found, 0 bad.
+- **Local cluster** (port 55457, not CI evidence; stopped and deleted):
+  - the race class 11/11 (9 plus the two 503 facts);
+  - the record-gap and coverage facts 6/6;
+  - the census 20/20;
+  - the figures 4/4;
+  - PIN-1 2/2, with no line moved.
+- **Process note:** the agent reported "waiting" on a census run, but no test process was alive. The Orchestrator messaged it. The run had in fact completed (20/20), and the agent went on in the foreground.
+- **The Orchestrator's checks:** `tests/**` only; the worktree is clean.
+- **Cycle 2 dispatched over the whole stack** (`80d51054..8572b0a0`, delta `f493bb32..8572b0a0`):
+  - 5α (`## S148 TASK-14831 stack 5α c2`);
+  - Fable (`## S148 TASK-14831 stack 5a reviewer c2`);
+  - Codex (`codex-14831-c2-run.ps1` → `S148-TASK-14831-5a-codex-c2.raw.md`).
