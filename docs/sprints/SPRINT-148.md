@@ -3343,3 +3343,18 @@ M-40 included [O for the 14 facts of the five classes run].
   - The picker's `selfLockNoteId` links and hides but does not itself lock (the sections' prop also disables). TASK-14838 may make the picker derive `disabled` from it.
   - The hidden helper's last sentence ("Navn, e-mail, organisation og ledelse gemmes straks…") still applies on a self record. Whether to keep that sentence is a TASK-14838 copy choice.
 - **TASK-14846 (`2d086a28`, `0a3a3d7c`) is ready to merge** after the TASK-14831 + 14847 stack, then the GATE with the five frontend checks (vitest needs the owner's go-ahead after the low-memory reap, or it runs in CI-W5).
+
+**The W12 trace returned** (`trace`, read-only; `.claude/reviews/S148-W12-trace-span-readers.md`). It asks whether the Backend's readers of the dated record share payroll's "first day stands for a span" habit (QUAL-265).
+- **Answer: no new defect.** No reader has a concrete wrong output that is not already ruled.
+- **The nine call sites:**
+  - **Four resolve per day:** consumption, daily norms, per-day configs, and absence revaluation. The calculator's config stretches are keyed by each day's own record.
+  - **Two are single points:** the year overview's "today" and the compliance existence gate.
+  - **Three stand for a span, each by rule:**
+    - the balance's month-end fraction (QUAL-198, N-2);
+    - Skema's per-type batch anchor (S60);
+    - the settlement's anchor-day position (ADR-033 D7).
+- **Notes:**
+  - **The balance, nearest to QUAL-265.** A profile closed inside a month with the person still employed shows the month at fraction 1.0. For example, a 0.811 employee closed on Wednesday 18 November 2026 shows 155.40 h, not 126.00 h. That is the ruled N-2 stand-in already open under QUAL-226, so no new row.
+  - **Skema's batch anchor is latent:** no seeded type is pro-rated, so it gets a watch note only.
+  - **The settlement anchor's legal asOf** (31 December versus the valuation boundary) is a pre-existing open owner item, already marked in the code (`VacationSettlementService.cs:1971-1974`).
+- **Brief contradiction:** `VacationSettlementService` is in Infrastructure, not the Backend.
