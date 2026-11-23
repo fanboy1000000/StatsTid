@@ -305,9 +305,10 @@ public sealed class ConfigLookupUnavailableException : Exception
 /// No published central version of (<see cref="AgreementCode"/>, <see cref="OkVersion"/>) is in force on
 /// <see cref="Day"/> (P-13): refused by name, never answered with a compiled value. The members serve the
 /// server log only; no response body carries them (ADR-040 D7). The Backend answers it with a fixed named
-/// 500 (<c>config_not_in_force</c>, <c>ConfigLookupRefusalMiddleware</c>), except on the day after a Skema
-/// month, where it serves no minimum rest (ruling 17); payroll answers it with its own 422 (wave-5 batch-C
-/// ruling 12).
+/// 500 (<c>config_not_in_force</c>, <c>ConfigLookupRefusalMiddleware</c>), except in two ruled places: on the day
+/// after a Skema month, where it serves no minimum rest (ruling 17), and on a weekday no dated record covers in
+/// the month's expected hours, where the day reads its key's month-end configuration or counts 0.00 h (the T14b
+/// stack's 5a ruling T2). Payroll answers it with its own 422 (wave-5 batch-C ruling 12).
 /// </summary>
 public sealed class NoConfigInForceException : Exception
 {

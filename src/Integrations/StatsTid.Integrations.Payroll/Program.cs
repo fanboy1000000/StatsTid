@@ -438,7 +438,8 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     {
         // ADR-043 D12 (P-13; wave-5 batch-C ruling 12): the agreement configuration in force could not be read. The
         // calculation resolves every piece's configuration before its first rule-engine call, so nothing was
-        // calculated, written or exported. Fixed 503; the lookup logged the detail.
+        // calculated, written or exported. Fixed 503; the lookup, or the calculation service's configuration-date
+        // read, logged the detail.
         return ConfigUnavailable();
     }
     catch (NoConfigInForceException)
@@ -853,7 +854,8 @@ static IResult RulesUnavailable() =>
 // ADR-043 D12 (P-13; wave-5 batch-C ruling 12) — the ONE response for "the agreement configuration lookup could not
 // read the configuration database" (ConfigLookupUnavailableException). 503 because the cause is a dependency outage
 // and the caller should retry. The body is FIXED (contract): no agreement code, no date, no employee id, never the
-// database error (the lookup logs it). Shared by /calculate-and-export and /recalculate.
+// database error (the lookup, or the calculation service's configuration-date read, logs it). Shared by
+// /calculate-and-export and /recalculate.
 static IResult ConfigUnavailable() =>
     Results.Json(new
     {

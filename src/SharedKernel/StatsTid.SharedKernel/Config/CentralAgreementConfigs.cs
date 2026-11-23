@@ -7,8 +7,8 @@ namespace StatsTid.SharedKernel.Config;
 /// the published database rows are, resolved per day by the service layer and handed to the Rule
 /// Engine in each request, which reads nothing from this table (ADR-014, ADR-043 D12). This table is
 /// the reference the seeded database rows are pinned against (PIN-2, <c>ConfigSeedParityTests</c>)
-/// and the source of the compiled config the legacy callers (the overtime-governance route and the
-/// Orchestrator's weekly pipeline) send until they retire (R-8).
+/// and the source of the compiled config the three legacy callers (the overtime-governance route, and
+/// the Orchestrator's weekly pipeline and its rule-evaluation dispatcher) send until they retire (R-8).
 /// Pure static data, no I/O.
 /// </summary>
 public static class CentralAgreementConfigs

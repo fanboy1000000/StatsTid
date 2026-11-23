@@ -23,7 +23,8 @@ public enum TimelineNormMode
 /// One stretch of the timeline under one resolved config: the days
 /// <c>[From, To]</c> (inclusive), the part-time fraction in force on them, and the agreement
 /// config already resolved for them (agreement, OK version of those dates, position). The core
-/// never resolves config itself; the HTTP layer splits request pieces at OK-version dates.
+/// never resolves config itself; its callers split their pieces at OK-version dates, and the engine
+/// refuses a piece that spans two OK versions (S4, in RuleRegistry.EvaluateTimeline).
 /// </summary>
 public sealed record ResolvedPiece(
     DateOnly From,
