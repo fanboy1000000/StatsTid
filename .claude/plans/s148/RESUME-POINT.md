@@ -56,6 +56,10 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
      - Fable `reviewer` (header `## S148 T14b stack 5a reviewer`) → `S148-T14b-5a-reviewer.md`;
      - Codex (`codex-T14b-run.ps1`) → `S148-T14b-5a-codex-c1.raw.md`.
      Then the adjudication, fix-ups, merge `--no-ff`, O-17 paperwork and the GATE with the five frontend checks.
+   - **Cycle 1 reviewed and adjudicated** (`S148-T14b-5alpha.md` FAIL on Checkbox only; Codex CHANGES-REQUIRED; Fable APPROVED-WITH-WARNINGS; `S148-T14b-5a-adjudication-c1.md` RULED, T1–T19, no owner question).
+     - **Fix-ups, in order:** FU-1 (`payroll-integration`: T3 week check, T6 date reads → 503, T14 `IOrganisationHistoryReader` remark) → FU-2 (`backend-infrastructure`: T2 no-record day, T4 `JsonElement`, T5 `employmentCategory`, T8 and T10 remarks, T11 sentences) → FU-T (`test-qa`: the facts of T2–T9, T12, T17; AC-C13k (2) docstring R → F) → Orchestrator comment-only (`WeeklyTimelineCore.cs:26`, `CentralAgreementConfigs.cs:5-10`). FU-3 (`ux`, T18) runs beside them and is cherry-picked onto the final tip. Then cycle 2 on the delta.
+     - **FU-1 and FU-3 dispatched** on `043c5f35` (report headers `## S148 T14b FU-1 report`, `## S148 T14b FU-3 report`).
+     - **Merge paperwork (T19):** new QUAL rows (the three legacy compiled-table readers, retag the three `shortcut(pending)`; the second dated-record reader; the Error log on a tolerated absence); updates to QUAL-145, -209, -210, -226; QUAL-190 FIXED; QUAL-233 and -204 closed; the O-17 owner note gains T2, T7 and T15; carry T13 to TASK-14831 and T14's four remarks to TASK-14830.
    - **Carry to TASK-14830:** `EnsureConfigUnchanged`'s remark and text; `ReplayRefusedException.cs:37`; `IOrganisationHistoryReader.cs:12-15`; the `TryResolveDatedProfileAsync` log label.
    - **For the stack's review:** payroll answers an anonymous 500 for `EmployeeProfileNotFoundException` (a record gap or a missing organisation); register coverage `(unproven)`.
 4. **Then** 14830 + -T, 14831 + -T, 14846, CI-W5 and CI-M5 (M-9, M-12, M-13, M-15, M-49).

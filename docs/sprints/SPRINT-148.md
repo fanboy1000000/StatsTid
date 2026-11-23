@@ -2726,3 +2726,35 @@ M-40 included [O for the 14 facts of the five classes run].
   - W-3: two facts committed knowing they are red.
   - W-4: Backend `Program.cs:456-459`'s remark.
 - **Where the lenses disagree:** (a) and (b), TASK-14828's deviations 2 and 8. Fable W-1 also changes N-2's formula. Both went to the **adjudicator** (Fable), dispatched with all three reviews.
+
+**The T14b stack adjudicated, cycle 1** (`.claude/reviews/S148-T14b-5a-adjudication-c1.md`, Fable 5.2, **RULED, no owner question**). The stack does its main job and no finding shows a wrong paid figure, but four fix-ups go on its tip before the merge.
+- **T1:** 5α's F1 is accepted. `Checkbox.tsx`'s optional `describedBy` joins TASK-14829's authorized files, and the plan's ledger row is amended.
+- **T2 (Fable W-1), fixed in FU-2: a new agreement must not take Teamoversigt down.**
+  - **The case:** publish an agreement from today and hire someone onto it. Teamoversigt then answers 500 for the whole team, and the balance summary for that person.
+  - **The rule:** on a weekday no dated record covers, when the key asked has no configuration in force, the day reads the same key's configuration in force at month end, and 0.00 h if none is.
+  - **Placement:** this is the second ruled exception to B4's no-catch rule. N-2 is amended in the plan.
+- **T3 (Codex B1, AC-C13k (2)), fixed in FU-1:** the week check counts a row start as a change only when the code differs from the day before.
+  - Rows are not merged in the backdate.
+  - The planner's boundary feed is unchanged, so no segment or PIN-1 value moves.
+  - The fact stays unedited; only its docstring's kind changes, R → F.
+- **T4 (Codex B2), fixed in FU-2:** the weekly pipeline reads JSON numbers.
+- **T5 (Fable W-2), fixed in FU-2:** the overtime-governance payload carries `employmentCategory`.
+- **T6 (Codex W1), fixed in FU-1:** a `DbException` from payroll's six configuration-date reads becomes `ConfigLookupUnavailableException`, so payroll answers the fixed 503.
+- **T7 and T8, the two lens disagreements, both on Fable's side:**
+  - The workless month keeps its one engine call; ruling 18 is amended in TASK-14828's brief.
+  - The weekend-only null minimum rest stays, with an exact remark.
+- **The tests and remarks:**
+  - **T9:** the compliance smoke probe asserts 200.
+  - **T10:** Backend `Program.cs`'s remark is fixed.
+  - **T11:** the Error log on a tolerated absence is registered (M), with a sentence at each ruled catch.
+  - **T12:** `DatedRecordTimeline` is registered (M) and gets a parity fact.
+- **Carried and noted:**
+  - **T13:** payroll's unmapped record gap goes to TASK-14831 as a named 422 `payroll-employment-record-gap`.
+  - **T14:** the fenced remarks are split. Four go to TASK-14830 and one to FU-1. The Orchestrator fixes `WeeklyTimelineCore.cs:26` and `CentralAgreementConfigs.cs:5-10`, comment only.
+  - **T15:** a line goes in the owner note.
+  - **T16:** CI-W5 settles it.
+  - **T17:** a local-layer mid-month fact.
+  - **T18:** `{M}` is the value the finding was judged by, with no fallback, fixed in FU-3.
+  - **T19:** the merge paperwork.
+- **Fix-up order:** FU-1 (`payroll-integration`) → FU-2 (`backend-infrastructure`) → FU-T (`test-qa`) → the Orchestrator's two remarks, with FU-3 (`ux`) beside them. Cycle 2 then covers the delta.
+- **Dispatched:** FU-1 and FU-3, both on `043c5f35`.
