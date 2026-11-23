@@ -1,7 +1,9 @@
+using System.Text.Json;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Shared;
 
 namespace StatsTid.Tests.Unit.Serialization;
 
@@ -16,7 +18,7 @@ namespace StatsTid.Tests.Unit.Serialization;
 /// that log: <i>where an hours row came from</i> (<c>Source</c>: <c>SKEMA</c> for a Skema save, absent
 /// for an additive time registration, which is also what every old event means); <i>what a calculation
 /// used</i> (<c>PlanInputs</c> on the segment-manifest event: the frozen pieces, the opening flex
-/// balance, the ids of the hours rows, their digests, the config fingerprints, the arithmetic version,
+/// balance, the ids of the hours rows, their digests, the frozen agreement configurations, the arithmetic version,
 /// and the settlement cutoff); and <i>which pay period a recalculation also changed</i>
 /// (<c>NextPeriodToRecalculateStart/End</c> on the retroactive-correction event). If a serializer
 /// attribute ever swallowed one of those members, the system would write the event happily and the fact
@@ -149,8 +151,17 @@ public sealed class S145ShapeRoundTripTests
         4_000_000_001L,                                    // AsOfOutboxId (beyond Int32, so a narrowing shows)
         new string('a', 64),                               // EntriesDigest
         new string('b', 64),                               // AbsencesDigest
-        new[] { new string('c', 64), new string('d', 64) },// ConfigFingerprints
-        "weekly-timeline-v1");                             // EvaluationModel
+        "weekly-timeline-v1")                              // EvaluationModel
+    {
+        // S148 T15 (NR-P10): the frozen configurations replace the fingerprints, one entry per piece, in order.
+        ConfigRuns = new[]
+        {
+            new FrozenConfigRun(new DateOnly(2026, 8, 31), new DateOnly(2026, 8, 31), "HK", "OK26", null, "STY01",
+                EngineConfigRequests.Config("HK", "OK26")),
+            new FrozenConfigRun(new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30), "AC", "OK26", "DEPARTMENT_HEAD", "STY01",
+                EngineConfigRequests.Config("AC", "OK26", "DEPARTMENT_HEAD")),
+        },
+    };
 
     private static SegmentManifestCreated Manifest(PlanInputs? planInputs) => new()
     {
@@ -174,7 +185,9 @@ public sealed class S145ShapeRoundTripTests
         Assert.Equal(expected.AsOfOutboxId, actual.AsOfOutboxId);
         Assert.Equal(expected.EntriesDigest, actual.EntriesDigest);
         Assert.Equal(expected.AbsencesDigest, actual.AbsencesDigest);
-        Assert.Equal(expected.ConfigFingerprints, actual.ConfigFingerprints);
+        // S148 T15 (NR-P10): the frozen configurations compare by their JSON (the configuration is a class, so a record
+        // comparison would be by reference), which carries every member of every entry.
+        Assert.Equal(JsonSerializer.Serialize(expected.ConfigRuns), JsonSerializer.Serialize(actual.ConfigRuns));
         Assert.Equal(expected.EvaluationModel, actual.EvaluationModel);
     }
 

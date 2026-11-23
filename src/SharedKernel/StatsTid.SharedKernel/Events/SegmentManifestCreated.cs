@@ -68,8 +68,8 @@ public sealed class SegmentManifestCreated : DomainEventBase
 
     /// <summary>
     /// The frozen inputs of the calculation this manifest describes (S145 / A7): per-piece profile
-    /// inputs, the opening flex balance, the hours rows by event id with their digests, the
-    /// Rule Engine's config fingerprints and the evaluation-model marker. Serialised into
+    /// inputs, the agreement configuration sent with each piece (by value, ADR-043 D12), the opening
+    /// flex balance, the hours rows by event id with their digests and the evaluation-model marker. Serialised into
     /// <c>plan_inputs_jsonb JSONB NULL</c> in the projection table. This event is the record of
     /// truth for it, because the projection is rebuildable from events (ADR-016 D10).
     /// </summary>

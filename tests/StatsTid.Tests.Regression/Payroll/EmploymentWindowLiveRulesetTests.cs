@@ -514,7 +514,7 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
             lock (_calls) _calls.Add(call);
 
             // S145 F1: the plan's one timeline call is answered with a COMPLETE timeline response (the
-            // three results, the flex block, fingerprints and model marker; NORMAL_HOURS lines for the
+            // three results, the flex block and model marker; NORMAL_HOURS lines for the
             // in-month entries only). PCS refuses anything less as a failed call.
             if (isTimeline)
                 return TestFixtures.EvaluateTimelineResponse(request);

@@ -96,8 +96,8 @@ app.MapPost("/api/rules/evaluate-flex", (EvaluateFlexRequest request, RuleRegist
 // merarbejde per settled Monday–Sunday week (dated on its settlement day), the norm check over the
 // period's own covered days, and flex settled once on the period's last covered day. Each piece
 // carries its own config, which must name the piece's agreement code and the OK version of its
-// days (ADR-043 D12, A-10), and the response carries the fingerprint of exactly those configs plus
-// the evaluation-model marker, which payroll records for replay (refinement A7). Pure apart from
+// days (ADR-043 D12, A-10); payroll freezes the configs it sent, and the response carries the
+// evaluation-model marker, which payroll records for replay (ADR-016 D10). Pure apart from
 // HTTP: the registry and the core do no I/O (ADR-002).
 app.MapPost("/api/rules/evaluate-timeline", (EvaluateTimelineRequest request, RuleRegistry registry) =>
 {
@@ -132,7 +132,6 @@ app.MapPost("/api/rules/evaluate-timeline", (EvaluateTimelineRequest request, Ru
             },
         ],
         Flex = ToFlexResponse(core.Flex, core.FlexPayout, null),
-        ConfigFingerprints = evaluation.ConfigFingerprints.ToList(),
         EvaluationModel = evaluation.EvaluationModel
     });
 }).RequireAuthorization("Authenticated");

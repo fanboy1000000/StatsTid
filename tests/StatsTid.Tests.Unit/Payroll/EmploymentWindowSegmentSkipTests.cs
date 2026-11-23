@@ -216,14 +216,6 @@ public sealed class EmploymentWindowSegmentSkipTests
     public Task TimelineReply_FailedFlexBlock_CalculationRefused_NothingWritten()
         => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(failedFlexBlock: true));
 
-    /// <summary>
-    /// <b>R-6 (Codex WARNING 2).</b> An empty <c>configFingerprints</c> list means the answer cannot be
-    /// replayed (TASK-14513 records it); a 200 with no fingerprint is refused. Red conditions as above.
-    /// </summary>
-    [Fact]
-    public Task TimelineReply_EmptyFingerprints_CalculationRefused_NothingWritten()
-        => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(emptyFingerprints: true));
-
     // ═════════════════════════════════════════════════════════════════════
     // S145 R-10 — the caller-position fallback is retired for every piece
     // ═════════════════════════════════════════════════════════════════════

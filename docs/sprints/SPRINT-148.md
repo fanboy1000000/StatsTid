@@ -3127,3 +3127,29 @@ M-40 included [O for the 14 facts of the five classes run].
   - 5α (`## S148 TASK-14830 5α c2`);
   - Fable (`## S148 TASK-14830 5a reviewer c2`);
   - Codex (`codex-14830-c2-run.ps1`).
+
+**The TASK-14830 pair reviewed, cycle 2** (`52ac6683..271fd4ed`; saved verbatim):
+- **5α** (`S148-TASK-14830-5alpha-c2.md`): **PASS**. It points out that `PreStagePlanInputs` no longer asserts that the forward manifest held `configRuns`. That is accepted under V4: AC-C3a and the round-trip pin fail if a forward run stops writing them.
+- **Codex** (`S148-TASK-14830-5a-codex-c2.raw.md`): **APPROVED**; W1 and W2 are closed. Its note: a proof with two kinds of damage now reports the frozen-input refusal first (D1), which is acceptable.
+- **Fable** (`S148-TASK-14830-5a-reviewer-c2.md`): **APPROVED**; all four cycle-1 warnings are closed. Five notes:
+  - Some damaged piece shapes are refused only by the engine (a piece spanning two OK versions, `From > To`, a fraction of 0). That is outside V1. Recorded: no figure is produced and nothing is written.
+  - The six older entry-key comparisons and the null-entry check have no dedicated fact. That is beyond V1's ruled facts. Recorded for the next test pass on this path: one Unit theory that damages a single key member.
+  - Damaged segment geometry still fetches the rule list first (FU-1's own note). Recorded.
+  - The V6 docstring is reworded in the merge commit (the replay throws before the success assertion). The one assertion that can never fail stays.
+  - M-13's frozen list is widened in the plan's M-table in the merge commit.
+
+**TASK-14830 merged** (`--no-ff` of `271fd4ed` into master, this commit).
+- **What the owner gets, in plain words:**
+  - A paid month's proof holds the agreement rules it was paid with, by value.
+  - A replay reproduces the month exactly and never looks a rule up again, so a back-dated publish cannot change what a replay shows.
+  - A damaged or older proof is refused by name before the Rule Engine is asked anything.
+  - The fingerprint check is retired.
+- **Commits:** TASK-14830 `fc5d0dfa`, TASK-14830-T `52ac6683`, FU-1 `51ed2bb7`, FU-T `271fd4ed`. Two review cycles, ruled by the Orchestrator (`S148-TASK-14830-5a-rulings-c1.md`, V1–V10).
+- **In the merge commit (Orchestrator, docs and comments only):**
+  - **O-18:** ADR-016 D10 gains the 2026-11-23 amendment: configs frozen by value; the organisation on each piece; the widened refusal; fingerprints retired; the size; the passed-on note on `required` members; the null `DefaultCompensationModel` limit.
+  - **O-18, continued:** its wage-type parenthesis is widened ("before it has ended"; batch-D ruling 2), and the two fingerprint passages are marked as history.
+  - The plan's M-13 row gains the Unit fact. O-18 is marked done.
+  - The V6 docstring is reworded.
+- **O-17 note 1, the interim set-fingerprint window, is closed.**
+- **Owed:** the `TryResolveDatedProfileAsync` log label goes to TASK-14831's dispatch (V10).
+- **CI-W5 watch list gains:** the five `FrozenConfigReplayTests` facts and `ManifestProjectionRebuildPlanInputsTests`. **CI-M5:** M-13 with its widened frozen list.

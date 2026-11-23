@@ -69,7 +69,8 @@ internal static class ReplayTestKit
         IRecordedHoursReader? hours,
         IEmploymentProfileResolver? profileResolver = null,
         IEmploymentWindowResolver? windowResolver = null,
-        UserAgreementCodeRepository? agreementCodeRepo = null)
+        UserAgreementCodeRepository? agreementCodeRepo = null,
+        IAgreementConfigLookup? configLookup = null)
     {
         if (profileResolver is not null && windowResolver is null)
             windowResolver = new MutableWindowResolver(new EmploymentWindow(null, null));
@@ -106,7 +107,8 @@ internal static class ReplayTestKit
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new TestFixtures.NoTransferDates(),
             // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
-            configLookup: new StatsTid.Tests.Shared.EngineConfigRequests.CompiledLookup(),
+            // A fact about what a published configuration does (FrozenConfigReplayTests) hands the real lookup instead.
+            configLookup: configLookup ?? new StatsTid.Tests.Shared.EngineConfigRequests.CompiledLookup(),
             flexLedgerReader: ledger);
         Ledgers.Add(pcs, ledger);
         return pcs;

@@ -434,9 +434,9 @@ public sealed class RuleRegistry
 
     /// <summary>
     /// S145 / TASK-14505 — <c>POST /api/rules/evaluate-timeline</c>: takes each request piece's
-    /// config from the piece (ADR-043 D12, R-8), runs <see cref="WeeklyTimelineCore"/>, and
-    /// fingerprints exactly those configs, one per piece with its agreement code, OK version and
-    /// position (<see cref="ConfigFingerprint"/>). Throws <see cref="TimelineInputException"/> for
+    /// config from the piece (ADR-043 D12, R-8) and runs <see cref="WeeklyTimelineCore"/> with
+    /// exactly those configs; payroll freezes what it sent (ADR-016 D10), so nothing about the
+    /// configs is returned. Throws <see cref="TimelineInputException"/> for
     /// an invalid request, with one fixed, value-free sentence (SEC-039) that the route answers as
     /// 400; across all pieces it checks, in this order: each piece's shape; that every piece carries
     /// a config; that each piece lies inside one OK version; that each piece's config names the
@@ -469,7 +469,6 @@ public sealed class RuleRegistry
             .ToList();
 
         var resolvedPieces = new List<ResolvedPiece>();
-        var resolvedConfigs = new List<(string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)>();
         for (var i = 0; i < request.Pieces.Count; i++)
         {
             var piece = request.Pieces[i];
@@ -478,7 +477,6 @@ public sealed class RuleRegistry
                 throw new TimelineInputException("A piece's Config names another agreement code or OK version than the piece.");
 
             resolvedPieces.Add(new ResolvedPiece(piece.From, piece.To, piece.PartTimeFraction, config));
-            resolvedConfigs.Add((piece.AgreementCode, okVersions[i], piece.Position, config));
         }
 
         var core = WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
@@ -491,10 +489,7 @@ public sealed class RuleRegistry
             request.Absences,
             request.PreviousFlexBalance));
 
-        return new TimelineEvaluation(
-            core,
-            [ConfigFingerprint.Compute(resolvedConfigs)],
-            WeeklyTimelineCore.EvaluationModel);
+        return new TimelineEvaluation(core, WeeklyTimelineCore.EvaluationModel);
     }
 
     /// <summary>
@@ -639,12 +634,10 @@ public sealed class RuleRegistry
 }
 
 /// <summary>
-/// The timeline evaluation: the core's results, the fingerprint of the configs resolved for this
-/// call (one entry), and the evaluation-model marker.
+/// The timeline evaluation: the core's results and the evaluation-model marker.
 /// </summary>
 public sealed record TimelineEvaluation(
     TimelineCoreResult Core,
-    IReadOnlyList<string> ConfigFingerprints,
     string EvaluationModel);
 
 /// <summary>

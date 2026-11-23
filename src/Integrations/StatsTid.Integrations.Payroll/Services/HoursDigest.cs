@@ -36,7 +36,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// The event id in its <c>D</c> form (lowercase, hyphenated); the date <c>yyyy-MM-dd</c>; times
 /// <c>HH:mm:ss.fffffff</c> (full <see cref="TimeOnly"/> precision) or empty; <c>Hours</c> an invariant
 /// decimal, value-normalised (no rounding, no trailing zeros: <c>7.40</c> → <c>7.4</c>, <c>8.0</c> →
-/// <c>8</c>) — the same form as the Rule Engine's config fingerprint; booleans <c>true</c>/<c>false</c>;
+/// <c>8</c>), so two equal values always give the same text; booleans <c>true</c>/<c>false</c>;
 /// the typed text (<c>ActivityType</c>, <c>AbsenceType</c>) as <c>hex(…)</c>, the uppercase hex of its UTF-8
 /// bytes (<see cref="Convert.ToHexString(byte[])"/>), with null and empty both as an empty field; any other
 /// null as empty. The lines are sorted ordinally, joined with <c>\n</c>, encoded UTF-8 and hashed with
@@ -142,8 +142,8 @@ public static class HoursDigest
 
     /// <summary>
     /// The value-normalised invariant form: trailing zeros removed without changing the value
-    /// (<c>7.40</c> → <c>7.4</c>, <c>8.0</c> → <c>8</c>), never rounded. The same normalisation as the Rule
-    /// Engine's <c>ConfigFingerprint</c> (refinement A7: "the same form as the fingerprint").
+    /// (<c>7.40</c> → <c>7.4</c>, <c>8.0</c> → <c>8</c>), never rounded: the text depends on the value alone,
+    /// not on how many decimals the stored number carries (refinement A7, R15).
     /// </summary>
     private static string Number(decimal value) =>
         (value / 1.0000000000000000000000000000m).ToString(CultureInfo.InvariantCulture);

@@ -61,7 +61,6 @@ public sealed class PlanInputsRequiredMembersTests
         AsOfOutboxId: 42,
         EntriesDigest: "ab12",
         AbsencesDigest: "cd34",
-        ConfigFingerprints: new[] { "fp-1" },
         EvaluationModel: "weekly-timeline-v1");
 
     /// <summary>The event carrying <paramref name="inputs"/>, serialized by the real <see cref="EventSerializer"/>.</summary>

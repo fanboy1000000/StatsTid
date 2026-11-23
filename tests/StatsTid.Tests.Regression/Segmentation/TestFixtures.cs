@@ -379,7 +379,7 @@ internal static class TestFixtures
     /// S145 F1 (TASK-14511-T): the default answer to <c>POST /api/rules/evaluate-timeline</c> — the
     /// per-plan lane's one call. A COMPLETE answer, because PCS refuses an incomplete one as a failed
     /// call: exactly the three results (<c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c>, <c>FLEX_BALANCE</c>),
-    /// the full flex block with delta 0, <c>configFingerprints: ["stub"]</c> and
+    /// the full flex block with delta 0 and
     /// <c>evaluationModel: "weekly-timeline-v3"</c>. The norm result carries a <c>NORMAL_HOURS</c> line per
     /// entry dated INSIDE the month (<c>periodStart</c>..<c>periodEnd</c>) — the request also carries
     /// the opening week's context days from the previous month, which the previous month settles, so no
@@ -443,7 +443,6 @@ internal static class TestFixtures
                 effectiveNorm = 0m,
                 excessForPayout = 0m,
             },
-            configFingerprints = new[] { "stub" },
             evaluationModel = "weekly-timeline-v3", // S148 S0-2 (R-24): v2 -> v3, the stub stands for the live engine, whose marker moved
         };
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });

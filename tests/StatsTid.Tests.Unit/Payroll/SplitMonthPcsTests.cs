@@ -60,7 +60,7 @@ public sealed class SplitMonthPcsTests
     private sealed record TimelineLine(string Date, decimal Hours, string TimeType = "OVERTIME_50");
 
     /// <summary>
-    /// A complete timeline answer (three rows, the flex block, fingerprints, marker) with optional lines on
+    /// A complete timeline answer (three rows, the flex block, marker) with optional lines on
     /// the overtime row and optional norm totals on the norm row.
     /// </summary>
     private static HttpResponseMessage Timeline(
@@ -91,7 +91,6 @@ public sealed class SplitMonthPcsTests
                 previousBalance = 0m, newBalance = 0m, delta = 0m, workedHours = 0m,
                 absenceNormCredits = 0m, effectiveNorm = 0m, excessForPayout = 0m,
             },
-            configFingerprints = new[] { "stub" },
             evaluationModel = "weekly-timeline-v3", // S148 S0-2 (R-24): v2 -> v3, the stub stands for the live engine, whose marker moved
         };
         return Json(payload);
