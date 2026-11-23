@@ -3290,3 +3290,25 @@ M-40 included [O for the 14 facts of the five classes run].
   - Codex (`codex-14846-run.ps1` → `S148-TASK-14846-5a-codex.raw.md`);
   - Fable follows when an agent slot frees.
 - **It merges after the TASK-14831 + 14847 stack (W3).**
+
+**TASK-14846 reviewed, cycle 1** (`8453c3da..2d086a28`; saved verbatim; ruled by the Orchestrator in `.claude/reviews/S148-TASK-14846-5a-rulings-c1.md`, X1–X7).
+- **5α** (`S148-TASK-14846-5alpha.md`): **PASS**.
+  - Five authorized files; the note byte for byte with variant `info`; the lock list exactly the brief's; no request change; four tests.
+  - It observes that the disabled date picker has no `aria-describedby`.
+- **Codex** (`S148-TASK-14846-5a-codex.raw.md`): **APPROVED-WITH-WARNINGS**.
+  - **WARNING:** the picker and both carry-forward checkboxes are not linked to the note.
+  - **NOTE:** screen-reader delivery is unproven.
+  - It confirms that login's `EmployeeId` is the user id, so the self test is right.
+- **Fable** (`S148-TASK-14846-5a-reviewer.md`): **APPROVED-WITH-WARNINGS**.
+  - It checked the lock list against each server refusal, field by field. Category and profile close have no drawer field.
+  - **WARNING 1:** the same three unlinked controls. The report's "each locked input" claim was seven of ten.
+  - **WARNING 2:** the link is pinned on one input of seven.
+  - **NOTEs:** the `Alert` renders `role="alert"` even for `info`; case (4) pins a state a user cannot reach; the single harness is acceptable; the RED evidence is thin.
+- **Ruled** (same verdict from both lenses; they differ only on timing, Codex now and Fable carry to TASK-14838; fixing now satisfies both):
+  - **X1, X2: FU-1 (`ux`).** An optional described-by prop on `EffectiveDatePicker` and on `ScheduledChangeNotice`'s checkbox. For a self record the picker's helper text is hidden and no copy is added. Case (1) loops over all seven inputs plus the picker; case (4) covers both checkboxes; case (2) the non-self control.
+  - **X3:** a manual NVDA or JAWS pass is owed, and the `Alert` role is noted.
+  - **X4:** the deviations are accepted.
+  - **X5:** the RED evidence is recorded.
+  - **X6:** the report's claim is corrected.
+  - **X7:** TASK-14838 keeps the picker's link and its hidden helper.
+- **FU-1 dispatched** on `2d086a28`.
