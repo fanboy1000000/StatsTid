@@ -2865,3 +2865,20 @@ M-40 included [O for the 14 facts of the five classes run].
   - 5α (`constraint-validator`, header `## S148 T14b stack 5α c2`);
   - the Fable `reviewer` (`## S148 T14b stack 5a reviewer c2`);
   - Codex (`codex-T14b-c2-run.ps1` → `S148-T14b-5a-codex-c2.raw.md`).
+
+**The T14b stack review, cycle 2** (`043c5f35..e1787c56`; three lenses, saved verbatim).
+- **5α** (`S148-T14b-5alpha-c2.md`, Sonnet 5.5): **PASS**.
+  - Every commit touches only its authorized files, and the comment-only claims hold.
+  - The catch census and the six wrapped date reads check out. No public signature changed.
+  - Notes: a pre-existing replay catch (`PeriodCalculationService.cs:2940`) was missing from the checklist's expected list; some Unit kinds are stated at class level.
+- **Codex** (`S148-T14b-5a-codex-c2.raw.md`): **CHANGES-REQUIRED**, on one warning.
+  - Cycle 1's B1, B2, W1 and W4 are closed.
+  - **W1, the bound.** Roster order can make the lookup refuse twice for the same key in one request. Example: employee A's gap is remembered from 11 March, then employee B's 2 March asks again. The figures are unaffected, but T2's "at most one refused lookup per key per request" and the remark saying so are not met.
+  - **W2:** the overlapping-profile divergence FU-T found is a concrete defect to register.
+  - Notes: T3's Unit red is structural; the weekday-gap test's HTTP arm.
+- **Fable** (`S148-T14b-5a-reviewer-c2.md`): **APPROVED-WITH-WARNINGS**.
+  - Its cycle-1 W-1 to W-4 are closed.
+  - The same two warnings: the overlap divergence (register M, Infrastructure follow-up), and the "at most once" sentence (reword it, or start the range at the month's first day).
+  - Notes: a partial record gets T2's exception, so N-2 and O-17 should say it; T3's negative arms are unproven; T5's Backend half has no committed fact; a same-code start still cuts a segment labelled `AgreementCodeChange` (unproven); a CI-W5 watch list.
+- **The Orchestrator verified the bound's premise.** The central in-force read takes any published version with `applies_from` on or before the day (`AgreementConfigRepository.cs:55-73`). So a refusal on day d means nothing is in force on any earlier day, and the remembered range can start earlier without skipping a configured day.
+- **The lenses disagree on the verdict and on the bound's remedy**, so the adjudicator is dispatched on cycle 2.
