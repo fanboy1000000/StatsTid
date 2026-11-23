@@ -61,6 +61,8 @@ export interface ScheduledChangeNoticeProps {
    * passes exactly one of the two (or neither).
    */
   supersedes?: { writeEffectiveFrom: string }
+  /** Id of the self-lock note: set for the logged-in user's own record, where the caller disables the carry-forward checkbox. Points the checkbox at the note. */
+  selfLockNoteId?: string
   testId: string
 }
 
@@ -86,6 +88,7 @@ export function ScheduledChangeNotice({
   carryForward,
   writeEffectiveFrom,
   supersedes,
+  selfLockNoteId,
   testId,
 }: ScheduledChangeNoticeProps) {
   const dateText = formatScheduledDate(effectiveFrom)
@@ -123,6 +126,7 @@ export function ScheduledChangeNotice({
               checked={carryForward.checked}
               onChange={(e) => carryForward.onChange(e.target.checked)}
               disabled={carryForward.disabled}
+              aria-describedby={selfLockNoteId}
               data-testid={`${testId}-carry-forward`}
             />
             Opdatér også den planlagte ændring fra {dateText}

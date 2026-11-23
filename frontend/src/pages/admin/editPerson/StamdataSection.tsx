@@ -14,6 +14,8 @@ interface StamdataSectionProps {
   userId?: string
   /** Derived weekly norm display string (e.g. "37,0 t/uge"); read-only. */
   normDisplay?: string
+  /** Id of the self-lock note: set when the drawer's person is the logged-in user; locks the inputs the server refuses a self actor (organisation, agreement) and points them at the note. */
+  selfLockNoteId?: string
   disabled?: boolean
 }
 
@@ -24,6 +26,7 @@ export function StamdataSection({
   userId,
   normDisplay,
   disabled = false,
+  selfLockNoteId,
 }: StamdataSectionProps) {
   const set =
     <K extends keyof StamdataFields>(key: K) =>
@@ -77,8 +80,9 @@ export function StamdataSection({
           id="ep-primaryOrg"
           value={fields.primaryOrgId}
           onChange={set('primaryOrgId')}
-          disabled={disabled}
+          disabled={disabled || !!selfLockNoteId}
           data-testid="ep-primary-org"
+          aria-describedby={selfLockNoteId}
         >
           {organizations.map((org) => (
             <option key={org.orgId} value={org.orgId}>
@@ -97,8 +101,9 @@ export function StamdataSection({
           id="ep-agreement"
           value={fields.agreementCode}
           onChange={set('agreementCode')}
-          disabled={disabled}
+          disabled={disabled || !!selfLockNoteId}
           data-testid="ep-agreement"
+          aria-describedby={selfLockNoteId}
         >
           {AGREEMENT_CODES.map((code) => (
             <option key={code} value={code}>

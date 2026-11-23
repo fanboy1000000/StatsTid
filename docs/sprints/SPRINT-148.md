@@ -3445,3 +3445,12 @@ M-40 included [O for the 14 facts of the five classes run].
 - **The W12 trace** found no Backend reader sharing QUAL-265 unruled. The balance's closed-profile stand-in is already QUAL-226 and N-2.
 - **CI-W5 watch list gains:** `ConcurrentExports_SmallPayrollPool_Recorded` (most likely slow); the two recording-time 503 facts; AC-PIL-i (6)–(9); the race class (11 facts); the census (20); and the M-52, M-53 and M-54 Docker effects (argued).
 - **Next:** the GATE on master, the TASK-14846 merge (`0a3a3d7c`), the GATE, then CI-W5 and CI-M5.
+
+**The GATE after the TASK-14831 stack's merge** (`b12a3a79`): build 0 errors, 125 warnings, CA2100 113; Unit 1746; DemoSeed 170; Regression non-Docker 147.
+
+**TASK-14846 merged** (`--no-ff` of `0a3a3d7c` into master, this commit; TASK-14846 `2d086a28` and FU-1 `0a3a3d7c`; two review cycles; Orchestrator rulings `S148-TASK-14846-5a-rulings-c1.md`, X1–X7).
+- **What the owner gets, in plain words:** on their own record, an HR administrator sees the fields the server refuses for oneself greyed out, under the ruled Danish note, with each locked control linked to the note for screen readers. Saving sends what it always did.
+  - The locked fields are organisation, agreement, part-time fraction, position, start and birth dates, child's-sick eligibility, the effective-date picker and both carry-forward checkboxes.
+- **Frontend-only merge:** seven files under `frontend/`, and nothing under `src` or `docs`.
+- **The vitest re-run** after the low-memory reap still needs the owner's go-ahead. The merged `frontend/` tree equals FU-1's tip, where vitest ran green (102 files, 1217 tests). CI-W5 runs it too.
+- **Owed:** a manual NVDA or JAWS pass (X3). TASK-14838 keeps the picker's link and disable (X7).
