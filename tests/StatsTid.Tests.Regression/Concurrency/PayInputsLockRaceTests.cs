@@ -340,15 +340,14 @@ public sealed class PayInputsLockRaceTests : DatedConfigDockerFixture, IDisposab
     /// close (<c>DELETE /api/admin/employee-profiles/{id}</c>, <c>If-Match</c>) is seen waiting, then the export of March
     /// (calculated with the profile covering the 31st). After the release the close answers 204 (the route's answer: no
     /// body) and lists nothing (no March record yet), and the export answers 409 <c>payroll-inputs-changed</c>, nothing
-    /// written: the close ended the profile on the 31st, a day the fresh derivation cannot cover.
+    /// written: the close ended the profile on the 31st, a day the fresh derivation cannot cover. The retry, a second
+    /// <c>/calculate-and-export</c> of March, answers 422 <c>payroll-employment-record-gap</c> (the three-member body byte for
+    /// byte): the month is not payable until HR repairs the record, and the manifest count stays 1 (the first calculation's).
     /// <para><b>Red conditions.</b> Before TASK-14831 the export takes no lock, so it is never observed waiting. M-52 (the
     /// recheck's wrapper lets a derivation refusal pass) turns this fact red: the uncovered day is waved through and the
-    /// export answers 200 (argued; M-52 is run locally on the Unit arm).</para>
-    /// <para><b>Status: RED on the branch tip, by design of the brief's expectation.</b> The local-cluster run answered 200
-    /// and recorded March: the derivation resolves the profile where each segment starts and takes its segment boundaries
-    /// from profile <c>effective_from</c> dates only, so a profile that ends inside the month (the close sets
-    /// <c>effective_to</c> to the 31st) is not a boundary and not a gap, and neither the calculation nor the recheck sees
-    /// it. The expectation above is the brief's (AC-PIL-g (1)); it is not adjusted to the code.</para>
+    /// export answers 200.</para>
+    /// <para><b>History.</b> The fact was red at <c>f493bb32</c> (the export answered 200 and recorded March); TASK-14847 fixed
+    /// the derivation, which now checks each piece's last day.</para>
     /// </summary>
     [Fact]
     public async Task ProfileCloseFirst_Export409()
@@ -367,6 +366,11 @@ public sealed class PayInputsLockRaceTests : DatedConfigDockerFixture, IDisposab
             await AssertInputsChangedAsync(export, ExportSentence);
         Assert.Equal(0L, await WorklistRowCountAsync(s.Employee)); // no recorded month existed when the close committed
         await AssertExportNothingWrittenAsync(s.Employee);
+
+        // The retry: the profile still ends inside March, so the month is refused by name before any manifest is written.
+        using var retry = await s.Payroll.ExportAsync(s.Employee, Org, Mar01, Mar31);
+        await PayrollEmploymentRecordGapTests.AssertRecordGapAsync(retry, s.Employee);
+        await AssertExportNothingWrittenAsync(s.Employee); // the manifest count is still 1
     }
 
     /// <summary>
@@ -710,7 +714,9 @@ public sealed class PayrollEmploymentRecordGapTests : DatedConfigDockerFixture, 
         Assert.Equal(manifestsBefore, await CountAsync("SELECT COUNT(*) FROM segment_manifests WHERE employee_id = @e", ("e", employee)));
     }
 
-    private static async Task AssertRecordGapAsync(HttpResponseMessage response, string employee)
+    /// <summary>The 422 of <c>payroll-employment-record-gap</c>: exactly three members, the ruled sentence and kind, and no
+    /// date or employee id (ADR-040 D7). Literals, never the production text. Shared with the record-coverage facts.</summary>
+    internal static async Task AssertRecordGapAsync(HttpResponseMessage response, string employee)
     {
         var text = await response.Content.ReadAsStringAsync();
         Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
