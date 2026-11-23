@@ -2572,3 +2572,50 @@ M-40 included [O for the 14 facts of the five classes run].
   - ruling R4: reuse covers every repeated caller in a request, with read counts before and after for a Skema month read, a save and a year overview;
   - the comment-only `ConfigResolutionService.cs` authorization.
   A local pre-check of the three compliance classes, and of the Teamoversigt and Skema facts staying green, is expected.
+
+**TASK-14828 returned** (`backend-infrastructure`; one commit `f68ed12a` on `5873c29c`; report `.claude/reviews/S148-TASK-14828-report.md`).
+- **What it builds:**
+  - **The compliance check** sends the configuration in force for each stretch of its window that carries work, from each day's own dated record (full chain), as `{ from, to, agreementCode, config }` runs. A work day with no record answers the existing `employment_record_gap` 500 through one shared helper (ruling 18).
+  - **The two legacy callers send the compiled config** under `shortcut(pending)` comments: the overtime-governance route, the Orchestrator's weekly pipeline and its `rule-evaluation` dispatcher. The dispatcher replaces any `config` a caller sent (BC-6 (a)).
+  - **Teamoversigt and the balance** compute the month's expected hours through one shared function, `DailyNormCalculator.ComputeMonthNormAsync`: Σ `DayNorm.ForWeekday(W_d, f)`, with the N-2 and annual-activity paths. No compiled value or 37.0 floor remains. On the seeded data nothing moves. In the 16 March 37 → 32 h example both screens show 150.80 h, as payroll does.
+  - **The Skema month serves `minimumRest`** for `[monthStart, monthEnd + 1]`, with the one ruled catch of `NoConfigInForceException` on `monthEnd + 1` (`SkemaEndpoints.cs:611`; ruling 17).
+  - **`DailyNormCalculator` reuses a resolved configuration per stretch** of unchanged days, shared by every caller in one request through `HttpContext.Items` (B6, R4). TASK-14825's `shortcut(F10)` comment is removed.
+- **The Orchestrator's checks:**
+  - The diff touches only the nine authorized files plus `ConfigResolutionService.cs`, whose change is comment lines only (checked: no added or removed code line).
+  - Three `shortcut(pending)` comments were added as expected (`OvertimeEndpoints.cs:122`, `TaskDispatcher.cs:85`, `WeeklyCalculationPipeline.cs:88`); they are re-tagged in the stack's merge commit (O-17).
+  - `shortcut(F10)` is gone from `src`.
+  - `AddHttpContextAccessor` is registered (Backend `Program.cs:113`), so the reuse is live in the host.
+- **Gate at the tip:**
+  - Build: 0 errors, 125 warnings, CA2100 113 distinct.
+  - Unit: 37 red, exactly TASK-14827's list.
+  - DemoSeed 170 and Regression `Category!=Docker` 144 green.
+  - `organisation-drift`, `PayInputsLock` and the fingerprint greps are unchanged.
+- **Local cluster run (not CI evidence):**
+  - The three compliance classes are green (25 facts).
+  - TeamOverviewAggregate (both 132.00 h pins and 162.80 h), DatedLookupScreen, ScreenConfigFailClosed and the S120 contract facts stay green, so no seeded figure moved.
+  - `S120SkemaSpecRuntimeTests`' month key list is red as expected (18 members; TASK-14828-T re-pins it).
+- **Configuration reads, before → after:**
+  - a Skema month read: 90 (135 with a position) → 14, measured locally with a mid-month version change;
+  - a year overview: about 526 → 30, measured locally;
+  - a Skema save: traced only, TASK-14828-T measures it (R4).
+  - **Local timing lines:** year overview median 483 ms (895 before, TASK-14825-T's local); Teamoversigt 300 people 858 ms (937), 30 people 128 ms (115).
+- **Declared deviations, for 5α and the stack review:**
+  1. `ConfigResolutionService.cs`, comments (authorized at dispatch).
+  2. **A month with no day carrying work still sends one compliance run**, for the first employed day. Ruling 18 alone would leave the engine an empty `configs`, which it refuses (S6), and the existing `RuleEngineAuthForwardingTests.CompliancePeriod_…` and the smoke hop need the call.
+  3. New public members on the calculator, and `DatedRecord` / `DatedRecordTimeline` in the same file. These mirror `EmploymentProfileResolver`'s rules, a second reader of the same rule (drift risk).
+  4. Five optional constructor parameters and request-scoped reuse through `IHttpContextAccessor`.
+  5. Removed parameters that became unused.
+  6. The version-date reads raise `ConfigLookupUnavailableException` on a database error.
+  7. The record-gap log gains `{Scope}`.
+  8. **An in-month Skema day whose profile row lacks its agreement or organisation row serves `minimumRest` null** (fail-soft) rather than an anonymous 500.
+- **Found, not fixed:**
+  - Backend `Program.cs:456-459`, the calculator's registration remark ("keeps no cache"), is untrue now; the file is outside the task's scope, so it is fixed at the stack's merge.
+  - `ConfigResolutionService.cs:149-153` logs every `NoConfigInForceException` at Error as "refused", including the ruled `monthEnd + 1` case where the month is served.
+  - The first employed day's refusal still reports a missing organisation row as `agreement_code` (pre-existing).
+- **TASK-14828-T dispatched** (`test-qa`) on `f68ed12a`. The dispatch carries:
+  - R9, C2-R5 and R8 (plan row `:365`, missing from the brief's text);
+  - R4's Skema month read and save timing;
+  - Unit's 37 reds;
+  - the hand-built Docker payroll facts and the `RetroactiveCorrectionManifestTests.cs:297` tightening;
+  - the per-half `IsOwnConfig` mutations for AC-C1l's arms (2), (3) and (5);
+  - an instruction to pin neither answer of deviations 2 and 8 until the stack review rules on them.

@@ -41,7 +41,10 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
    - **TASK-14826 returned:** `9f621abb` on `bb0677df` (report `.claude/reviews/S148-TASK-14826-report.md`; S1 … S10 checked byte for byte).
    - **TASK-14826-T returned:** tip `df670468` (report `.claude/reviews/S148-TASK-14826-T-report.md`); gate green; 60 local database reds, each for its stated reason (payroll S1/S3 → 14827; compliance S6 → 14828). The 30 March question is refuted: payroll already cuts at 1 April.
    - **TASK-14827 returned:** `5873c29c` on `df670468` (report `.claude/reviews/S148-TASK-14827-report.md`; the agent stopped on a login expiry on 2026-11-20 and was resumed on 2026-11-23). Three files in scope. Unit has 37 reds for TASK-14828-T (36 hand-built PCS facts without a lookup, plus the `RuleEngineFailureLoggingTests` reflection arity); DemoSeed and non-Docker Regression are green. Local: PIN-1 green; WeeklyPayroll 12, SplitMonth 8 and SkemaCellClear's replay stay red until TASK-14828-T gives the hand-built fixtures a lookup.
-   - **TASK-14828 dispatched** (`backend-infrastructure`) on `5873c29c`, with R4 (read counts for a Skema month read, a save and a year overview) and a comment-only `ConfigResolutionService.cs` authorization.
+   - **TASK-14828 returned:** `f68ed12a` on `5873c29c` (report `.claude/reviews/S148-TASK-14828-report.md`). Ten files in scope (`ConfigResolutionService.cs` comment-only, checked). Three `shortcut(pending)` comments to re-tag in the merge commit: `OvertimeEndpoints.cs:122`, `TaskDispatcher.cs:85`, `WeeklyCalculationPipeline.cs:88`. Unit 37 red (TASK-14827's list). Local: the compliance classes green; no seeded figure moved. Reads: Skema month 90 → 14, year overview about 526 → 30.
+     - **For the stack review:** deviation 2 (a workless month still sends one compliance run, against ruling 18's letter, because of S6); deviation 8 (an incomplete in-month record serves a null minimum rest); `DatedRecordTimeline` duplicates `EmploymentProfileResolver`'s rules; request-scoped reuse through `HttpContext.Items` in a singleton.
+     - **Fix at the stack's merge:** Backend `Program.cs:456-459`'s calculator remark ("keeps no cache") is untrue; `ConfigResolutionService.cs:149-153` logs the ruled `monthEnd + 1` refusal at Error.
+   - **TASK-14828-T dispatched** (`test-qa`) on `f68ed12a`, carrying R9, C2-R5, R8, R4's Skema read and save timing, Unit's 37 reds, the hand-built payroll facts, the `RetroactiveCorrectionManifestTests.cs:297` tightening and the per-half `IsOwnConfig` mutations; it pins neither answer of deviations 2 and 8.
    - **Carry to TASK-14828-T:**
      - `WeeklyPayrollTests.cs:352-353`'s docstring ("the engine resolves config per day") is untrue now;
      - AC-C1l's arms (2), (3), (5) were not mutation-run one by one (they share `IsOwnConfig`);
@@ -52,7 +55,7 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
      - R9 and C2-R5 (TASK-14822's).
    - **Carry to TASK-14830:** `EnsureConfigUnchanged`'s remark and text; `ReplayRefusedException.cs:37`; `IOrganisationHistoryReader.cs:12-15`; the `TryResolveDatedProfileAsync` log label.
    - **For the stack's review:** payroll answers an anonymous 500 for `EmployeeProfileNotFoundException` (a record gap or a missing organisation); register coverage `(unproven)`.
-   - **Then** TASK-14828-T on 14828's tip, then REGEN, then TASK-14829.
+   - **Then** REGEN (the `minimumRest` member), then TASK-14829, then the stack review at the tip.
 4. **Then** 14830 + -T, 14831 + -T, 14846, CI-W5 and CI-M5 (M-9, M-12, M-13, M-15, M-49).
 5. **Owner ruling 2026-11-19 (a):** QUAL-259 is built after S148.
 6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves.
