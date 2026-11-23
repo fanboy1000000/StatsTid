@@ -750,6 +750,7 @@ export function PersonDrawer({
               }
               supersedes={agreementRelation === 'covers' ? { writeEffectiveFrom: effectiveFrom } : undefined}
               writeEffectiveFrom={writeEffectiveFrom}
+              selfLockNoteId={selfLockNoteId}
               testId="pd-agreement-scheduled"
             />
           )}
@@ -768,6 +769,7 @@ export function PersonDrawer({
               disabled={busy || isSelf}
               blockedReason={dateBlockedReason}
               coversScheduledNote={coversScheduledNote}
+              selfLockNoteId={selfLockNoteId}
             />
           )}
 
@@ -863,6 +865,7 @@ export function PersonDrawer({
                   }
                   supersedes={profileRelation === 'covers' ? { writeEffectiveFrom: effectiveFrom } : undefined}
                   writeEffectiveFrom={writeEffectiveFrom}
+                  selfLockNoteId={selfLockNoteId}
                   testId="pd-profile-scheduled"
                 />
               )}

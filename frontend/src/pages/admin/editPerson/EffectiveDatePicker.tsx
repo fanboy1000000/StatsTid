@@ -148,6 +148,8 @@ export interface EffectiveDatePickerProps {
    * them now does. Ignored when `blockedReason` is set.
    */
   coversScheduledNote?: string | null
+  /** Id of the self-lock note: set for the logged-in user's own record, where the caller disables the picker. Points the date input at the note and hides the helper text, whose "pick a later date" advice does not apply to a locked control. */
+  selfLockNoteId?: string
 }
 
 /**
@@ -179,6 +181,7 @@ export function EffectiveDatePicker({
   disabled,
   blockedReason,
   coversScheduledNote,
+  selfLockNoteId,
 }: EffectiveDatePickerProps) {
   // ISO yyyy-MM-dd strings compare lexicographically = chronologically —
   // the same idiom `EmploymentHistoryPage.tsx` already relies on for its own
@@ -204,13 +207,16 @@ export function EffectiveDatePicker({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
+          aria-describedby={selfLockNoteId}
           data-testid="pd-effective-from"
         />
-        <div className={styles.helperText}>
-          Forudfyldt med dagens dato. Vælg en senere dato for at planlægge ændringen frem i tiden — eller en
-          tidligere dato for at rette historikken. Navn, e-mail, organisation og ledelse gemmes straks, uanset
-          denne dato.
-        </div>
+        {!selfLockNoteId && (
+          <div className={styles.helperText}>
+            Forudfyldt med dagens dato. Vælg en senere dato for at planlægge ændringen frem i tiden — eller en
+            tidligere dato for at rette historikken. Navn, e-mail, organisation og ledelse gemmes straks, uanset
+            denne dato.
+          </div>
+        )}
       </div>
       {blockedReason ? (
         <div className={styles.sectionError} data-testid="pd-effective-blocked">

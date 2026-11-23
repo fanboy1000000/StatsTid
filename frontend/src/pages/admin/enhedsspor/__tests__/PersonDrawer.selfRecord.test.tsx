@@ -220,6 +220,9 @@ async function waitForLoaded() {
   await waitFor(() => expect(screen.queryByTestId('person-drawer-loading')).toBeNull())
 }
 
+// The picker's helper copy (EffectiveDatePicker.tsx); hidden on one's own record, where the note explains the lock.
+const HELPER_TEXT = /Forudfyldt med dagens dato\. Vælg en senere dato/
+
 const REFUSED = [
   'ep-primary-org',
   'ep-agreement',
@@ -238,7 +241,10 @@ describe('PersonDrawer — TASK-14846 the self lock (AC-C13r)', () => {
 
     for (const id of REFUSED) expect(screen.getByTestId(id), id).toBeDisabled()
     expect(screen.getByTestId('pd-self-lock-note').textContent).toBe(SELF_NOTE)
-    expect(screen.getByTestId('ep-primary-org').getAttribute('aria-describedby')).toBe('pd-self-lock-note')
+    for (const id of REFUSED) {
+      expect(screen.getByTestId(id).getAttribute('aria-describedby'), id).toBe('pd-self-lock-note')
+    }
+    expect(screen.queryByText(HELPER_TEXT)).toBeNull()
 
     for (const id of ['ep-display-name', 'ep-email', 'pd-placement', 'pd-promote', 'danger-open']) {
       expect(screen.getByTestId(id), id).toBeEnabled()
@@ -254,6 +260,8 @@ describe('PersonDrawer — TASK-14846 the self lock (AC-C13r)', () => {
     for (const id of REFUSED) expect(screen.getByTestId(id), id).toBeEnabled()
     expect(screen.queryByTestId('pd-self-lock-note')).toBeNull()
     expect(screen.queryByText(SELF_NOTE)).toBeNull()
+    for (const id of REFUSED) expect(screen.getByTestId(id).hasAttribute('aria-describedby'), id).toBe(false)
+    expect(screen.getByText(HELPER_TEXT)).toBeInTheDocument()
   })
 
   it('(3) R: a self save of the e-mail alone still sends the users and profile PUTs, and no birth-date, start-date or eligibility PUT', async () => {
@@ -297,5 +305,8 @@ describe('PersonDrawer — TASK-14846 the self lock (AC-C13r)', () => {
 
     expect(screen.getByTestId('pd-agreement-scheduled-carry-forward')).toBeDisabled()
     expect(screen.getByTestId('pd-profile-scheduled-carry-forward')).toBeDisabled()
+    for (const id of ['pd-agreement-scheduled-carry-forward', 'pd-profile-scheduled-carry-forward']) {
+      expect(screen.getByTestId(id).getAttribute('aria-describedby'), id).toBe('pd-self-lock-note')
+    }
   })
 })
