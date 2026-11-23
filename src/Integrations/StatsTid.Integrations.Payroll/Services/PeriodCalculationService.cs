@@ -9,6 +9,7 @@ using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Normalization;
 using StatsTid.SharedKernel.Segmentation;
+using System.Data.Common;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -2516,13 +2517,15 @@ public sealed class PeriodCalculationService
         var activations = new List<(DateOnly EffectiveFrom, Guid ProfileId)>();
         foreach (var run in runs)
         {
-            activations.AddRange(await _localAgreementProfileRepo.GetActivationsInPeriodAsync(
-                run.Key.OrgId,
-                run.Key.AgreementCode,
-                run.Key.OkVersion,
-                run.AfterExclusive,
-                run.ToInclusive,
-                ct));
+            activations.AddRange(await ConfigDatesOrUnavailableAsync(
+                () => _localAgreementProfileRepo.GetActivationsInPeriodAsync(
+                    run.Key.OrgId,
+                    run.Key.AgreementCode,
+                    run.Key.OkVersion,
+                    run.AfterExclusive,
+                    run.ToInclusive,
+                    ct),
+                LocalProfileActivationDates));
         }
 
         // Already in date order (disjoint ascending runs, each read ordered by effective_from); the stable
@@ -2726,8 +2729,10 @@ public sealed class PeriodCalculationService
                 configCuts, (record, day) => (record.AgreementCode, OkVersionResolver.ResolveVersion(day)));
             foreach (var run in runs)
             {
-                var dates = await _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
-                    run.Key.AgreementCode, run.Key.OkVersion, run.AfterExclusive, run.ToInclusive, ct);
+                var dates = await ConfigDatesOrUnavailableAsync(
+                    () => _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
+                        run.Key.AgreementCode, run.Key.OkVersion, run.AfterExclusive, run.ToInclusive, ct),
+                    AgreementConfigVersionDates);
                 promotions.AddRange(dates.Select(date => (date, run.Key.AgreementCode)));
             }
         }
@@ -2741,9 +2746,11 @@ public sealed class PeriodCalculationService
                     : (record.AgreementCode, OkVersionResolver.ResolveVersion(day), record.Position));
             foreach (var run in runs)
             {
-                var dates = await _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
-                    run.Key.AgreementCode, run.Key.OkVersion, run.Key.PositionCode,
-                    run.AfterExclusive, run.ToInclusive, ct);
+                var dates = await ConfigDatesOrUnavailableAsync(
+                    () => _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
+                        run.Key.AgreementCode, run.Key.OkVersion, run.Key.PositionCode,
+                        run.AfterExclusive, run.ToInclusive, ct),
+                    PositionOverrideVersionDates);
                 overrideDates.AddRange(dates.Select(date => (date, run.Key.PositionCode)));
             }
         }
@@ -3595,12 +3602,15 @@ public sealed class PeriodCalculationService
     /// feeds them to the planner; admission's checks and the per-plan lane's timeline use the same values.
     /// A transfer date is cut wherever a profile date is (the <c>EmployeeProfileChange</c> boundary, the
     /// context pieces) and also cuts the local-profile runs, so each part has one institution.
+    /// <see cref="SameAgreementCodeRowStarts"/> is the subset of the agreement-code dates on which the code
+    /// provably does not change; only the week check reads it (<see cref="EnsureNoMidWeekAgreementChange"/>).
     /// </summary>
     private sealed record PlanHistories(
         IReadOnlyList<EmploymentWindow>? EmploymentWindows,
         IReadOnlyList<DateOnly>? EmployeeProfileEffectiveDates,
         IReadOnlyList<DateOnly>? AgreementCodeEffectiveDates,
-        IReadOnlyList<DateOnly> OrganisationEffectiveDates)
+        IReadOnlyList<DateOnly> OrganisationEffectiveDates,
+        IReadOnlySet<DateOnly> SameAgreementCodeRowStarts)
     {
         /// <summary>
         /// S145 / TASK-14512 (A4) — the employee's dated record at each EMPLOYED candidate segment start,
@@ -3633,6 +3643,12 @@ public sealed class PeriodCalculationService
     /// context days. The planner turns only dates inside <c>(periodStart, periodEnd]</c> into
     /// boundaries (<c>BoundaryDetector.IsInsidePeriod</c>), so the extra dates change no plan and are
     /// not filtered twice. Both reads skip when their repository is not wired.</item>
+    /// <item><b>The same-code row starts</b> — each agreement-code date <c>d</c> on which the dated agreement-code
+    /// read (<see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/>, the read the profile resolver builds every
+    /// piece's agreement from) returns a code for <c>d − 1</c> and the same code for <c>d</c>: a second history row
+    /// with the same agreement, which the week check does not count as a change. A date with no code for
+    /// <c>d − 1</c> is not in the set, so it stays a change (the repository's "over-detect is safe" asymmetry).
+    /// The planner's boundary feed, the agreement-code dates themselves, is unchanged.</item>
     /// <item><b>The organisation change dates</b> (the transfers, ADR-040 D4) — over the same days as the
     /// two reads above, through <see cref="IOrganisationHistoryReader"/>. This read never skips: the method
     /// first refuses a service built without the reader (<see cref="RequireOrganisationHistoryReader"/>),
@@ -3663,16 +3679,31 @@ public sealed class PeriodCalculationService
         }
 
         IReadOnlyList<DateOnly>? agreementDates = null;
+        var sameCodeRowStarts = new HashSet<DateOnly>();
         if (_userAgreementCodeRepo is not null)
         {
             agreementDates = await _userAgreementCodeRepo.GetEffectiveFromDatesAsync(
                 employeeId, afterExclusive: afterExclusive, toInclusive: periodEnd, ct);
+
+            // The week check's rule is "a week cannot be judged under two agreements" (Q5 (c)), so a row start is a
+            // change only when the code differs across it (QUAL-209). Only an affirmatively equal code clears a date:
+            // no code for d − 1 keeps it a change. The date never resolves at DateOnly.MinValue.
+            foreach (var date in agreementDates)
+            {
+                if (date > DateOnly.MinValue
+                    && await _userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, date.AddDays(-1), ct) is { } before
+                    && string.Equals(
+                        before, await _userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, date, ct), StringComparison.Ordinal))
+                {
+                    sameCodeRowStarts.Add(date);
+                }
+            }
         }
 
         var organisationDates = await organisationHistoryReader.GetEffectiveFromDatesAsync(
             employeeId, afterExclusive: afterExclusive, toInclusive: periodEnd, ct);
 
-        return new PlanHistories(windows, profileDates, agreementDates, organisationDates);
+        return new PlanHistories(windows, profileDates, agreementDates, organisationDates, sameCodeRowStarts);
     }
 
     /// <summary>
@@ -3835,24 +3866,62 @@ public sealed class PeriodCalculationService
 
         if (_agreementConfigRepo is not null)
         {
-            dates.AddRange(await _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
-                record.AgreementCode, okVersion, from, to, ct));
+            dates.AddRange(await ConfigDatesOrUnavailableAsync(
+                () => _agreementConfigRepo.GetPublishedAppliesFromDatesAsync(
+                    record.AgreementCode, okVersion, from, to, ct),
+                AgreementConfigVersionDates));
         }
 
         if (_positionOverrideRepo is not null && !string.IsNullOrEmpty(record.Position))
         {
-            dates.AddRange(await _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
-                record.AgreementCode, okVersion, record.Position, from, to, ct));
+            dates.AddRange(await ConfigDatesOrUnavailableAsync(
+                () => _positionOverrideRepo.GetVersionAppliesFromDatesAsync(
+                    record.AgreementCode, okVersion, record.Position, from, to, ct),
+                PositionOverrideVersionDates));
         }
 
         if (_localAgreementProfileRepo is not null && !string.IsNullOrEmpty(record.OrgId))
         {
-            var activations = await _localAgreementProfileRepo.GetActivationsInPeriodAsync(
-                record.OrgId, record.AgreementCode, okVersion, from, to, ct);
+            var activations = await ConfigDatesOrUnavailableAsync(
+                () => _localAgreementProfileRepo.GetActivationsInPeriodAsync(
+                    record.OrgId, record.AgreementCode, okVersion, from, to, ct),
+                LocalProfileActivationDates);
             dates.AddRange(activations.Select(a => a.EffectiveFrom));
         }
 
         return dates;
+    }
+
+    /// <summary>The three configuration-date sources, named in <see cref="ConfigLookupUnavailableException.Layer"/>
+    /// and the server log (never in a response body).</summary>
+    private const string AgreementConfigVersionDates = "agreement configuration version dates";
+    private const string PositionOverrideVersionDates = "position override version dates";
+    private const string LocalProfileActivationDates = "local agreement profile activation dates";
+
+    /// <summary>
+    /// Runs one configuration-date read: the agreement-config, position-override and local-profile version dates
+    /// that cut the period (<see cref="ReadLocalProfileActivationsAsync"/>, <see cref="ReadConfigVersionDatesAsync"/>)
+    /// and the context days (<see cref="ContextVersionDatesAsync"/>). These reads decide where one configuration
+    /// stops and the next starts, so an unreadable configuration database is the lookup's own outcome: a database
+    /// error (<see cref="DbException"/>, which <c>NpgsqlException</c> is) becomes
+    /// <see cref="ConfigLookupUnavailableException"/> with the original as its inner exception, which both
+    /// calculating routes answer with their fixed 503 <c>payroll-config-unavailable</c> (ADR-043 D12, P-13; wave-5
+    /// batch-C ruling 12). <see cref="OperationCanceledException"/> and every other exception (a defect, not an
+    /// outage) propagate unchanged, as in the lookup's own read (<c>ConfigResolutionService</c>). The reads run
+    /// while the plan is built, before any rule-engine call or write, so nothing is calculated or written.
+    /// </summary>
+    private async Task<T> ConfigDatesOrUnavailableAsync<T>(Func<Task<T>> read, string source)
+    {
+        try
+        {
+            return await read();
+        }
+        catch (DbException ex)
+        {
+            _logger.LogWarning(ex,
+                "The {Source} read failed; the calculation is refused as payroll-config-unavailable", source);
+            throw new ConfigLookupUnavailableException(source, ex);
+        }
     }
 
     /// <summary>
@@ -4092,6 +4161,15 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
+    /// <b>The same agreement is not a change (QUAL-209).</b> A date in
+    /// <see cref="PlanHistories.SameAgreementCodeRowStarts"/> is dropped as well: the dated agreement-code read gives
+    /// the same code for <c>d − 1</c> as for <c>d</c>, so the row starting there continues the agreement (a
+    /// backdated hire's two rows, a gap insert next to a same-code row). Only that affirmative match drops a date; a
+    /// date with no code for <c>d − 1</c> stays a change. The planner's segments are cut at every row start as
+    /// before; only this refusal reads the codes.
+    /// </para>
+    ///
+    /// <para>
     /// Pure over the histories: it reads nothing and writes nothing. The exception's message names the
     /// employee, the period and the change date for diagnosis; the host's 422 is built without it.
     /// </para>
@@ -4101,12 +4179,17 @@ public sealed class PeriodCalculationService
         if (histories.AgreementCodeEffectiveDates is not { Count: > 0 } dates)
             return;
 
-        // R43: drop the hire-dated rows — a date whose previous day the employee was not employed on.
+        // R43: drop the hire-dated rows — a date whose previous day the employee was not employed on. QUAL-209: drop
+        // the rows that continue the same agreement.
         var changes = new List<DateOnly>(dates.Count);
         foreach (var date in dates)
         {
-            if (date > DateOnly.MinValue && IsEmployedOn(histories.EmploymentWindows, date.AddDays(-1)))
+            if (date > DateOnly.MinValue
+                && IsEmployedOn(histories.EmploymentWindows, date.AddDays(-1))
+                && !histories.SameAgreementCodeRowStarts.Contains(date))
+            {
                 changes.Add(date);
+            }
         }
         if (changes.Count == 0)
             return;
