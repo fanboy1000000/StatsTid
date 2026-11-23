@@ -69,7 +69,9 @@ public sealed class FrozenConfigReplayTests : IAsyncLifetime
     /// An HK/OK26 version with a weekly norm of <b>32</b> h is then published, dated Monday 1 June 2026. A replay of June
     /// by its manifest id, on a second service with the same real lookup, must give back the forward result byte for
     /// byte, and the timeline request it sends must carry <b>37</b> as June's piece's <c>config.weeklyNormHours</c>
-    /// (the frozen value), never 32.
+    /// (the frozen value), never 32. Beyond that one setting, each piece's raw <c>config</c> object in the replay's
+    /// request equals the forward request's as JSON text (every member, the decimal scale and the enum encoding,
+    /// through PostgreSQL).
     ///
     /// <para>
     /// <b>NR-P22's condition.</b> The changed publish is dated later than the version it replaces (the seeded one, from
@@ -83,7 +85,7 @@ public sealed class FrozenConfigReplayTests : IAsyncLifetime
     /// <c>IAgreementConfigLookup.ResolveAsync</c> as of the piece's first day with its frozen keys, as TASK-14827's
     /// interim code did) sends 32: the echo engine's <c>ECHO_CONFIG|2026-06-01|32</c> line differs from the original's
     /// <c>…|37</c>, so the byte comparison fails, and the request assertion reads 32. On the code before TASK-14830 the
-    /// same replay is refused <c>replay-config-changed</c>, so the fact cannot pass there either. Other facts expected
+    /// same replay is refused by the retired fingerprint check, so the fact cannot pass there either. Other facts expected
     /// red under M-13: none expected (the replay facts publish nothing between forward and replay).
     /// </para>
     /// </summary>
@@ -110,6 +112,16 @@ public sealed class FrozenConfigReplayTests : IAsyncLifetime
         Assert.True(replay.Success);
         Assert.Equal(Canonical(forward.Result, withManifestIds: true), Canonical(replay, withManifestIds: true));
         Assert.Equal(new[] { 37m }, PieceWeeklyNorms(replayEngine));
+
+        // Every member of every piece's config, the decimal scale and the enum encoding included, through PostgreSQL:
+        // the replay's raw `config` objects equal the forward's as JSON text, piece by piece (the weekly norm above is
+        // one of 41 members).
+        var forwardConfigs = PieceConfigs(forwardEngine);
+        var replayConfigs = PieceConfigs(replayEngine);
+        Assert.NotEmpty(forwardConfigs); // non-vacuity
+        Assert.Equal(forwardConfigs.Count, replayConfigs.Count);
+        for (var i = 0; i < forwardConfigs.Count; i++)
+            Assert.Equal(forwardConfigs[i], replayConfigs[i]);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -119,13 +131,13 @@ public sealed class FrozenConfigReplayTests : IAsyncLifetime
     /// <summary>
     /// <b>Kind F</b> (CI). AC-C3b, projection present. June is calculated; the row's <c>plan_inputs_jsonb</c> is then
     /// rewritten to the shape written between the T14b stack and TASK-14830: its pieces carry <c>orgId</c>, it holds
-    /// <c>configFingerprints</c> and no <c>configRuns</c>. The replay is refused <c>replay-manifest-without-frozen-inputs</c>,
+    /// the retired fingerprint list and no <c>configRuns</c>. The replay is refused <c>replay-manifest-without-frozen-inputs</c>,
     /// no request reaches the engine and nothing is written for this manifest or employee.
     ///
     /// <para>
     /// <b>Red conditions.</b> On the code before TASK-14830 <c>IsComplete</c> accepts a record with fingerprints and no
     /// configurations, and a replay re-resolves each piece's configuration (TASK-14827's interim code) and reaches the
-    /// engine: the replay answers, or is refused <c>replay-config-changed</c>, never the frozen-inputs reason, so the
+    /// engine: the replay answers, or is refused by the retired fingerprint check, never the frozen-inputs reason, so the
     /// refusal assertion fails, and the "no engine request" assertion fails too.
     /// </para>
     /// </summary>
@@ -167,10 +179,13 @@ public sealed class FrozenConfigReplayTests : IAsyncLifetime
     /// <c>orgId</c> either: a manifest written before S148.
     ///
     /// <para>
-    /// <b>Red conditions.</b> On the base each is already refused by TASK-14827's early rule (a piece without an
-    /// organisation); the discriminating assertion is the same reason with no engine request and nothing written. A
-    /// <c>IsComplete</c> that dropped the organisation rule without the configuration rule lets the replay reach the
-    /// engine, and the same assertions fail.
+    /// <b>Red conditions.</b> The fact needs <b>both</b> rules of <c>IsComplete</c> gone to go red: the pieces carry no
+    /// organisation (the organisation rule) and the record holds no configurations (the configuration rule), and either
+    /// rule alone still refuses it by name. On the base, TASK-14827's organisation rule refuses it, so the fact is green
+    /// there (kind R); dropping the organisation rule alone leaves the configuration rule refusing it, so that mutation
+    /// is not seen here but by the Unit fact <c>FrozenInputsRefusalTests.OrganisationRule_PieceAndEntryWithoutOrgId_RefusedByName</c>. Only a replay
+    /// that reaches the engine, or is not refused by this name, fails the assertions (the reason, no engine request,
+    /// nothing written).
     /// </para>
     /// </summary>
     [Fact]
@@ -216,6 +231,16 @@ public sealed class FrozenConfigReplayTests : IAsyncLifetime
             .ToList();
     }
 
+    /// <summary>The raw <c>config</c> object of each piece of the engine's last timeline request, as JSON text, in piece order.</summary>
+    private static IReadOnlyList<string> PieceConfigs(ReplayEchoRuleEngine engine)
+    {
+        var body = engine.Requests.Last(r => r.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).Body;
+        using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.GetProperty("pieces").EnumerateArray()
+            .Select(p => p.GetProperty("config").GetRawText())
+            .ToList();
+    }
+
     /// <summary>June 2026 calculated forward on the echo engine; returns the manifest id and the forward result.</summary>
     private async Task<(Guid ManifestId, PeriodCalculationResult Forward)> CalculateJuneAsync()
     {
@@ -226,13 +251,14 @@ public sealed class FrozenConfigReplayTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The pre-stage shape of a <c>planInputs</c> object: <c>configRuns</c> removed, <c>configFingerprints</c> present
-    /// (the retired member), and, for a manifest written before S148, no <c>orgId</c> on any piece.
+    /// The pre-stage shape of a <c>planInputs</c> object: <c>configRuns</c> removed, the retired fingerprint list present
+    /// (a legacy fixture property), and, for a manifest written before S148, no <c>orgId</c> on any piece.
     /// </summary>
     private static string PreStagePlanInputs(JsonNode planInputs, bool withOrgId)
     {
         var node = planInputs.DeepClone().AsObject();
-        Assert.True(node.Remove("configRuns"), "non-vacuity: the forward manifest held configRuns");
+        node.Remove("configRuns"); // present after S148, never written before it
+        Assert.Null(node["configRuns"]); // the fixture shape holds none, whichever code wrote the forward manifest
         node["configFingerprints"] = new JsonArray("stub");
         foreach (var piece in node["pieces"]!.AsArray())
         {

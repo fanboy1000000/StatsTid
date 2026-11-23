@@ -4,7 +4,7 @@ namespace StatsTid.Tests.Unit.Rules;
 
 /// <summary>
 /// The evaluation-model marker a replay must match (<c>replay-evaluation-model-changed</c>, ADR-016 D10).
-/// Re-homed here from the retired <c>ConfigFingerprintTests</c> (S148 TASK-14830: the config fingerprint is gone, the
+/// Re-homed here from the retired fingerprint tests (S148 TASK-14830: the fingerprint check is gone, the
 /// marker stays). Kind R: a regression pin on an existing constant.
 /// </summary>
 public sealed class EvaluationModelMarkerTests
