@@ -3893,10 +3893,11 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>The three configuration-date sources, named in <see cref="ConfigLookupUnavailableException.Layer"/>
-    /// and the server log (never in a response body).</summary>
-    private const string AgreementConfigVersionDates = "agreement configuration version dates";
-    private const string PositionOverrideVersionDates = "position override version dates";
-    private const string LocalProfileActivationDates = "local agreement profile activation dates";
+    /// and the server log (never in a response body), in the lookup's layer names with the Backend's
+    /// "version-date" suffix (<c>DailyNormCalculator</c>), so one search finds both hosts' refusals.</summary>
+    private const string AgreementConfigVersionDates = "central agreement configuration version-date";
+    private const string PositionOverrideVersionDates = "position override version-date";
+    private const string LocalProfileActivationDates = "local agreement profile version-date";
 
     /// <summary>
     /// Runs one configuration-date read: the agreement-config, position-override and local-profile version dates
@@ -3907,8 +3908,9 @@ public sealed class PeriodCalculationService
     /// <see cref="ConfigLookupUnavailableException"/> with the original as its inner exception, which both
     /// calculating routes answer with their fixed 503 <c>payroll-config-unavailable</c> (ADR-043 D12, P-13; wave-5
     /// batch-C ruling 12). <see cref="OperationCanceledException"/> and every other exception (a defect, not an
-    /// outage) propagate unchanged, as in the lookup's own read (<c>ConfigResolutionService</c>). The reads run
-    /// while the plan is built, before any rule-engine call or write, so nothing is calculated or written.
+    /// outage) propagate unchanged, as in the lookup's own read (<c>ConfigResolutionService</c>) and the Backend's
+    /// date reads (<c>DailyNormCalculator</c>). The reads run while the plan is built, before any rule-engine call
+    /// or write, so nothing is calculated or written.
     /// </summary>
     private async Task<T> ConfigDatesOrUnavailableAsync<T>(Func<Task<T>> read, string source)
     {
