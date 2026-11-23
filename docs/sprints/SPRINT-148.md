@@ -3013,3 +3013,38 @@ M-40 included [O for the 14 facts of the five classes run].
   - The `TryResolveDatedProfileAsync` log label, if it is inside the brief's bounds.
   - The closing of the interim set-fingerprint window, told to the owner at O-17.
 - **Expected by the brief (item 10):** both test projects stop compiling at its tip. TASK-14830-T repairs or retires those sites.
+
+**TASK-14830 returned** (`payroll-integration`; one commit `fc5d0dfa` on `f328d00d`; report `.claude/reviews/S148-TASK-14830-report.md`).
+- **What it builds, in plain words:**
+  - Each month's proof now stores the full agreement rules sent to the engine, all 41 settings, one copy per stretch of the month, each labelled with its dates, agreement, OK version, position and institution.
+  - A replay hands the engine exactly those stored rules and never asks the configuration database. A back-dated publish cannot change what a replay shows; it reaches a paid month only through an explicit correction.
+  - The fingerprint (a hash that could say "something changed" but could not give the rules back) retires, with its check and the refusal `replay-config-changed`.
+  - A proof written before this change has no stored rules, and a replay refuses it by name (`replay-manifest-without-frozen-inputs`).
+- **O-17 note 1 is closed:** each stretch's rules are stored in its own position, so the interim set-fingerprint window (two stretches swapping rules unseen) cannot occur. Proofs written in that window are refused by name. No route replays, and the project reseeds.
+- **As built:** `PlanInputs.ConfigRuns` holds `FrozenConfigRun(From, To, AgreementCode, OkVersion, Position, OrgId, Config)`. It is filled one for one from TASK-14827's `EvaluationInputs.Configs`, the same instances the engine received.
+  - `FrozenEvaluationInputs` checks each entry against its piece and calls no lookup.
+  - `IsComplete` also requires `ConfigRuns` and every piece's organisation.
+  - TASK-14827's step 3b re-resolution and its `ConfigChanged` catch are deleted.
+  - `ConfigFingerprint.cs` is deleted.
+- **Size:** about +1.15 KB per piece; a typical month has 1 or 2 pieces, and the worst case is 8 (about +9.2 KB). It is stored twice, in the event and the projection. TASK-14830-T records the figure; O-18's call follows.
+- **Gate:**
+  - The four `src` projects build with 0 errors and warnings unchanged. The solution has 18 errors, all in `tests/**` at removed members, as the brief expected (item 10).
+  - DemoSeed 170.
+  - NR-P10's grep went from 22 lines in 8 files to empty. Ruling 13's grep is empty; `fingerprint` in `src` returns only the two unrelated identity hits.
+  - The diff touches only the 10 authorized files.
+- **The four T14 remarks:**
+  - `ConfigFingerprint.cs:13-17` was deleted with the file.
+  - `TimelineEvaluationResponse.cs` is rewritten true-now.
+  - `EnsureConfigUnchanged` was deleted.
+  - `ReplayRefusedException.cs:37` was deleted with `ConfigChanged`, and the class remark was rewritten.
+- **Found, not fixed:**
+  - **The `TryResolveDatedProfileAsync` log label** (`PeriodCalculationService.cs:4014`; a missing `user_organisations` row is named `user_agreement_codes`) lies outside its PCS bounds. It is carried to TASK-14831, which maps the record gap (T13), or to an Orchestrator one-line fix if 14831's bounds exclude it.
+  - A null `DefaultCompensationModel` does not survive the frozen form; see the ruling below.
+  - `EngineConfigRequests.cs:202`'s untrue comment goes to TASK-14830-T.
+- **Brief contradiction, ruled by the Orchestrator (TASK-14830-T's Do 3, arm (2)):**
+  - **The problem:** `EventSerializer` omits nulls by design (`WhenWritingNull`). `DefaultCompensationModel` is a non-nullable `string` with the initializer `"AFSPADSERING"`, so a null decodes as `"AFSPADSERING"`.
+  - **The ruling:** the arm keeps a non-nullable reference member at a non-null value; today that is only that member. Its type and the database (NOT NULL with a CHECK) exclude null.
+  - **What still holds:** the arm's purpose, a guard against a later switch to default-skipping, holds for every value-type and nullable member, including `NormModel` at zero. The count of compared members is unchanged.
+  - **Declined:** TASK-14830's option (ii), a `[JsonIgnore(Never)]` on the SharedKernel type, would change production serialization for a value that cannot occur.
+  - The ruling goes to the 5a lenses with the pair.
+- **TASK-14830-T dispatched** (`test-qa`) on `fc5d0dfa`, with the ruling and the extra census sites from TASK-14830's Gate 6: `EngineConfigFromRequestTests.cs:88-90`, the stub engines' `configFingerprints` member in eight places, and four untrue comments.
