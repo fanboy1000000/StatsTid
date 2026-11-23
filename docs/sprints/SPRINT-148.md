@@ -3006,3 +3006,10 @@ M-40 included [O for the 14 facts of the five classes run].
   - TASK-14846;
   - then CI-W5 and CI-M5;
   - then the QUAL-263 task (U2).
+
+**TASK-14830 dispatched** (`payroll-integration`, on master `f328d00d`; report header `## S148 TASK-14830 report`). The month's proof holds the configurations it was paid on, by value; a replay sends exactly those and never looks them up again; the fingerprint machinery retires.
+- **Carried into the dispatch:**
+  - T14's four untrue remarks: `ConfigFingerprint.cs:13-17`, `TimelineEvaluationResponse.cs:11-12`, `EnsureConfigUnchanged`'s remark and refusal text, and `ReplayRefusedException.cs:37`. The Orchestrator checks them at its 5α.
+  - The `TryResolveDatedProfileAsync` log label, if it is inside the brief's bounds.
+  - The closing of the interim set-fingerprint window, told to the owner at O-17.
+- **Expected by the brief (item 10):** both test projects stop compiling at its tip. TASK-14830-T repairs or retires those sites.
