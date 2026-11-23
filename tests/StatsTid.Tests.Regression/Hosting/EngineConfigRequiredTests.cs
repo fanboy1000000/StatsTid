@@ -67,6 +67,13 @@ public sealed class EngineConfigRequiredTests
 
     private async Task<(HttpStatusCode Status, JsonElement Body)> PostAsync(string path, object body)
     {
+        var (status, text) = await PostRawAsync(path, body);
+        return (status, JsonDocument.Parse(text).RootElement.Clone());
+    }
+
+    /// <summary>The status and raw body, for an answer that is not JSON (the framework's own binding refusal).</summary>
+    private async Task<(HttpStatusCode Status, string Text)> PostRawAsync(string path, object body)
+    {
         var tokenService = new JwtTokenService(new JwtSettings
         {
             Issuer = "statstid",
@@ -88,7 +95,7 @@ public sealed class EngineConfigRequiredTests
 
         var response = await _factory.CreateClient().SendAsync(request);
         var text = await response.Content.ReadAsStringAsync();
-        return (response.StatusCode, JsonDocument.Parse(text).RootElement.Clone());
+        return (response.StatusCode, text);
     }
 
     private static void AssertRefusal(HttpStatusCode status, JsonElement body, string sentence)
@@ -168,6 +175,44 @@ public sealed class EngineConfigRequiredTests
             workIntervals = Array.Empty<object>(),
         });
         AssertRefusal(compliance.Status, compliance.Body, S6);
+    }
+
+    /// <summary>
+    /// S148 T14b FU-T (5a ruling T5). Kind <b>R</b> (Regression, non-Docker; the real engine host binds the request the
+    /// Backend's overtime-governance route sends). Plain language: the engine's employment profile requires an
+    /// <c>employmentCategory</c>, so a governance request whose profile lacks it cannot bind and the engine answers 400;
+    /// the Backend's route used to send exactly that profile, so in the composed system the warning never ran. With the
+    /// member it answers 200 and the governance rule's own result. Both requests carry the config, so the missing member
+    /// is the only difference; a 400 for the missing config would be the sentence S1, not this. Red conditions: a change
+    /// that made the engine stop requiring the member turns the 400 arm red; one that stopped it binding the member turns
+    /// the 200 arm red. Green before and after the Backend's fix (it is engine-side); the Backend half (the route now
+    /// sends the member) is proven by the composed smoke probe at CI-W5.
+    /// </summary>
+    [Fact]
+    public async Task OvertimeGovernance_ProfileWithoutEmploymentCategory_400_WithIt_200()
+    {
+        object Request(object profile) => new
+        {
+            profile,
+            entries = Array.Empty<object>(),
+            periodStart = Monday,
+            periodEnd = Sunday,
+            overtimeHoursInPeriod = 0m,
+            hasPreApproval = false,
+            config = EngineConfigRequests.Config("HK", "OK26"),
+        };
+
+        var without = await PostRawAsync("/api/rules/check-overtime-governance", Request(new
+        {
+            employeeId = "EMP001",
+            agreementCode = "HK",
+            okVersion = "OK26",
+        }));
+        var with = await PostAsync("/api/rules/check-overtime-governance", Request(Profile()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, without.Status);
+        Assert.Equal(HttpStatusCode.OK, with.Status);
+        Assert.Equal("OVERTIME_GOVERNANCE_CHECK", with.Body.GetProperty("ruleId").GetString());
     }
 
     /// <summary>

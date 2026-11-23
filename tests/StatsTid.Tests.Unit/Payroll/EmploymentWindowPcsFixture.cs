@@ -245,7 +245,10 @@ internal static class EmploymentWindowPcsFixture
         IReadOnlyList<RuleClassification>? ruleSet = null,
         IRecordedHoursReader? hoursReader = null,
         IFlexLedgerReader? flexLedgerReader = null,
-        IAgreementConfigLookup? configLookup = null)
+        IAgreementConfigLookup? configLookup = null,
+        AgreementConfigRepository? agreementConfigRepo = null,
+        PositionOverrideRepository? positionOverrideRepo = null,
+        LocalAgreementProfileRepository? localAgreementProfileRepo = null)
     {
         // S137 Step-5a (Reviewer WARNING 1): PCS REFUSES a profile resolver without a window
         // resolver — that pairing is the dropped-DI shape that would silently pay a leaver all
@@ -265,7 +268,7 @@ internal static class EmploymentWindowPcsFixture
             Configuration(),
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(ruleSet ?? RuleSet),
-            localAgreementProfileRepo: null,
+            localAgreementProfileRepo: localAgreementProfileRepo,
             profileResolver: profileResolver,
             employmentWindowResolver: windowResolver,
             employeeProfileRepo: null,
@@ -284,7 +287,10 @@ internal static class EmploymentWindowPcsFixture
             // is what the former caller-supplied 0m said. A fact that needs a non-zero opening passes
             // InMemoryFlexLedgerReader.ClosedAt(month, closing): an employed P (implicit, no resolver) with a
             // recorded closing -> R-14 case 4a, CHAINED.
-            flexLedgerReader: flexLedgerReader ?? new InMemoryFlexLedgerReader());
+            flexLedgerReader: flexLedgerReader ?? new InMemoryFlexLedgerReader(),
+            // S148 T14b FU-T: the three configuration-date repositories, for the one fact about a failed date read.
+            agreementConfigRepo: agreementConfigRepo,
+            positionOverrideRepo: positionOverrideRepo);
     }
 
     /// <summary>

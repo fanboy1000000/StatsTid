@@ -223,8 +223,8 @@ public class SmokeTests
     //       touch the rule engine and does NOT discriminate the hop (stated so the test is
     //       never misread or weakened by leg reordering).
     //   (3) COMPLIANCE HOP — the EU-WTD compliance-warnings endpoint (the SILENT half of the
-    //       incident: warnings never loaded, no user-visible error) answers NON-503, i.e. its
-    //       backend→rule-engine /api/rules/check-compliance hop is alive.
+    //       incident: warnings never loaded, no user-visible error) answers 200 with the result's
+    //       shape, i.e. its backend→rule-engine /api/rules/check-compliance hop is alive.
     //
     // SELF-ISOLATION (R6 / Step-0b B4 + Step-7a B3): the dev stack is lived-in and this test
     // re-runs. Before S145 the absence save APPENDED a projection row and added to the VACATION
@@ -306,12 +306,19 @@ public class SmokeTests
         Assert.Equal("absence_full_day_only", careBody.GetProperty("error").GetString());
 
         // ── (3) COMPLIANCE HOP (the SILENT half of the incident): the EU-WTD compliance
-        //         endpoint's backend→rule-engine check-compliance hop is alive ⇒ NON-503. ──
+        //         endpoint's backend→rule-engine check-compliance hop is alive ⇒ 200 with the result's shape.
+        //         Not merely "not 503": a refused configuration (500) or a refused record (500) would pass that. ──
         var complianceRequest = new HttpRequestMessage(
             HttpMethod.Get, $"{BackendUrl}/api/compliance/{employeeId}/period?year={year}&month={month}");
         WithAuth(complianceRequest);
         var complianceResponse = await _client.SendAsync(complianceRequest);
-        Assert.NotEqual(HttpStatusCode.ServiceUnavailable, complianceResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, complianceResponse.StatusCode);
+        var compliance = await complianceResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("REST_PERIOD_CHECK", compliance.GetProperty("ruleId").GetString());
+        Assert.Equal(employeeId, compliance.GetProperty("employeeId").GetString());
+        Assert.True(compliance.GetProperty("success").GetBoolean());
+        Assert.Equal(JsonValueKind.Array, compliance.GetProperty("violations").ValueKind);
+        Assert.Equal(JsonValueKind.Array, compliance.GetProperty("warnings").ValueKind);
     }
 
     /// <summary>

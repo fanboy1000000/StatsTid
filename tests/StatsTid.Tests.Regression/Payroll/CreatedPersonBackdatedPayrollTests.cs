@@ -25,7 +25,7 @@ public sealed class CreatedPersonBackdatedPayrollTests : DatedPayrollFixture
     private static readonly DateOnly Nov30 = new(2026, 11, 30);
 
     /// <summary>
-    /// <b>Kind R (CI).</b> AC-C13k (2). Anna is created through the user create on Tuesday 10 November 2026 (clock injected)
+    /// <b>Kind F (CI).</b> AC-C13k (2). Anna is created through the user create on Tuesday 10 November 2026 (clock injected)
     /// in STY01; HR moves her employment start date, profile and agreement code to Monday 2 November 2026 (the three
     /// routes, TASK-14820-T's resolver fact is part 1). November 2026 (opens on a Sunday; October holds none of her
     /// employed days, so no previous month is needed) with 7.4 h on every weekday from 2 November, November APPROVED:
@@ -33,9 +33,12 @@ public sealed class CreatedPersonBackdatedPayrollTests : DatedPayrollFixture
     /// lines carry NORMAL_HOURS for 2 to 9 November (the discriminating assertion: the 200 with lines for the backdated days).
     ///
     /// <para>
-    /// <b>Red conditions.</b> R: this holds before the stack as well (the organisation came from the live column). It
-    /// fails if the create dated her first institution from 10 November (the days 2-9 would have no organisation and the
-    /// month would be refused as a record gap) or if payroll's per-day configuration lookup could not resolve those days.
+    /// <b>Red conditions.</b> F: at <c>043c5f35</c> the month is refused 422 <c>agreement-change-mid-week</c> (with
+    /// <c>AgreementCodeChange</c>): her agreement history is AC from 2 November to 10 November and AC from 10 November, and the
+    /// week check counted the start of the second AC row on Tuesday 10 November as a change (QUAL-209); the status
+    /// assertion fails. It also fails if the create dated her first institution from 10 November (the days 2-9 would have no
+    /// organisation and the month would be refused as a record gap) or if payroll's per-day configuration lookup could not
+    /// resolve those days.
     /// </para>
     /// </summary>
     [Fact]
