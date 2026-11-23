@@ -4013,9 +4013,10 @@ public sealed class PeriodCalculationService
         // ONE CONDITION, ONE NAME (S141 / TASK-14114; see RecordGap for why it is refused and how it is
         // logged). The resolver reports "no complete employment record on this date" two different ways:
         // it RETURNS NULL when no employee_profiles row covers the as-of date, and it THROWS
-        // EmployeeProfileNotFoundException when a profile row covers it but no user_agreement_codes row
-        // does (its documented data-integrity fail-loud). Both land on the one gap, named with the table
-        // an HR administrator's repair actually touches. Neither name is date-shaped.
+        // EmployeeProfileNotFoundException when a profile row covers it but no user_agreement_codes row, or
+        // (since S148 C-13) no user_organisations row, does (its documented data-integrity fail-loud; the one
+        // exception type covers both, so the name covers both). Both land on the one gap, named with the
+        // tables an HR administrator's repair actually touches. Neither name is date-shaped.
         //
         // ADR-040 D7 — THE CAUGHT EXCEPTION IS DISCARDED, NOT LOGGED AND NOT WRAPPED. The resolver's own
         // exception carries asOfDate in its Message, and for a starter's first EMPLOYED segment that date
@@ -4031,7 +4032,7 @@ public sealed class PeriodCalculationService
         {
             EmploymentProfile? resolvedProfile = null;
             // The initial value covers the NULL return (no employee_profiles row spans the as-of date);
-            // the catch below narrows it to the agreement-code hole.
+            // the catch below narrows it to the agreement-code or organisation hole.
             var missingRecord = "employee_profiles";
             try
             {
@@ -4040,7 +4041,7 @@ public sealed class PeriodCalculationService
             }
             catch (EmployeeProfileNotFoundException)
             {
-                missingRecord = "user_agreement_codes";
+                missingRecord = "user_agreement_codes or user_organisations";
             }
 
             if (resolvedProfile is null)
