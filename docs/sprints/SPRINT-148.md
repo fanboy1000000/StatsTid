@@ -3160,3 +3160,14 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Frontend:** untouched since `f328d00d`, so the frontend checks are not re-run.
 - **Housekeeping:** the last TASK-14830 worktree is removed, and only the main checkout remains.
 - **Next:** TASK-14831 + -T (T24, payroll's recheck under the lock). It carries T13's 422 `payroll-employment-record-gap` and the `TryResolveDatedProfileAsync` log label (V10).
+
+**The log label fixed (Orchestrator small task, `b105bc27`; TASK-14830 ruling V10).**
+- **What was wrong:** since S148 C-13, the resolver's one `EmployeeProfileNotFoundException` also covers a missing `user_organisations` row, yet payroll's `employment_record_gap` log named only `user_agreement_codes`.
+- **The fix:** it now names both tables. This is the server log only; no response body carries it.
+- **Check:** Unit 1724 green. The pin in `EmploymentRecordGapDiagnosticsTests` (Contains `user_agreement_codes`) still holds.
+
+**TASK-14831's brief gains item 10** (`80d51054`; carried from the T14b stack's ruling T13). Both calculating routes answer a record gap with a named 422 `payroll-employment-record-gap`, with the ruled body. There is no date or table in the body. If a fact pins the anonymous 500, a QUAL row is registered instead.
+
+**TASK-14831 dispatched** (`payroll-integration`, on master `80d51054`; report header `## S148 TASK-14831 report`).
+- **What it builds:** payroll's recheck under the pay-inputs lock (T24): a refusal 409 `payroll-inputs-changed` if a month's inputs changed between calculating and recording, and the recording-time 503. Plus item 10.
+- **The batch-D owner question (§ 2)** was answered on 2026-11-19 with (a): close the wage-type gap after S148 (QUAL-259). It changes nothing here.
