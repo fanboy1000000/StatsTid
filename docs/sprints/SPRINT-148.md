@@ -3196,3 +3196,34 @@ M-40 included [O for the 14 facts of the five classes run].
   - two test comments (`FlexLedgerRaceTests.cs:15`, `:98`), which go to 14831-T.
 - **The Orchestrator's checks:** the 6 authorized files; both trailers present.
 - **TASK-14831-T's brief gains Do 11** (`80d7ec67`): pin the 422 on both routes, with nothing written. **TASK-14831-T dispatched** (`test-qa`) on `4c2061b5`.
+
+**TASK-14831-T returned** (`test-qa`, Sonnet 5.5; `ae00471c`, `f493bb32` on `4c2061b5`; report `.claude/reviews/S148-TASK-14831-T-report.md`). Tests only.
+- **Either order is safe, with one exception (below).**
+  - When the change wins (a publish, a publish dated 16 March, a transfer, a recalculation after a publish), the recording answers 409 with nothing written, and the retry pays the new values. After a split, the piece to the 15th is on 37 h and from the 16th on 32 h.
+  - When the recording wins, the change lists the month on HR's worklist.
+  - Each order is forced through the held lock and the waiter query, never by timing.
+- **The census:** all 15 lock calls (13 exclusive, 2 shared) have a fact. Row (3)'s two shared-mode facts are added; the census file is edited by addition only.
+- **AC-PIL-f (13 Unit facts):**
+  - M-7 (the comparison compares nothing) turns the 10 difference facts red.
+  - M-52 (a day the derivation cannot cover passes) turns exactly arm (3) red.
+  - The equal-inputs arm stays green under both.
+- **Do 11:** the 422 on both routes, with exactly three body members, no date or id, and nothing written.
+- **The four figures** (a local PostgreSQL 16; recorded, not judged):
+  - (1) a 1,200-row publish with five waiting exports: the publish answers 3.3 s after the release, and the exports 4.1–4.6 s;
+  - (2) an export queued behind an HR save answers 52 ms after the release;
+  - (3) SEC-066, five saves against a pool of 4: 1 completed and 4 answered 500 after 15–31 s, writing nothing;
+  - (4) payroll's own pool of 4: all 4 exports failed, writing nothing.
+- **The re-read (Do 8):** no second waiter can appear in `OrganisationDriftGuardTests` part (7); the class passed 7/7 locally.
+- **Gate:** build 0 errors, CA2100 113; Unit 1724 + 13 = 1737; DemoSeed 170; Regression non-Docker 147.
+- **Local cluster** (port 55453, not CI evidence): the race facts 8/9; the census and Do 11, 22/22; the figures 4/4; `OrganisationDriftGuardTests` 7/7; PIN-1 2/2 with the golden unmoved.
+- **The finding, AC-PIL-g (1) RED** (`ProfileCloseFirst_Export409`): a profile closed on Tuesday 31 March 2026, then the March export, answers 200 and records March; the brief expects 409.
+  - **Cause, per the report:** plan boundaries come only from profile start dates, and each segment's profile is resolved at its start. So a profile that ends inside the month is neither a boundary nor a gap, and neither the calculation nor the recheck sees it.
+  - **This looks like an older payroll gap that the race fact exposed:** the days after a mid-month profile end would be paid under the ended profile.
+  - The expectation is not changed, and the fact is committed red with its reason.
+  - It goes to the pair's review as an explicit question, then to adjudication.
+- **The Orchestrator's checks:** `tests/**` only; the census file has 0 removed lines.
+- **The pair's review dispatched** on `80d51054..f493bb32`:
+  - 5α (`## S148 TASK-14831 5α`);
+  - Fable (`## S148 TASK-14831 5a reviewer`);
+  - Codex (`codex-14831-run.ps1`).
+  - Both lenses are asked to judge AC-PIL-g (1): (i) whether the forward calculation pays those days, (ii) whether that predates S148, (iii) where the fix belongs.
