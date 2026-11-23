@@ -7,6 +7,8 @@ interface CheckboxProps {
   label: string
   id: string
   disabled?: boolean
+  /** id of a note that describes this control (aria-describedby). */
+  describedBy?: string
 }
 
 export function Checkbox({
@@ -15,6 +17,7 @@ export function Checkbox({
   label,
   id,
   disabled = false,
+  describedBy,
 }: CheckboxProps) {
   return (
     <label htmlFor={id} className={styles.wrapper}>
@@ -25,6 +28,7 @@ export function Checkbox({
           checked={checked}
           onChange={onChange}
           disabled={disabled}
+          aria-describedby={describedBy}
           className={styles.input}
         />
         <span

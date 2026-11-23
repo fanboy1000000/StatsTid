@@ -11,7 +11,7 @@
 //         Resterende value render at 1 decimal while ALL comparisons stay exact.
 //   R6  — BOTH warning triggers, WARNING-ONLY (no VoluntaryUnsocialHours toggle —
 //         recorded follow-up): (i) worked > 9 t → the amber merarbejde/hvile Alert
-//         in the meta area; (ii) the 11-hour rest rule judged on the 24 elapsed
+//         in the meta area; (ii) the minimum-rest rule (the served per-day value) judged on the 24 elapsed
 //         hours before each work end (Europe/Copenhagen), over the served month +
 //         boundary workTime (pure analyzeRestPeriods), evaluated LIVE against the
 //         panel's current periods; a browser without Danish time-zone data shows
@@ -43,7 +43,7 @@ import {
 } from '../hooks/useSkema'
 import { classifyAllocation, unallocated } from '../lib/allocation'
 import { DANISH_MONTHS, formatDanishNumber, parseDanishNumber } from '../lib/locale'
-import type { WorkTimeDay } from '../types'
+import type { DailyNormDay, WorkTimeDay } from '../types'
 import styles from './SkemaDayPanel.module.css'
 
 /** One step-1 period row — raw typed text (the id is a stable React key only). */
@@ -78,6 +78,9 @@ interface SkemaDayPanelProps {
   monthWorkTime: readonly WorkTimeDay[]
   /** The served 0..2 boundary days (prev-month last / next-month first) — R6. */
   boundaryWorkTime?: readonly WorkTimeDay[]
+  /** The served minimum rest per day (hours; null = none in force): each rest-warning work end is
+      judged by its own date's value, and a date with none is not judged (RR-7). */
+  minimumRest?: readonly DailyNormDay[]
   onPeriodsChange: (date: string, periods: DayPanelPeriod[]) => void
   /** hours: parsed exact value; null = cleared (the page posts it as a removal under
       `cleared`, ADR-043 cell clearing). */
@@ -140,6 +143,7 @@ export function SkemaDayPanel({
   dailyNorm,
   monthWorkTime,
   boundaryWorkTime,
+  minimumRest,
   onPeriodsChange,
   onAllocationChange,
   onClose,
@@ -176,6 +180,9 @@ export function SkemaDayPanel({
 
   const diffNorm = dailyNorm !== null ? round2(worked - dailyNorm) : null
 
+  const minimumByDate = useMemo(() => new Map((minimumRest ?? []).map((r) => [r.date, r.hours])), [minimumRest])
+  const openMinimum = minimumByDate.get(date) ?? null
+
   // R6 (i): intra-day long-day trigger.
   const longDay = worked > LONG_DAY_WARNING_HOURS
 
@@ -189,12 +196,12 @@ export function SkemaDayPanel({
     }
     const overlay = [...monthWorkTime.filter((wt) => wt.date !== date), overlayDay]
     try {
-      return { restWarnings: analyzeRestPeriods(overlay, boundaryWorkTime, date), restZoneMissing: false }
+      return { restWarnings: analyzeRestPeriods(overlay, boundaryWorkTime, date, (d) => minimumByDate.get(d) ?? null), restZoneMissing: false }
     } catch (e) {
       if (e instanceof RestZoneUnavailableError) return { restWarnings: null, restZoneMissing: true }
       throw e
     }
-  }, [monthWorkTime, boundaryWorkTime, date, list])
+  }, [monthWorkTime, boundaryWorkTime, date, list, minimumByDate])
 
   // S58 advisory mirrors (backend 422 authoritative).
   const hasOverlap = overlapping.size > 0
@@ -289,8 +296,7 @@ export function SkemaDayPanel({
           <div className={styles.warnings}>
             {longDay && (
               <Alert variant="warning">
-                Mere end 9 timers arbejde på én dag kan udløse merarbejde. Husk 11 timers hvile
-                til næste vagt.
+                {`Mere end 9 timers arbejde på én dag kan udløse merarbejde.${openMinimum !== null ? ` Husk ${formatDanishNumber(openMinimum, 1)} timers hvile til næste vagt.` : ''}`}
               </Alert>
             )}
             {restZoneMissing && (
@@ -303,7 +309,7 @@ export function SkemaDayPanel({
               const shown = restDisplayHours(w.restSeconds)
               return (
                 <Alert key={`${w.date}-${w.endsAt}`} variant="warning">
-                  {`Denne registrering giver kun ${formatDanishNumber(shown, 1)} ${shown === 1 ? 'times' : 'timers'} sammenhængende hvile i de 24 timer før arbejdet slutter ${formatLongDanishDate(w.date)} kl. ${w.endsAt.slice(0, 5)}. Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile.`}
+                  {`Denne registrering giver kun ${formatDanishNumber(shown, 1)} ${shown === 1 ? 'times' : 'timers'} sammenhængende hvile i de 24 timer før arbejdet slutter ${formatLongDanishDate(w.date)} kl. ${w.endsAt.slice(0, 5)}. Hvile under ${formatDanishNumber(minimumByDate.get(w.date) ?? 0, 1)} timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile.`}
                 </Alert>
               )
             })}

@@ -61,6 +61,7 @@ function makeMonth(over: Partial<SkemaMonthData> = {}): SkemaMonthData {
     boundaryWorkTime: [],
     fullDayNormAtMonthEnd: 7.4,
     consumptionBasis: [],
+    minimumRest: [],
     ...over,
   }
 }

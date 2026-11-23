@@ -687,9 +687,6 @@ export const LONG_DAY_WARNING_HOURS = 9
     backend 422 guard stays authoritative — this is inline advisory only. */
 export const MAX_DAY_HOURS = 24
 
-/** §J / SYSTEM_TARGET minimum rest, in hours: the longest unbroken rest in the 24 hours before a work end. */
-export const REST_MINIMUM_HOURS = 11
-
 /**
  * Parse a clock-time string to minutes since midnight, or null when invalid.
  * Accepts the panel's raw typing forms ("9:05", "09:05", "09.05", "0905" —
@@ -955,7 +952,7 @@ interface JudgedEnd {
 }
 
 /**
- * R6 (trigger ii) — the 11-hour rest rule as the authority tests it, client-side and WARNING-ONLY:
+ * R6 (trigger ii) — the minimum-rest rule as the authority tests it, client-side and WARNING-ONLY:
  * the instant warning on unsaved edits, while the rule engine stays the authority and runs the same
  * algorithm, which the shared scenario table (`rest-parity-scenarios.json`, `restParity.test.ts`
  * and the engine's `RestParityTableTests`) keeps honest.
@@ -963,14 +960,15 @@ interface JudgedEnd {
  * At the end of each stint of work (intervals joined at midnight: Skema cannot type 24:00, so a
  * night shift is 22:00-23:59 plus 00:00-06:00), look 24 ELAPSED hours back in Europe/Copenhagen
  * (never the browser's zone): the longest unbroken rest in that window, in whole seconds, must be
- * at least `REST_MINIMUM_HOURS`. Unregistered time is rest; overlapping work is one block; work
+ * at least the minimum served for the work end's own date (`minimumRestHours`). Unregistered time is rest; overlapping work is one block; work
  * typed inside March's missing hour has no length but its end is still judged. A finding is dated
  * the day its work ends; a day with several failing ends gets the lowest value (the earliest end on
  * a tie). A stint running past the open date's month is also judged as ending at 24:00 on the
- * month's last day, as that month sees it, and in full. The minimum is the fixed
- * `REST_MINIMUM_HOURS`; the served one is a later task's. The screen does not apply the engine's
- * voluntary-unsocial-hours exemption or its derogation severity, and uses the fixed minimum; the
- * table proves the rest computation only.
+ * month's last day, as that month sees it, and in full. Each judged end is compared with the
+ * minimum the server serves for its own date (RR-7); a date with no served value (null, or outside
+ * the served span) is not judged: the screen holds no fixed minimum and the server stays the
+ * authority. The screen does not apply the engine's voluntary-unsocial-hours exemption or its
+ * derogation severity; the table proves the rest computation only (with every day's minimum 11).
  *
  * For the open `date`, returns each finding dated `date`, whose judged stint has an interval on
  * `date`, or whose 24-hour window holds work on `date` (ordered by date, then end), or null when
@@ -980,6 +978,7 @@ export function analyzeRestPeriods(
   monthWorkTime: readonly WorkTimeDay[],
   boundaryWorkTime: readonly WorkTimeDay[] | undefined,
   date: string,
+  minimumRestHours: (date: string) => number | null,
 ): RestPeriodWarning[] | null {
   const byDate = new Map<string, WorkTimeDay>()
   for (const wt of boundaryWorkTime ?? []) byDate.set(wt.date, wt)
@@ -1023,7 +1022,8 @@ export function analyzeRestPeriods(
   // One finding per day: the lowest value, the earliest end on a tie.
   const perDay = new Map<string, JudgedEnd>()
   for (const j of judged) {
-    if (j.restSeconds >= REST_MINIMUM_HOURS * 3600) continue
+    const minimum = minimumRestHours(j.date)
+    if (minimum === null || j.restSeconds >= minimum * 3600) continue
     const kept = perDay.get(j.date)
     if (!kept || j.restSeconds < kept.restSeconds || (j.restSeconds === kept.restSeconds && j.end < kept.end)) {
       perDay.set(j.date, j)

@@ -22,6 +22,11 @@ const PROJECTS = [
   { key: 'PRJ-B', label: 'Projekt Beta' },
 ]
 
+// The served minimum rest, 11 h on every day of the March the tests use (value-neutral for the
+// warnings asserted below; the 12 h arm overrides it).
+const served = (hours: number | null) =>
+  Array.from({ length: 31 }, (_, i) => ({ date: `2026-03-${String(i + 1).padStart(2, '0')}`, hours }))
+
 const per = (id: string, from: string, to: string): DayPanelPeriod => ({ id, from, to })
 
 type PanelProps = Parameters<typeof SkemaDayPanel>[0]
@@ -36,6 +41,7 @@ function renderPanel(overrides: Partial<PanelProps> = {}) {
     dailyNorm: 7.4,
     monthWorkTime: [],
     boundaryWorkTime: [],
+    minimumRest: served(11),
     onPeriodsChange: vi.fn(),
     onAllocationChange: vi.fn(),
     onClose: vi.fn(),
@@ -120,6 +126,26 @@ describe('SkemaDayPanel — R6 warnings (warning-ONLY, panel meta area)', () => 
         'Hvile under 11 timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile.',
     )
     expect(warning.closest('[role="alert"]')?.className).toContain('warning')
+  })
+
+  // Kind F (S148 TASK-14829, ruling 24). Red conditions: the sentence names "11" whatever the served
+  // minimum is; the long-day advisory names "11" too, and keeps naming it with no served value.
+  it('S148: the warning and the long-day advisory name the served minimum, 12 h', () => {
+    const monthWorkTime: WorkTimeDay[] = [
+      { date: '2026-03-08', intervals: [{ start: '12:00', end: '23:00' }] },
+    ]
+    renderPanel({ monthWorkTime, periods: [per('p1', '07:00', '17:00')], minimumRest: served(12) }) // 8 h rest, 10 h day
+    expect(screen.getByText(/giver kun 8 timers sammenhængende hvile/).textContent).toContain('Hvile under 12 timer registreres')
+    expect(screen.getByText(/Mere end 9 timers arbejde/).textContent).toBe(
+      'Mere end 9 timers arbejde på én dag kan udløse merarbejde. Husk 12 timers hvile til næste vagt.',
+    )
+  })
+
+  it('S148: with no served minimum for the open date the advisory is its first sentence only', () => {
+    renderPanel({ periods: [per('p1', '08:00', '18:00')], minimumRest: served(null) })
+    expect(screen.getByText(/Mere end 9 timers arbejde/).textContent).toBe(
+      'Mere end 9 timers arbejde på én dag kan udløse merarbejde.',
+    )
   })
 
   // Kind F (S148 3b, adjudication item 9). Red conditions: the shown rest is rounded half up,

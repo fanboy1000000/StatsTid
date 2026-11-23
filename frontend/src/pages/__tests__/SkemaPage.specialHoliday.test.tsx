@@ -80,6 +80,7 @@ const monthData: SkemaMonthData = {
   boundaryWorkTime: [],
   fullDayNormAtMonthEnd: 7.4,
   consumptionBasis: [],
+  minimumRest: [],
 }
 
 const summary = {

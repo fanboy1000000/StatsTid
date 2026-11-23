@@ -81,6 +81,11 @@ function buildDailyNorm(): { date: string; hours: number | null }[] {
   return out
 }
 
+// The served minimum rest: 11 h on every March day (the value the rest-warning assertions below assume).
+function buildMinimumRest(): { date: string; hours: number | null }[] {
+  return buildDailyNorm().map(({ date }) => ({ date, hours: 11 }))
+}
+
 // S120 / TASK-12001 mock re-anchoring — the fixture mirrors the SPEC
 // `SkemaMonthResponse`: `fullDayOnly` is REQUIRED on every absence-type row
 // (previously optional-omitted), and the always-served top-level
@@ -148,6 +153,7 @@ function makeMonthData(overrides: Partial<SkemaMonthData> = {}): SkemaMonthData 
     boundaryWorkTime: [],
     fullDayNormAtMonthEnd: 7.4,
     consumptionBasis: [],
+    minimumRest: buildMinimumRest(),
     ...overrides,
   }
 }
