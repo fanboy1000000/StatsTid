@@ -206,6 +206,8 @@ public sealed class PcsNeverSilentTests
             priorPeriodApprovalReader: approval,
             // S148 TASK-14822-T: not about transfers; a fake answering "no transfer dates" (the service refuses a plan without an organisation reader).
             organisationHistoryReader: new NoTransferDates(),
+            // S148 TASK-14828-T: not about configurations; a fake answering the compiled config (the service refuses a calculation without a lookup).
+            configLookup: new FakeConfigLookup(),
             // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
             flexLedgerReader: new InMemoryFlexLedgerReader());
 
