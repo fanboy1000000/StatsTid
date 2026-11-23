@@ -3312,3 +3312,28 @@ M-40 included [O for the 14 facts of the five classes run].
   - **X6:** the report's claim is corrected.
   - **X7:** TASK-14838 keeps the picker's link and its hidden helper.
 - **FU-1 dispatched** on `2d086a28`.
+
+**TASK-14846 FU-1 returned** (`ux`, Sonnet 5.5; `0a3a3d7c` on `2d086a28`; report `.claude/reviews/S148-TASK-14846-FU-1-report.md`).
+- **What changed:** the date picker and both carry-forward checkboxes now point at the note, so all ten locked controls do. On a self record the picker's helper text is hidden, with no new copy.
+- **Tests:** one test loop pins the link on all eight inputs, case (4) on both checkboxes, and case (2) the non-self control. The new assertions are red at `2d086a28`, quoted.
+- **Checks:** all five frontend checks exit 0; vitest 1217.
+- **Cycle 2:**
+  - 5α (`S148-TASK-14846-5alpha-c2.md`): **PASS**.
+  - Codex (`S148-TASK-14846-5a-codex-c2.raw.md`): **APPROVED**; the warning is closed. The manual screen-reader pass stays owed (X3).
+  - Fable: dispatched.
+
+**TASK-14847 returned** (`payroll-integration`; `ed91a98d` on `f493bb32`; report `.claude/reviews/S148-TASK-14847-report.md`).
+- **The rule as built:** one helper, `EnsureRecordCoversLastDayAsync`, is called right after each piece's first-day resolution, in both loops. It reads the dated record on a multi-day piece's last day and throws the existing `RecordGap` if none covers it. The answers come from existing code: 422 at calculation time, 409 through the recheck.
+- **Premise verified:** every row start of the three tables inside a piece is a piece edge under production wiring. The date reads have no `effective_to` filter, the planner never merges segments, and the context-piece edges come from all three lists. So a gap that opens inside a piece reaches its last day.
+- **Also fixed:** the shortcut is now `shortcut(SEC-066)` with the ruled three-connection sentence (the shortcut check: 20 found, 0 bad), plus the six comment and log fixes. Two log texts are now true for the recheck caller too.
+- **Local cluster (port 55455, not CI evidence):**
+  - PIN-1 2/2 with both goldens unmoved.
+  - **`ProfileCloseFirst_Export409` is green at the tip.** With the base PCS restored it gets 200, and 31 March is paid `NORMAL_HOURS 7.4` on the ended profile. That is QUAL-265, shown.
+  - The race class 9/9 and the record-gap facts 2/2.
+- **Gate:** build 0 errors, CA2100 113; DemoSeed 170; Regression non-Docker 147.
+  - **Unit is 1736 of 1737.** `EmploymentWindowSegmentSkipTests.Shim_PreHireSegment_NeverResolvesProfile_EmployedSegmentDoes` pins the exact dates asked, `{10 March}`, and the contract adds the segment's last day, 31 March.
+  - **Orchestrator ruling:** its purpose (ADR-040 D10, no lookup before the hire) holds. TASK-14847-T repairs it to `{hire, 31 March}`, asserts that no date is before the hire, and updates its comment.
+- **Brief contradiction accepted:** the per-date-cache hint is unusable (the cache is local to the fenced planner), so there is one read per multi-day piece, as contract item 1 costs it.
+- **Found, not fixed:** `PeriodCalculationService.cs:3845`'s `DatedProfile` doc names two tables. The Orchestrator fixes it at the merge (comment only).
+- **The Orchestrator's checks:** the three authorized files.
+- **TASK-14847-T dispatched** (`test-qa`) on `ed91a98d`, with the brief (`97642fc0`), the ruled repair, and TASK-14847's seam for AC-PIL-i (1)–(4).
