@@ -3270,3 +3270,23 @@ M-40 included [O for the 14 facts of the five classes run].
   - **TASK-14847** (`payroll-integration`) on `f493bb32`.
   - **TASK-14846** (`ux`) on master `8453c3da`, in its own worktree. It merges after the stack.
 - **Owed (Orchestrator):** plan "final + 28" (ledger rows, wave order, AC-PIL-i, M-53 and M-54, M-52's list, figure (4), the size line, CI-W5's list), and the W12 trace, once an agent slot frees.
+
+**TASK-14847-T's brief is written** (`97642fc0`), from the same ruling. Part A is the pair's fix-ups (W5, W6, W7, W10, W11). Part B is AC-PIL-i (1)–(9) and W4.
+
+**TASK-14846 returned** (`ux`, Sonnet 5.5; `2d086a28` on `8453c3da`; report `.claude/reviews/S148-TASK-14846-report.md`).
+- **What a user sees, in plain words.** On their own record, an HR user sees these fields greyed out, under an information note saying another HR administrator must make those changes:
+  - organisation, agreement, part-time fraction and position;
+  - start date, birth date and child's-sick eligibility;
+  - the effective-date picker and both carry-forward checkboxes.
+  - Name, e-mail, unit placement, the leader checkbox, the approver actions, termination and remove person stay enabled.
+  - A save sends exactly what it sent before. The server already refused these changes.
+- **As built:** `isSelf` compares the logged-in employee id with the record's user id. One optional prop per section (`selfLockNoteId`) both disables its refused inputs and points their `aria-describedby` at the note. The note is the ruled text in an `info` Alert.
+- **Facts (AC-C13r):** (1) and (4) are F, red without the change on `toBeDisabled()`; (2) and (3) are R, green at both ends.
+- **Five checks:** tsc, lint, `typecheck:e2e`, build and vitest all exit 0. Vitest has 102 files and 1213 + 4 = 1217 tests.
+- **Declared deviations:** one harness for all four cases, and the prop shape.
+- **The Orchestrator's checks:** five authorized frontend files; the `node_modules` junction removed.
+- **Its review dispatched** on `8453c3da..2d086a28`:
+  - 5α (`## S148 TASK-14846 5α`);
+  - Codex (`codex-14846-run.ps1` → `S148-TASK-14846-5a-codex.raw.md`);
+  - Fable follows when an agent slot frees.
+- **It merges after the TASK-14831 + 14847 stack (W3).**
