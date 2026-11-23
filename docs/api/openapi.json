@@ -9993,6 +9993,7 @@
           "entries",
           "fullDayNormAtMonthEnd",
           "managerDeadline",
+          "minimumRest",
           "month",
           "projects",
           "rowPreferences",
@@ -10084,6 +10085,12 @@
             "nullable": true
           },
           "consumptionBasis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"
+            }
+          },
+          "minimumRest": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaDayHoursRow"
