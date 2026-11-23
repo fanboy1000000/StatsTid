@@ -343,6 +343,11 @@ public sealed class PayInputsLockRaceTests : DatedConfigDockerFixture, IDisposab
     /// <para><b>Red conditions.</b> Before TASK-14831 the export takes no lock, so it is never observed waiting. M-52 (the
     /// recheck's wrapper lets a derivation refusal pass) turns this fact red: the uncovered day is waved through and the
     /// export answers 200 (argued; M-52 is run locally on the Unit arm).</para>
+    /// <para><b>Status: RED on the branch tip, by design of the brief's expectation.</b> The local-cluster run answered 200
+    /// and recorded March: the derivation resolves the profile where each segment starts and takes its segment boundaries
+    /// from profile <c>effective_from</c> dates only, so a profile that ends inside the month (the close sets
+    /// <c>effective_to</c> to the 31st) is not a boundary and not a gap, and neither the calculation nor the recheck sees
+    /// it. The expectation above is the brief's (AC-PIL-g (1)); it is not adjusted to the code.</para>
     /// </summary>
     [Fact]
     public async Task ProfileCloseFirst_Export409()
