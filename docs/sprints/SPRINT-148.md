@@ -2882,3 +2882,28 @@ M-40 included [O for the 14 facts of the five classes run].
   - Notes: a partial record gets T2's exception, so N-2 and O-17 should say it; T3's negative arms are unproven; T5's Backend half has no committed fact; a same-code start still cuts a segment labelled `AgreementCodeChange` (unproven); a CI-W5 watch list.
 - **The Orchestrator verified the bound's premise.** The central in-force read takes any published version with `applies_from` on or before the day (`AgreementConfigRepository.cs:55-73`). So a refusal on day d means nothing is in force on any earlier day, and the remembered range can start earlier without skipping a configured day.
 - **The lenses disagree on the verdict and on the bound's remedy**, so the adjudicator is dispatched on cycle 2.
+
+**The T14b stack adjudicated, cycle 2** (`.claude/reviews/S148-T14b-5a-adjudication-c2.md`, Fable 5.2, **RULED, U1–U10, no owner question**). No finding shows a wrong figure. One small code fix and a few test and comment corrections go on the tip, then cycle 3.
+- **U1 (Codex W1, Fable's "at most once"; Codex's side):**
+  - **The fix:** the memo remembers a refusal for every day up to the next central version start, with no lower bound. A refusal on day d means nothing is in force on any earlier day.
+  - **Unchanged:** a record-covered day never reads the memo.
+  - **The remarks** say "at most one refused lookup per agreement and OK version per month computed"; both callers compute one month per request.
+  - **Proof:** a database-free Unit F fact (two calls sharing one request; B adds 7 refusals at `e1787c56`, 0 after) and a Unit R fact. A Docker N fact if the fixture can count lookups.
+- **U2 (both lenses' overlap warning):** the two record readers disagree on overlapping profile rows.
+  - **Registered** as QUAL-263 at M, "divergence shown".
+  - **The fix:** the resolver takes the latest start, as its three sibling reads do. It comes in its own small S148 task after CI-W5, not in this stack: it changes which row payroll reads.
+  - **Now:** the parity test's "no divergence is known" sentence and `DatedRecordTimeline`'s summary say so.
+- **U3:** a partial record gets T2's exception, as built. N-2 is amended now; O-17 at the merge.
+- **U4:** T3's Unit fact is relabelled N. T3's F evidence is the Docker fact `November2026_CalculatesWithNoRecordGap`. The existing `PayrollHostWeeklyTests` and `SplitMonthHostTests` cover a real different-code refusal and go on CI-W5's watch list.
+- **U5:** an assertion in `RuleEngineAuthForwardingTests`: the captured governance body carries `employmentCategory` (Docker, F).
+- **U6, U9:** no change.
+- **U7:** QUAL-209's update gains "a same-code row start still cuts a segment labelled `AgreementCodeChange`".
+- **U8:** TASK-14828's catch census counts the Backend only (amended now).
+- **U10:** the compliance smoke probe asserts that `success` is a boolean, unless the report shows the smoke employee cannot have a violation that month. Watched at CI-W5: the governance smoke 200, and the zero arm's exact 500 body.
+- **Cycle 3:** 5α and both lenses on `e1787c56..<new tip>`, with a narrow checklist (cycle 3 of 5). With no BLOCKER or WARNING, the stack merges without a further adjudication.
+- **QUAL ids reserved** (next free after QUAL-261), written at the merge:
+  - **QUAL-262:** the three legacy readers of the compiled table (R-8). The three `shortcut(pending)` comments are retagged to it.
+  - **QUAL-263:** the second dated-record reader, divergence shown (T12, U2).
+  - **QUAL-264:** the Error log on a tolerated absence (T11).
+- **Dispatched:** FU-4 (`backend-infrastructure`) on `e1787c56`, U1 and U2's clause, with a scratch probe of U1's roster order at both ends. FU-4T (`test-qa`) follows.
+- **Housekeeping:** the worktrees of FU-2, FU-3 (its logs copied to the scratchpad), TASK-14829 and TASK-14828-T are removed after unlinking their `node_modules` junctions. Their commits stay on their branches and the tip.
