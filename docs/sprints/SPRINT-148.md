@@ -3070,3 +3070,29 @@ M-40 included [O for the 14 facts of the five classes run].
   - 5α (header `## S148 TASK-14830 5α`);
   - Fable (`## S148 TASK-14830 5a reviewer`);
   - Codex (`codex-14830-run.ps1` → `S148-TASK-14830-5a-codex.raw.md`).
+
+**The TASK-14830 pair reviewed, cycle 1** (`f328d00d..52ac6683`; saved verbatim; ruled by the Orchestrator in `.claude/reviews/S148-TASK-14830-5a-rulings-c1.md`, V1–V10).
+- **The Orchestrator's own local gate at `52ac6683`:** build 0 errors, CA2100 113; Unit 1718; DemoSeed 170; Regression non-Docker 147.
+- **5α** (`S148-TASK-14830-5alpha.md`): every file is authorized, the R42 pins are byte-identical, and no `src` reference to a removed member remains. Its one FAIL is the Orchestrator's checklist widening AC-C3c's `src` grep to `tests`, which finds three docstrings (V5).
+- **Codex** (`S148-TASK-14830-5a-codex.raw.md`): **APPROVED-WITH-WARNINGS**.
+  - **W1:** a damaged proof (an empty `ConfigRuns` list; a run whose nested config names another agreement) can reach the engine before it is refused.
+  - **W2:** the test-side grep claim is overstated.
+  - **A note:** an undecodable entry's two storage paths answer differently.
+- **Fable** (`S148-TASK-14830-5a-reviewer.md`): **APPROVED-WITH-WARNINGS**, with no product defect.
+  - The pre-S148 facts cannot fail for the organisation rule, which has no pin.
+  - The AC-C3b facts stop at a set-up assertion on the base.
+  - The grep claim.
+  - Nothing local notices a replay that consults the lookup.
+  - Notes: the echo shows one of 41 settings; O-18 must land with the merge; the size is fine, with a possible third copy in the outbox.
+- **Ruled by the Orchestrator** (same verdict from both lenses, compatible remedies, so no adjudicator):
+  - **V1:** every frozen-input check (count, null entries, run keys, and new: the nested config's agreement and OK version) runs before any engine call, classifications included. **FU-1 dispatched** (`payroll-integration`) on `52ac6683`.
+  - **V2:** the two-path difference is recorded.
+  - **V3:** a fact for the organisation rule.
+  - **V4:** the set-up removal made unconditional, and the F and R kinds re-evidenced at `f328d00d` on a local cluster.
+  - **V5:** three docstrings reworded. The AC-C3b fixture's legacy `configFingerprints` is the one ruled exception to the test-side grep.
+  - **V6:** a Unit fact in which a replay on a service with no lookup succeeds (F; it joins M-13's frozen list).
+  - **V7:** AC-C3a compares the raw `config` JSON of forward and replay.
+  - **V8:** O-18's ADR-016 D10 amendments land in the merge. No F-row, since the size is not large.
+  - **V9:** no change.
+  - **V10:** the log label is carried to TASK-14831.
+- **Next:** FU-T (`test-qa`), then cycle 2.
