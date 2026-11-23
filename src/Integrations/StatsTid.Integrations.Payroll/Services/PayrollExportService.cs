@@ -174,8 +174,9 @@ public sealed class PayrollExportService
     /// <see cref="PayrollExportManifest.ComputeContentHash"/> (the canonical JSON <c>[]</c>), defined once there. Nothing
     /// is delivered for it (no lines). The exception (S147 TASK-14715, R-17): an <c>UNTRACKED</c> month with no lines
     /// and no record hands off neither lines nor a closing, so no record is written (ADR-034 D3). It still runs every
-    /// check above in the same transaction (the ledger lock, the recheck, the previous month's <c>FOR SHARE</c>, the
-    /// APPROVED <c>FOR UPDATE</c> re-assert with the four-eyes checkpoint), and only then, finding no record under the
+    /// check above in the same transaction (the shared pay-inputs lock, the ledger lock, the flex-opening recheck, the
+    /// pay-inputs recheck, the previous month's <c>FOR SHARE</c>, the APPROVED <c>FOR UPDATE</c> re-assert with the
+    /// four-eyes checkpoint), and only then, finding no record under the
     /// lock, skips the insert, the event, the audit row and the delivery; the transaction commits having written
     /// nothing, and the result is <c>Success = true</c> with no export id.</description></item>
     /// <item><description><b>The same-hash no-op</b> (R-16) additionally compares the derived (opening,

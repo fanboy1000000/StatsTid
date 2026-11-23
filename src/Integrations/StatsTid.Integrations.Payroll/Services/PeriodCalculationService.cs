@@ -1024,8 +1024,9 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// S146 / TASK-14605 (R-14 "the under-lock recheck"; R-36) — the writing transaction's half: the SAME function
     /// re-run inside the caller's <paramref name="conn"/> + <paramref name="tx"/>, which must already hold the
-    /// employee's ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>, the first
-    /// statement of every writer). Records through the reader's in-transaction surface, read FIRST; windows through
+    /// employee's ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>, the second
+    /// statement of every writer, after the shared pay-inputs lock, <see cref="PayInputsLock.AcquireSharedAsync"/>).
+    /// Records through the reader's in-transaction surface, read FIRST; windows through
     /// <see cref="IEmploymentWindowResolverInTx.GetWindowsAsync(NpgsqlConnection, NpgsqlTransaction, string, DateOnly, DateOnly, CancellationToken)"/>
     /// over the same helper as admission, <see cref="FlexLedgerOpening.WindowsReadRange(DateOnly, DateOnly?)"/> with the
     /// S of the in-transaction records (S147 R-13; null on both reads when no window resolver is wired, R-37).
@@ -1232,8 +1233,10 @@ public sealed class PeriodCalculationService
             // ADR-040 D5 / D10 (S137 TASK-13702) — the NOT_EMPLOYED skip point. It runs BEFORE
             // the profile resolution below: callers ask "employed?" before "what profile?" (D10).
             // A post-S136 employee's profile row starts at hire, so resolving a profile for a
-            // pre-hire segment would hit the resolver's fail-closed path
-            // (EmployeeProfileNotFoundException → a real 500).
+            // pre-hire segment would hit the resolver's fail-closed path and refuse the month
+            // falsely (EmployeeProfileNotFoundException → the named 422
+            // payroll-employment-record-gap on both calculating routes; inside the pay-inputs
+            // recheck, 409 payroll-inputs-changed).
             //
             // What a NOT_EMPLOYED segment does NOT do: no profile resolution, no rule evaluation
             // in either lane (no piece of the timeline covers its days, and it makes zero
@@ -1260,6 +1263,7 @@ public sealed class PeriodCalculationService
             }
 
             var segmentProfile = await SegmentProfileAsync(profile, segment.StartDate, plan, histories, ct);
+            await EnsureRecordCoversLastDayAsync(profile, segment.StartDate, segment.EndDate, plan, ct);
             segmentProfiles[s] = segmentProfile;
             pieces.Add(new FrozenPiece(
                 segment.StartDate, segment.EndDate,
@@ -1886,8 +1890,9 @@ public sealed class PeriodCalculationService
         PlanInputs fresh;
         try
         {
-            // shortcut(pending): the recheck borrows a second pooled connection while its transaction holds one (SEC-066);
-            // upgrade when exports can run in parallel or a pool size is set
+            // shortcut(SEC-066): the recheck's reads hold up to two further pooled connections while its transaction holds
+            // one (the profile resolver keeps its connection while it reads the agreement code); upgrade when a caller runs
+            // recordings near half the payroll pool at once, or a pool size or timeout is set
             var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
             var inputs = await DeriveEvaluationInputsAsync(plan, histories, profile, ct);
 
@@ -4041,6 +4046,7 @@ public sealed class PeriodCalculationService
         foreach (var edge in edges)
         {
             var piecesProfile = await ResolveProfileAtAsync(callerProfile, from, plan, ct);
+            await EnsureRecordCoversLastDayAsync(callerProfile, from, edge.AddDays(-1), plan, ct);
             pieces.Add(new FrozenPiece(
                 from, edge.AddDays(-1),
                 piecesProfile.PartTimeFraction, piecesProfile.AgreementCode, piecesProfile.Position)
@@ -4133,7 +4139,8 @@ public sealed class PeriodCalculationService
         catch (DbException ex)
         {
             _logger.LogWarning(ex,
-                "The {Source} read failed; the calculation is refused as payroll-config-unavailable", source);
+                "The {Source} read failed; the calculation, or the recording whose pay-inputs recheck made the read, " +
+                "is refused as payroll-config-unavailable", source);
             throw new ConfigLookupUnavailableException(source, ex);
         }
     }
@@ -4155,6 +4162,30 @@ public sealed class PeriodCalculationService
     {
         var dated = await TryResolveDatedProfileAsync(callerProfile, asOf, ct);
         return dated.Profile ?? throw RecordGap(dated.MissingRecord, callerProfile.EmployeeId, plan);
+    }
+
+    /// <summary>
+    /// QUAL-265 — the <c>employment_record_gap</c> refusal (<see cref="RecordGap"/>) for a piece of evaluated days,
+    /// <paramref name="from"/> to <paramref name="to"/> inclusive, whose employment record covers its first day but not
+    /// its last. The case: HR closes a profile inside the month while the person stays employed (the close ends the
+    /// profile, not the employment), so the last days are EMPLOYED with no profile; resolved on the first day alone, they
+    /// would be paid on the ended profile, a guessed record. Why the last day is enough: every row start of
+    /// <c>employee_profiles</c>, <c>user_agreement_codes</c> and <c>user_organisations</c> inside the evaluated days is a
+    /// piece edge (the planner's boundary sources and the context-piece edges), so no row starts inside a piece, and a gap
+    /// that begins inside one lasts to its last day. The resolver also reports a profile row with no agreement-code or
+    /// organisation row as a gap, so one resolution covers all three tables. A one-day piece was resolved on its first
+    /// day and is not read again. It only refuses: the piece keeps its first day's record, so a covered piece is unchanged.
+    /// A replay never comes here (it derives nothing, <see cref="FrozenEvaluationInputs"/>).
+    /// </summary>
+    private async Task EnsureRecordCoversLastDayAsync(
+        EmploymentProfile callerProfile, DateOnly from, DateOnly to, PlannedCalculation plan, CancellationToken ct)
+    {
+        if (to <= from)
+            return;
+
+        var dated = await TryResolveDatedProfileAsync(callerProfile, to, ct);
+        if (dated.Profile is null)
+            throw RecordGap(dated.MissingRecord, callerProfile.EmployeeId, plan);
     }
 
     /// <summary>
@@ -4287,13 +4318,17 @@ public sealed class PeriodCalculationService
         // TASK-14512: a gap planning recorded at a segment start is refused here too, at the same
         // point in the calculation as before — after the planner and admission.)
         //
-        // The diagnostics carry only the employee id, the replay-stable manifest id, and the CALLER'S
-        // OWN period — nothing date-shaped that describes the employment itself.
+        // The diagnostics carry only the employee id, the plan's id, and the CALLER'S OWN period —
+        // nothing date-shaped that describes the employment itself. The plan's id is never a stored
+        // manifest's: a refused calculation stores no manifest, and the pay-inputs recheck derives on
+        // a plan of its own, so the logged id is not the recorded calculation's manifest id.
         _logger.LogError(
             "employment_record_gap: no effective-dated employment record ({MissingRecord}) covers " +
-            "this calculation segment for employee {EmployeeId} manifest {ManifestId} period " +
-            "{PeriodStart}-{PeriodEnd}. The calculation is REFUSED and no payroll figure is " +
-            "produced for this period — a figure derived from a guessed employment record would " +
+            "a day this period's derivation must evaluate, for employee {EmployeeId}, plan {ManifestId} " +
+            "(this derivation's own plan; no manifest is stored under it), period " +
+            "{PeriodStart}-{PeriodEnd}. The period is REFUSED: a calculation produces no payroll " +
+            "figure, and a recording whose pay-inputs recheck made this derivation records nothing " +
+            "— a figure derived from a guessed employment record would " +
             "be worse than none. This is a data gap, not a server fault: the employee should " +
             "appear on the HR follow-up 'cannot register' list (HRP-015), which names the missing " +
             "record and whether a scheduled one will close the gap, and an HR administrator " +

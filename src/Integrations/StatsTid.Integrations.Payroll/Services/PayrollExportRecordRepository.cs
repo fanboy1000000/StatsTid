@@ -25,7 +25,8 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// balances (<c>opening_balance</c>, <c>closing_balance</c>, <c>balance_provenance</c>; all null or all set). This
 /// type owns their reads and writes: <see cref="ReadFlexLedgerRecordsAsync"/> (the ledger read behind
 /// <see cref="IFlexLedgerReader"/>, self-managed or in-transaction), <see cref="AcquireFlexLedgerLocksAsync"/> (the
-/// per-employee ledger lock every writer of this table takes as the FIRST statement of its transaction),
+/// per-employee ledger lock every writer of this table takes as the SECOND statement of its transaction, right after
+/// the shared pay-inputs lock, <see cref="PayInputsLock.AcquireSharedAsync"/>),
 /// <see cref="TryReadRecordForUpdateAsync"/> (the correction's locked baseline, now with the balances, reviewer c3
 /// N4) and <see cref="UpdateCorrectedRecordAsync"/> (the correction's baseline update, now with the balances).
 /// </para>
