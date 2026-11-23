@@ -3227,3 +3227,25 @@ M-40 included [O for the 14 facts of the five classes run].
   - Fable (`## S148 TASK-14831 5a reviewer`);
   - Codex (`codex-14831-run.ps1`).
   - Both lenses are asked to judge AC-PIL-g (1): (i) whether the forward calculation pays those days, (ii) whether that predates S148, (iii) where the fix belongs.
+
+**The TASK-14831 pair reviewed, cycle 1** (`80d51054..f493bb32`; saved verbatim).
+- **5α** (`S148-TASK-14831-5alpha.md`): **FAIL** on one mechanical item. The two Do 11 facts state no red condition.
+  - It also flags the fact committed red, `ProfileCloseFirst_Export409`.
+  - Deviation D4 (a comment-only hunk just outside item 2's named range) needs confirming.
+  - Everything else passes: the 15 lock calls, both shared ones first in their transactions, the three bodies byte for byte, the census file edited by addition only, PIN-1 untouched.
+- **Codex** (`S148-TASK-14831-5a-codex.raw.md`): **CHANGES-REQUIRED**.
+  - **BLOCKER:** payroll can use an ended profile, so AC-PIL-g (1) is red.
+  - **WARNING:** figure 4 does not establish four recordings each holding a connection, because the fourth can fail at calculation time.
+  - **NOTEs:** comments and log texts; SEC-066 is the right row for the shortcut.
+- **Fable** (`S148-TASK-14831-5a-reviewer.md`): **CHANGES-REQUIRED**.
+  - **BLOCKER 1:** the same defect.
+  - **WARNING 1:** three behaviours can be deleted with no test going red: the recording-time 503 wrap, the BC-5 guard, and two of the catch filter's exceptions.
+  - **WARNING 2:** the accepted cost is up to three pooled connections per recording, not two. The profile resolver holds one while it reads the agreement code.
+  - **NOTEs:** the comments, plus ADR-034 D4's "first statement" for O-19; the shortcut's trigger is already true; the outbox envelope (unproven).
+- **The defect, in plain words (both lenses agree):**
+  - A profile close sets the profile's end date but not the employment end date, so the days after it stay "employed" with no profile.
+  - Payroll splits a month only where a profile *starts*, so it pays those days on the ended profile. That is the guessed record `RecordGap`'s rule forbids.
+  - The recheck reuses the same derivation and inherits the blind spot. A close that wins the race is therefore recorded silently.
+  - It predates S148 (the `effective_from`-only read dates from S137 and S145).
+  - Both lenses keep the 409 expectation and recommend fixing the shared forward derivation in a separate task before the merge, since this pair's brief fences those methods.
+- **The adjudicator dispatched** for the new task's contract and order, and for the pair's own fix-ups.
