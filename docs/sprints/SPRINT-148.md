@@ -3249,3 +3249,24 @@ M-40 included [O for the 14 facts of the five classes run].
   - It predates S148 (the `effective_from`-only read dates from S137 and S145).
   - Both lenses keep the 409 expectation and recommend fixing the shared forward derivation in a separate task before the merge, since this pair's brief fences those methods.
 - **The adjudicator dispatched** for the new task's contract and order, and for the pair's own fix-ups.
+
+**The TASK-14831 pair adjudicated, cycle 1** (`.claude/reviews/S148-TASK-14831-5a-adjudication-c1.md`, Fable 5.2, **RULED, W1–W13, no owner question**).
+- **W1–W2, the defect is fixed in this sprint by a new task, TASK-14847.**
+  - **The rule:** payroll also checks each piece's **last** day for a complete dated record, and refuses through the existing `RecordGap` if none covers it. That gives 422 at calculation time and 409 through the recheck.
+  - **Why it works:** every row start of the three record tables is already a piece edge, so a gap that begins inside a piece reaches its last day. The implementer verifies that premise.
+  - **What it does not do:** add a cut point or a repository read. An unbroken timeline gives byte-identical pieces, so no payslip moves.
+  - **Rejected:** feeding every `effective_to` date as a boundary, which could move pay lines.
+- **W3, the order:** the pair stays unmerged. TASK-14847 stacks on `f493bb32`, then TASK-14847-T, then 5α and 5a cycle 2 over the whole stack, then one merge, the GATE, TASK-14846 and CI-W5. Plan rule 7 holds. TASK-14846 may start now in its own worktree.
+- **W4:** `ProfileCloseFirst_Export409` stays as written, turns green with the fix and gains the retry (a 422).
+- **W5:** four untested behaviours get facts, with new mutations M-53 (the recording-time wrap) and M-54 (the BC-5 guard), and M-52 re-run.
+- **W6:** figure (4) is re-staged with three exports, each asserted waiting, timed from submission and from release. Batch-D ruling 14's four-on-four premise was wrong.
+- **W7:** the two Do 11 red conditions. **W8:** deviations D1–D4 accepted.
+- **W9:** the accepted cost is up to **three** connections per recording (the profile resolver keeps its own while it reads the agreement code), so a full stall can come at about half the pool. Ruling 1 stands with the corrected number. The shortcut is tagged `shortcut(SEC-066)` directly, with the ruled sentence.
+- **W10:** the comment and log-text owners. **W11:** the outbox envelope is written after commit, so one assertion is added. **W12:** a read-only trace of nine Backend readers of the same timeline (`(unproven)`).
+- **W13:** **QUAL-265** (High), "payroll pays the days after a profile ends inside a month on the ended profile", introduced S137, fixed by TASK-14847, registered at the merge.
+- **Told to the owner at the merge:** a month in which a profile was closed while the person stays employed is now refused by name (422); today it is paid silently.
+- **The TASK-14847 brief is written** from the ruled contract (`8453c3da`).
+- **Dispatched in parallel:**
+  - **TASK-14847** (`payroll-integration`) on `f493bb32`.
+  - **TASK-14846** (`ux`) on master `8453c3da`, in its own worktree. It merges after the stack.
+- **Owed (Orchestrator):** plan "final + 28" (ledger rows, wave order, AC-PIL-i, M-53 and M-54, M-52's list, figure (4), the size line, CI-W5's list), and the W12 trace, once an agent slot frees.
