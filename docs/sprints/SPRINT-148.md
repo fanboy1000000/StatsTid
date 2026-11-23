@@ -2988,3 +2988,21 @@ M-40 included [O for the 14 facts of the five classes run].
   - `ScreenNoRecordRosterOrderTests`, `RuleEngineAuthForwardingTests` and `DatedRecordTimelineParityTests` (local only so far);
   - the existing mid-week refusal facts `PayrollHostWeeklyTests` and `SplitMonthHostTests` (U4).
 - **After CI-W5:** the small S148 task for QUAL-263 (the resolver's profile read takes the latest start; a profile overlap in the parity fixture; the repository comment). Then TASK-14830 + -T (carrying T14's four remarks), TASK-14831 + -T (carrying T13's 422 `payroll-employment-record-gap`), TASK-14846, and wave 6.
+
+**The T14b GATE on master** (`b5f167aa`, the merge).
+- **Backend:**
+  - `dotnet build StatsTid.sln -m:2 --no-incremental` gives 0 errors and 125 warnings, with 113 distinct CA2100, unchanged from before the stack.
+  - Unit 1764, DemoSeed 170, Regression `Category!=Docker` 147, all green.
+  - The shortcut check finds 19 with 0 bad, including the three QUAL-262 sites.
+- **Frontend:** `tsc --noEmit`, lint, `typecheck:e2e` and the build all exit 0.
+- **Vitest was not re-run.** Claude Code reaped the last run for low memory, and it is re-run only with the owner's go-ahead.
+  - Master's `frontend/` tree is byte-identical to `a053b994`'s (`git diff` empty), where FU-3's run was green: 101 files, 1213 tests.
+  - CI-W5 runs the frontend suite too.
+- **Docker facts, the smoke probes and the pins stay CI-pending until CI-W5.** By the plan's rule 7, no checkpoint runs between T14b and T24.
+- **Housekeeping:** the last three T14b worktrees are removed (one `node_modules` junction unlinked first). `git worktree list` shows the main checkout only.
+- **Next in wave 5:**
+  - TASK-14830 + -T (T15: replay reads frozen configurations; it carries T14's four remarks);
+  - TASK-14831 + -T (T24: payroll's recheck under the lock; it carries T13's 422 `payroll-employment-record-gap`);
+  - TASK-14846;
+  - then CI-W5 and CI-M5;
+  - then the QUAL-263 task (U2).
