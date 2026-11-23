@@ -1,3 +1,6 @@
+using System.Data.Common;
+using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Exceptions;
@@ -37,13 +40,31 @@ namespace StatsTid.Backend.Api.Services;
 /// </para>
 ///
 /// <para>
-/// <b>No configuration crosses days.</b> Every weekday resolves its own configuration through the
-/// dated lookup: a version, override or profile may start on any day, so a configuration resolved
-/// for one day is never used for another. The calculator keeps no cache and no mutable state, so it
-/// is registered as a singleton safely. A lookup refusal
-/// (<see cref="ConfigLookupUnavailableException"/>, <see cref="NoConfigInForceException"/>) is not
-/// caught here: it reaches the caller and the Backend's one mapping of the two
-/// (<c>ConfigLookupRefusalMiddleware</c>).
+/// <b>One configuration per stretch of unchanged days (B6, N-3).</b> A configuration is resolved
+/// once for a stretch of days on which its key — the organisation, agreement, OK version and position
+/// the day's dated record gives — is the same and no layer of that key gets a new version: no
+/// published agreement-config version, position-override version or local-profile activation starts
+/// inside the stretch (the three date reads, <see cref="AgreementConfigRepository.GetPublishedAppliesFromDatesAsync"/>,
+/// <see cref="PositionOverrideRepository.GetVersionAppliesFromDatesAsync"/>,
+/// <see cref="LocalAgreementProfileRepository.GetActivationsInPeriodAsync"/>, the cuts payroll's planner
+/// reads). A configuration resolved for one stretch is never used for a day outside it: each day asks with
+/// its own key, and a stretch ends the day before its key's next version starts. A local profile ends only
+/// when its successor starts (supersession; there is no close without one), so the activations cover every
+/// change of the local layer. The stretches live for one HTTP request (<see cref="HttpContext.Items"/>),
+/// so every caller in a request shares them — the Skema month's <c>dailyNorm</c>, <c>consumptionBasis</c>,
+/// the month-end scalar and the served minimum rest, and the year overview's twelve months — and the next
+/// request reads the configuration again, so a publish is seen by the next request. Like
+/// <see cref="HttpContext"/> itself, the request's stretches are used by one thread at a time. A calculator
+/// built without the three date repositories (a test's direct construction) cuts at every day, and one built
+/// without an HTTP context accessor keeps its stretches for one call: both resolve every day correctly,
+/// only with more reads.
+/// </para>
+///
+/// <para>
+/// A lookup refusal (<see cref="ConfigLookupUnavailableException"/>, <see cref="NoConfigInForceException"/>)
+/// is not caught here: it reaches the caller and the Backend's one mapping of the two
+/// (<c>ConfigLookupRefusalMiddleware</c>). A failed date read is the same refusal: its database error is
+/// logged once and answered as <see cref="ConfigLookupUnavailableException"/>, never as a cut not made.
 /// </para>
 ///
 /// <para>
@@ -54,15 +75,38 @@ namespace StatsTid.Backend.Api.Services;
 /// </summary>
 public sealed class DailyNormCalculator
 {
+    // Per instance, so two calculators in one request (a test host's own) never share stretches.
+    private readonly object _requestStretchesKey = new();
+
     private readonly IEmploymentProfileResolver _profileResolver;
     private readonly IAgreementConfigLookup _configLookup;
+    private readonly AgreementConfigRepository? _agreementConfigRepo;
+    private readonly PositionOverrideRepository? _positionOverrideRepo;
+    private readonly LocalAgreementProfileRepository? _localAgreementProfileRepo;
+    private readonly IHttpContextAccessor? _httpContextAccessor;
+    private readonly ILogger<DailyNormCalculator> _logger;
 
+    /// <summary>
+    /// The Backend host supplies every parameter (each is registered). The trailing five are optional so a
+    /// test can build the calculator from the resolver and the lookup alone; see the class remark for what
+    /// such a calculator does.
+    /// </summary>
     public DailyNormCalculator(
         IEmploymentProfileResolver profileResolver,
-        IAgreementConfigLookup configLookup)
+        IAgreementConfigLookup configLookup,
+        AgreementConfigRepository? agreementConfigRepo = null,
+        PositionOverrideRepository? positionOverrideRepo = null,
+        LocalAgreementProfileRepository? localAgreementProfileRepo = null,
+        IHttpContextAccessor? httpContextAccessor = null,
+        ILogger<DailyNormCalculator>? logger = null)
     {
         _profileResolver = profileResolver;
         _configLookup = configLookup;
+        _agreementConfigRepo = agreementConfigRepo;
+        _positionOverrideRepo = positionOverrideRepo;
+        _localAgreementProfileRepo = localAgreementProfileRepo;
+        _httpContextAccessor = httpContextAccessor;
+        _logger = logger ?? NullLogger<DailyNormCalculator>.Instance;
     }
 
     /// <summary>
@@ -70,6 +114,9 @@ public sealed class DailyNormCalculator
     /// meaningful per-weekday norm (ANNUAL_ACTIVITY / no dated profile) and <c>0</c> on weekends.
     /// </summary>
     public readonly record struct DailyNorm(DateOnly Date, decimal? Hours);
+
+    /// <summary>One day's configuration in force; <c>null</c> where no dated record covers the day.</summary>
+    public readonly record struct DailyConfig(DateOnly Date, AgreementRuleConfig? Config);
 
     /// <summary>
     /// Resolves the per-day norm for every day in the inclusive range
@@ -84,6 +131,7 @@ public sealed class DailyNormCalculator
         string fallbackOrgId,
         CancellationToken ct = default)
     {
+        var stretches = RequestStretches();
         var result = new List<DailyNorm>();
 
         for (var day = rangeStart; day <= rangeEnd; day = day.AddDays(1))
@@ -106,7 +154,7 @@ public sealed class DailyNormCalculator
                 continue;
             }
 
-            var hours = await ComputeForProfileAsync(profile, day, fallbackOrgId, ct);
+            var hours = await ComputeForProfileAsync(profile, day, fallbackOrgId, rangeEnd, stretches, ct);
             result.Add(new DailyNorm(day, hours));
         }
 
@@ -128,7 +176,9 @@ public sealed class DailyNormCalculator
     /// Behavior preserved byte-for-byte vs the prior inline loop: weekend ⇒ 0 (handled by the
     /// caller before calling, kept here too for the standalone overload below), ANNUAL_ACTIVITY ⇒
     /// null, otherwise <c>Math.Round(WeeklyNorm × fraction / 5, 2)</c>. OK version is resolved per
-    /// day; org falls back to <paramref name="fallbackOrgId"/> when the profile carries none.
+    /// day; org falls back to <paramref name="fallbackOrgId"/> when the profile carries none. The
+    /// configuration is the one of the day's stretch, which may reach as far as
+    /// <paramref name="horizonEnd"/> (the caller's last day).
     /// </para>
     ///
     /// <para>
@@ -143,14 +193,13 @@ public sealed class DailyNormCalculator
         EmploymentProfile profile,
         DateOnly day,
         string fallbackOrgId,
+        DateOnly horizonEnd,
+        RequestStretchSet stretches,
         CancellationToken ct)
     {
-        var okVersion = OkVersionResolver.ResolveVersion(day);
-        var orgId = profile.OrgId ?? fallbackOrgId;
-        // The configuration in force on THIS day; nothing resolved for one day is reused for another.
-        // shortcut(F10): every weekday resolves its own configuration (two reads per lookup, three with a position), once per caller in a request: one Skema month read runs this calculator twice (dailyNorm, consumptionBasis) plus the month-end scalar, about 45 lookups or 135 configuration reads with a position (90 without), and the year overview's month loop about 780 reads with a position (about 520 without); upgrade when one resolution is reused per stretch of days with no dated change in agreement, OK version, position, organisation or any layer's applies-from date, and the reuse covers every repeated caller in a request (TASK-14828)
-        var config = await _configLookup.ResolveAsync(
-            orgId, profile.AgreementCode, okVersion, profile.Position, day, ct);
+        var config = await ConfigInForceAsync(
+            FullChainKey(profile.OrgId ?? fallbackOrgId, profile.AgreementCode, profile.Position, day),
+            day, horizonEnd, stretches, ct);
 
         if (config.NormModel == NormModel.ANNUAL_ACTIVITY)
         {
@@ -179,7 +228,7 @@ public sealed class DailyNormCalculator
         if (!DayNorm.IsWeekday(day))
             return 0m;
 
-        return await ComputeForProfileAsync(profile, day, fallbackOrgId, ct);
+        return await ComputeForProfileAsync(profile, day, fallbackOrgId, day, RequestStretches(), ct);
     }
 
     /// <summary>
@@ -211,23 +260,433 @@ public sealed class DailyNormCalculator
         string fallbackOrgId,
         CancellationToken ct = default)
     {
-        EmploymentProfile? profile;
-        try
-        {
-            profile = await _profileResolver.GetByEmployeeIdAtAsync(employeeId, day, ct);
-        }
-        catch (EmployeeProfileNotFoundException)
-        {
-            // Data-integrity edge (profile row, no covering agreement-code row): fail-soft
-            // for this display scalar — the authoritative write paths keep fail-louding.
-            profile = null;
-        }
-
+        var profile = await ProfileOrNullAsync(employeeId, day, ct);
         if (profile is null)
             return null;
 
         // Deliberately NO weekend short-circuit: the weekday formula applies regardless of
         // where the anchor day falls in the week (R10 "weekend placement irrelevant").
-        return await ComputeForProfileAsync(profile, day, fallbackOrgId, ct);
+        return await ComputeForProfileAsync(profile, day, fallbackOrgId, day, RequestStretches(), ct);
     }
+
+    /// <summary>
+    /// The configuration in force on every day of <c>[rangeStart, rangeEnd]</c>, weekends included, for the
+    /// employee's dated record of that day (the full chain, the same resolution as <see cref="ComputeRangeAsync"/>).
+    /// <c>null</c> where no dated record covers the day, or the record lacks its agreement-code or organisation
+    /// row (<see cref="EmployeeProfileNotFoundException"/>, fail-soft as the month-end scalar). Backs the Skema
+    /// month's served minimum rest (S0-4).
+    /// </summary>
+    public async Task<IReadOnlyList<DailyConfig>> ResolveConfigsAsync(
+        string employeeId,
+        DateOnly rangeStart,
+        DateOnly rangeEnd,
+        string fallbackOrgId,
+        CancellationToken ct = default)
+    {
+        var stretches = RequestStretches();
+        var result = new List<DailyConfig>();
+        for (var day = rangeStart; day <= rangeEnd; day = day.AddDays(1))
+        {
+            var profile = await ProfileOrNullAsync(employeeId, day, ct);
+            result.Add(new DailyConfig(day, profile is null
+                ? null
+                : await ConfigInForceAsync(
+                    FullChainKey(profile.OrgId ?? fallbackOrgId, profile.AgreementCode, profile.Position, day),
+                    day, rangeEnd, stretches, ct)));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The full chain (central → position override → the organisation's local profile) in force on
+    /// <paramref name="day"/> for a dated record's organisation, agreement and position, at the day's OK version,
+    /// reused for the day's stretch, which may reach as far as <paramref name="horizonEnd"/>.
+    /// </summary>
+    public Task<AgreementRuleConfig> ResolveConfigAsync(
+        string orgId, string agreementCode, string? position, DateOnly day, DateOnly horizonEnd,
+        CancellationToken ct = default) =>
+        ConfigInForceAsync(FullChainKey(orgId, agreementCode, position, day), day, horizonEnd, RequestStretches(), ct);
+
+    /// <summary>
+    /// The central agreement configuration alone in force on <paramref name="day"/> at the day's OK version
+    /// (<see cref="IAgreementConfigLookup.ResolveCentralAsync"/>), reused for the day's stretch, which may reach
+    /// as far as <paramref name="horizonEnd"/>.
+    /// </summary>
+    public Task<AgreementRuleConfig> ResolveCentralConfigAsync(
+        string agreementCode, DateOnly day, DateOnly horizonEnd, CancellationToken ct = default) =>
+        ConfigInForceAsync(CentralKey(agreementCode, day), day, horizonEnd, RequestStretches(), ct);
+
+    /// <summary>
+    /// The hours expected in a month on Teamoversigt and on the balance summary (B-9; NR-20 (b); N-2): over the
+    /// month's weekdays d, the sum of <c>DayNorm.ForWeekday(W_d, f)</c>, each day rounded by the helper, never
+    /// once over the month. The payslip sums each day's own norm too, so the screens and pay agree when a
+    /// configured weekly norm changes inside the month; a change of part-time fraction still differs (QUAL-226).
+    /// <list type="bullet">
+    ///   <item><description><b>W_d</b> is the weekly norm of the full chain in force on d for d's own dated
+    ///   record (<paramref name="recordOn"/>), at d's OK version; on a day no record covers, for the month-end
+    ///   record's organisation, agreement and position.</description></item>
+    ///   <item><description><b>f</b> is <paramref name="monthEndFraction"/>, the part-time fraction at month end
+    ///   as the screen reads it; never each day's own fraction (the owner's QUAL-198 ruling).</description></item>
+    ///   <item><description><b>No record at month end</b> (N-2; a profile closed before it, or none at all):
+    ///   W_d is the central configuration alone in force on d for <paramref name="noRecordAgreementCode"/> (the
+    ///   screen's agreement source), at d's OK version, and f = 1.0 (ADR-023 D3: a graceful absence, the screen
+    ///   renders).</description></item>
+    ///   <item><description><b>An annual-activity agreement</b> (the month-end record's month-end configuration
+    ///   says so; BC-5 (a)) keeps the formula it had: weekdays × <c>DayNorm.ForWeekday(W, f)</c>, W that
+    ///   configuration's weekly norm.</description></item>
+    /// </list>
+    /// No compiled value and no floor: a lookup refusal propagates (P-13). Every configuration is resolved once
+    /// per stretch (the class remark).
+    /// </summary>
+    public async Task<decimal> ComputeMonthNormAsync(
+        Func<DateOnly, DatedRecord?> recordOn,
+        DateOnly monthStart,
+        DateOnly monthEnd,
+        decimal monthEndFraction,
+        string noRecordAgreementCode,
+        CancellationToken ct = default)
+    {
+        var stretches = RequestStretches();
+        var monthEndRecord = recordOn(monthEnd);
+
+        // The annual-activity test first: it needs the month-end configuration only, so a version that starts
+        // inside the month cannot refuse an agreement whose figure never reads the earlier days.
+        if (monthEndRecord is not null)
+        {
+            var monthEndConfig = await ConfigInForceAsync(
+                FullChainKey(monthEndRecord.OrgId, monthEndRecord.AgreementCode, monthEndRecord.Position, monthEnd),
+                monthEnd, monthEnd, stretches, ct);
+            if (monthEndConfig.NormModel == NormModel.ANNUAL_ACTIVITY)
+            {
+                var weekdays = 0;
+                for (var day = monthStart; day <= monthEnd; day = day.AddDays(1))
+                {
+                    if (DayNorm.IsWeekday(day))
+                        weekdays++;
+                }
+
+                return weekdays * DayNorm.ForWeekday(monthEndConfig.WeeklyNormHours, monthEndFraction);
+            }
+        }
+
+        var fraction = monthEndRecord is null ? 1.0m : monthEndFraction;
+        var sum = 0m;
+        for (var day = monthStart; day <= monthEnd; day = day.AddDays(1))
+        {
+            if (!DayNorm.IsWeekday(day))
+                continue;
+
+            var record = recordOn(day) ?? monthEndRecord;
+            var config = await ConfigInForceAsync(
+                record is null
+                    ? CentralKey(noRecordAgreementCode, day)
+                    : FullChainKey(record.OrgId, record.AgreementCode, record.Position, day),
+                day, monthEnd, stretches, ct);
+            sum += DayNorm.ForWeekday(config.WeeklyNormHours, fraction);
+        }
+
+        return sum;
+    }
+
+    /// <summary>The dated profile, or <c>null</c> when none covers the day or it lacks its agreement-code or
+    /// organisation row (<see cref="EmployeeProfileNotFoundException"/>; fail-soft for a display read, the
+    /// authoritative write paths keep fail-louding).</summary>
+    private async Task<EmploymentProfile?> ProfileOrNullAsync(string employeeId, DateOnly day, CancellationToken ct)
+    {
+        try
+        {
+            return await _profileResolver.GetByEmployeeIdAtAsync(employeeId, day, ct);
+        }
+        catch (EmployeeProfileNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private static StretchKey FullChainKey(string orgId, string agreementCode, string? position, DateOnly day) =>
+        new(orgId, agreementCode, OkVersionResolver.ResolveVersion(day), position, CentralOnly: false);
+
+    private static StretchKey CentralKey(string agreementCode, DateOnly day) =>
+        new(null, agreementCode, OkVersionResolver.ResolveVersion(day), null, CentralOnly: true);
+
+    /// <summary>
+    /// The configuration of <paramref name="key"/> in force on <paramref name="day"/>: from a stretch of the
+    /// request that covers the day, else resolved through the lookup for a new stretch from the day to the day
+    /// before the key's next version starts, at most <paramref name="horizonEnd"/>. The key's latest stretch
+    /// ending before the day is extended instead when no version starts after its end, up to and including the
+    /// day (its configuration is then the day's too): the year overview's next month, or a month whose first
+    /// weekday follows a weekend.
+    /// </summary>
+    private async Task<AgreementRuleConfig> ConfigInForceAsync(
+        StretchKey key, DateOnly day, DateOnly horizonEnd, RequestStretchSet stretches, CancellationToken ct)
+    {
+        if (stretches.Covering(key, day) is { } covering)
+            return covering.Config;
+
+        var to = day;
+        ConfigStretch? extended = null;
+        if (horizonEnd > day
+            && _agreementConfigRepo is not null && _positionOverrideRepo is not null && _localAgreementProfileRepo is not null)
+        {
+            // The strict lower bound is the earlier stretch's last day, else the day before, so a version
+            // starting on the day itself (or between the two) is seen: it ends the earlier stretch, which is
+            // then not extended.
+            var earlier = stretches.LatestEndingBefore(key, day);
+            var starts = await VersionStartsAsync(key, earlier?.To ?? day.AddDays(-1), horizonEnd, ct);
+            var next = horizonEnd.AddDays(1);
+            var startsByDay = false;
+            foreach (var start in starts)
+            {
+                if (start <= day)
+                    startsByDay = true;
+                else if (start < next)
+                    next = start;
+            }
+
+            to = next.AddDays(-1);
+            if (!startsByDay)
+                extended = earlier;
+        }
+
+        if (extended is not null)
+        {
+            extended.To = to;
+            return extended.Config;
+        }
+
+        var config = key.CentralOnly
+            ? await _configLookup.ResolveCentralAsync(key.AgreementCode, key.OkVersion, day, ct)
+            : await _configLookup.ResolveAsync(key.OrgId!, key.AgreementCode, key.OkVersion, key.Position, day, ct);
+        stretches.Add(key, new ConfigStretch(day, to, config));
+        return config;
+    }
+
+    /// <summary>
+    /// The dates inside <c>(<paramref name="afterExclusive"/>, <paramref name="toInclusive"/>]</c> on which a
+    /// new version of one of <paramref name="key"/>'s layers comes into force: the central layer's published
+    /// versions, and for the full chain the position override's versions (when a position is given) and the
+    /// organisation's local-profile activations.
+    /// </summary>
+    private async Task<List<DateOnly>> VersionStartsAsync(
+        StretchKey key, DateOnly afterExclusive, DateOnly toInclusive, CancellationToken ct)
+    {
+        var starts = new List<DateOnly>(await ReadDatesAsync(
+            () => _agreementConfigRepo!.GetPublishedAppliesFromDatesAsync(
+                key.AgreementCode, key.OkVersion, afterExclusive, toInclusive, ct),
+            "central agreement configuration", key));
+        if (key.CentralOnly)
+            return starts;
+
+        if (key.Position is not null)
+        {
+            starts.AddRange(await ReadDatesAsync(
+                () => _positionOverrideRepo!.GetVersionAppliesFromDatesAsync(
+                    key.AgreementCode, key.OkVersion, key.Position, afterExclusive, toInclusive, ct),
+                "position override", key));
+        }
+
+        var activations = await ReadDatesAsync(
+            () => _localAgreementProfileRepo!.GetActivationsInPeriodAsync(
+                key.OrgId!, key.AgreementCode, key.OkVersion, afterExclusive, toInclusive, ct),
+            "local agreement profile", key);
+        starts.AddRange(activations.Select(activation => activation.EffectiveFrom));
+        return starts;
+    }
+
+    /// <summary>
+    /// Runs one date read. A database error is logged once and refused as
+    /// <see cref="ConfigLookupUnavailableException"/>, the lookup's own outcome for a failed configuration read
+    /// (P-13); every other exception propagates unchanged.
+    /// </summary>
+    private async Task<T> ReadDatesAsync<T>(Func<Task<T>> read, string layer, StretchKey key)
+    {
+        try
+        {
+            return await read();
+        }
+        catch (DbException ex)
+        {
+            _logger.LogWarning(ex,
+                "The {Layer} version-date read failed for {AgreementCode}/{OkVersion} (position {Position}, " +
+                "organisation {OrgId}); refused as unavailable",
+                layer, key.AgreementCode, key.OkVersion, key.Position ?? "(none)", key.OrgId ?? "(none)");
+            throw new ConfigLookupUnavailableException($"{layer} version-date", ex);
+        }
+    }
+
+    /// <summary>The request's stretches, or a set for this call alone when there is no HTTP request.</summary>
+    private RequestStretchSet RequestStretches()
+    {
+        var items = _httpContextAccessor?.HttpContext?.Items;
+        if (items is null)
+            return new RequestStretchSet();
+        if (items.TryGetValue(_requestStretchesKey, out var existing) && existing is RequestStretchSet set)
+            return set;
+        var created = new RequestStretchSet();
+        items[_requestStretchesKey] = created;
+        return created;
+    }
+
+    /// <summary>What a configuration is resolved for: the full chain for an organisation, agreement, OK version
+    /// and position, or the central layer alone (no organisation, no position).</summary>
+    private readonly record struct StretchKey(
+        string? OrgId, string AgreementCode, string OkVersion, string? Position, bool CentralOnly);
+
+    /// <summary>One resolved stretch: <c>[From, To]</c>, inclusive, and the configuration in force on each of
+    /// its days.</summary>
+    private sealed class ConfigStretch(DateOnly from, DateOnly to, AgreementRuleConfig config)
+    {
+        public DateOnly From { get; } = from;
+        public DateOnly To { get; set; } = to;
+        public AgreementRuleConfig Config { get; } = config;
+    }
+
+    private sealed class RequestStretchSet
+    {
+        private readonly Dictionary<StretchKey, List<ConfigStretch>> _byKey = new();
+
+        public ConfigStretch? Covering(StretchKey key, DateOnly day) =>
+            _byKey.TryGetValue(key, out var stretches)
+                ? stretches.Find(stretch => stretch.From <= day && day <= stretch.To)
+                : null;
+
+        public ConfigStretch? LatestEndingBefore(StretchKey key, DateOnly day) =>
+            _byKey.TryGetValue(key, out var stretches)
+                ? stretches.Where(stretch => stretch.To < day).MaxBy(stretch => stretch.To)
+                : null;
+
+        public void Add(StretchKey key, ConfigStretch stretch)
+        {
+            if (!_byKey.TryGetValue(key, out var stretches))
+                _byKey[key] = stretches = new List<ConfigStretch>();
+            stretches.Add(stretch);
+        }
+    }
+}
+
+/// <summary>A dated employment record on one day: the agreement, the position and the organisation it names.</summary>
+public sealed record DatedRecord(string AgreementCode, string? Position, string OrgId);
+
+/// <summary>
+/// The dated employment records of a set of employees over a range, read set-based in three statements on the
+/// caller's connection (<c>employee_profiles</c>, <c>user_agreement_codes</c> and <c>user_organisations</c> rows
+/// overlapping the range, <c>= ANY(@ids)</c>), so a screen reads each employee's records once for the month
+/// instead of once per day (N-3). A day's record follows <see cref="EmploymentProfileResolver"/>'s rules: the
+/// profile row covering the day (joined to its user), end-exclusive (ADR-018 D8), then the organisation row and
+/// the agreement-code row covering it, the latest start winning where rows overlap. A covering profile row
+/// without either of the other two is a record gap, as the resolver's
+/// <see cref="EmployeeProfileNotFoundException"/> is; the caller decides what a gap means (ADR-023 D3).
+/// </summary>
+public sealed class DatedRecordTimeline
+{
+    private readonly Dictionary<string, List<DatedRow>> _profiles;
+    private readonly Dictionary<string, List<DatedRow>> _agreementCodes;
+    private readonly Dictionary<string, List<DatedRow>> _organisations;
+
+    private DatedRecordTimeline(
+        Dictionary<string, List<DatedRow>> profiles,
+        Dictionary<string, List<DatedRow>> agreementCodes,
+        Dictionary<string, List<DatedRow>> organisations)
+    {
+        _profiles = profiles;
+        _agreementCodes = agreementCodes;
+        _organisations = organisations;
+    }
+
+    /// <summary>Reads the rows of <paramref name="employeeIds"/> overlapping <c>[from, to]</c>.</summary>
+    public static async Task<DatedRecordTimeline> ReadAsync(
+        NpgsqlConnection conn, IReadOnlyCollection<string> employeeIds, DateOnly from, DateOnly to,
+        CancellationToken ct = default)
+    {
+        const string profilesSql =
+            """
+            SELECT ep.employee_id, ep.effective_from, ep.effective_to, ep.position
+            FROM employee_profiles ep
+            INNER JOIN users u ON u.user_id = ep.employee_id
+            WHERE ep.employee_id = ANY(@ids)
+              AND ep.effective_from <= @to AND (ep.effective_to IS NULL OR ep.effective_to > @from)
+            """;
+        const string agreementCodesSql =
+            """
+            SELECT user_id, effective_from, effective_to, agreement_code
+            FROM user_agreement_codes
+            WHERE user_id = ANY(@ids)
+              AND effective_from <= @to AND (effective_to IS NULL OR effective_to > @from)
+            """;
+        const string organisationsSql =
+            """
+            SELECT user_id, effective_from, effective_to, org_id
+            FROM user_organisations
+            WHERE user_id = ANY(@ids)
+              AND effective_from <= @to AND (effective_to IS NULL OR effective_to > @from)
+            """;
+
+        var ids = employeeIds.ToArray();
+        await using var profiles = new NpgsqlCommand(profilesSql, conn);
+        await using var agreementCodes = new NpgsqlCommand(agreementCodesSql, conn);
+        await using var organisations = new NpgsqlCommand(organisationsSql, conn);
+        return new DatedRecordTimeline(
+            await ReadRowsAsync(profiles, ids, from, to, ct),
+            await ReadRowsAsync(agreementCodes, ids, from, to, ct),
+            await ReadRowsAsync(organisations, ids, from, to, ct));
+    }
+
+    /// <summary>
+    /// The employee's record on <paramref name="day"/>, or <c>null</c> with the missing table named
+    /// (<c>employment_profile</c>, <c>organisation</c> or <c>agreement_code</c>; server log only, no date).
+    /// </summary>
+    public (DatedRecord? Record, string? MissingRecord) On(string employeeId, DateOnly day)
+    {
+        var profile = Covering(_profiles, employeeId, day);
+        if (profile is null)
+            return (null, "employment_profile");
+        var organisation = Covering(_organisations, employeeId, day);
+        if (organisation?.Value is null)
+            return (null, "organisation");
+        var agreementCode = Covering(_agreementCodes, employeeId, day);
+        if (agreementCode?.Value is null)
+            return (null, "agreement_code");
+        return (new DatedRecord(agreementCode.Value, profile.Value, organisation.Value), null);
+    }
+
+    private static DatedRow? Covering(Dictionary<string, List<DatedRow>> rows, string employeeId, DateOnly day)
+    {
+        if (!rows.TryGetValue(employeeId, out var list))
+            return null;
+        DatedRow? covering = null;
+        foreach (var row in list)
+        {
+            if (row.From <= day && (row.To is null || row.To > day) && (covering is null || row.From > covering.From))
+                covering = row;
+        }
+
+        return covering;
+    }
+
+    private static async Task<Dictionary<string, List<DatedRow>>> ReadRowsAsync(
+        NpgsqlCommand cmd, string[] ids, DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        var rows = new Dictionary<string, List<DatedRow>>(StringComparer.Ordinal);
+        cmd.Parameters.AddWithValue("ids", ids);
+        cmd.Parameters.AddWithValue("from", from);
+        cmd.Parameters.AddWithValue("to", to);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var employeeId = reader.GetString(0);
+            if (!rows.TryGetValue(employeeId, out var list))
+                rows[employeeId] = list = new List<DatedRow>();
+            list.Add(new DatedRow(
+                reader.GetFieldValue<DateOnly>(1),
+                reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3)));
+        }
+
+        return rows;
+    }
+
+    /// <summary>One dated row: <c>[From, To)</c>, end-exclusive, and its value (the position, which may be null,
+    /// the agreement code or the organisation).</summary>
+    private sealed record DatedRow(DateOnly From, DateOnly? To, string? Value);
 }

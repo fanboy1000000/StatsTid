@@ -1115,7 +1115,8 @@ public static class ApprovalEndpoints
             [FromQuery] int year,
             [FromQuery] int month,
             ApprovalPeriodRepository approvalRepo,
-            AgreementConfigRepository agreementConfigRepo,
+            // normExpected's configured weekly norm per day, resolved once per stretch (B-9, N-3).
+            DailyNormCalculator dailyNormCalculator,
             DbConnectionFactory connectionFactory,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
@@ -1334,19 +1335,18 @@ public static class ApprovalEndpoints
                     payrollExportedByEmployee[reader.GetString(0)] = reader.GetDateTime(1);
             }
 
-            // (2h) normExpected = weekdays × the employee's OWN per-day norm,
-            //      DayNorm.ForWeekday(weeklyNorm, part-time fraction at month end) — S146 / TASK-14602
-            //      (QUAL-198, owner Q-1 2026-10-14). Before, this was (weekdays/5) × weeklyNorm, a
-            //      full-timer's norm on every row: a 0.811 employee in a 22-weekday month showed 162.80
-            //      where the engine judges 22 × 6.00 = 132.00. Same formula as /summary, and the same
-            //      per-day helper the Rule Engine uses (ADR-002 S145 amendment). weeklyNorm resolves
-            //      from the employee's agreement config, cached per distinct (agreement, ok) pair so the
-            //      lookups are bounded (≤ #distinct agreements, NOT per-employee); the fraction is ONE
-            //      set-based read over the roster (below), not the heavy per-employee resolver.
-            var weekdays = 0;
-            for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
-                if (DayNorm.IsWeekday(d))
-                    weekdays++;
+            // (2h) normExpected = over the month's weekdays d, the sum of DayNorm.ForWeekday(W_d, f), each day
+            //      rounded by the per-day helper the Rule Engine uses (ADR-002 S145 amendment): W_d the weekly
+            //      norm the dated lookup gives for d with d's own dated record (agreement, position,
+            //      organisation; the position override and the local profile included) at d's OK version, f the
+            //      part-time fraction at month end (owner Q-1 2026-10-14, QUAL-198; B-9, NR-20 (b)). The same
+            //      function as /summary (DailyNormCalculator.ComputeMonthNormAsync), so the two screens agree,
+            //      and with payroll whenever a configured weekly norm changes inside the month (QUAL-226 keeps
+            //      the fraction difference). A day no record covers uses the month-end record; no record at
+            //      month end uses the row's agreement (the period's, else the users row's), central only, and
+            //      f = 1.0 (N-2). Set-based over the roster: the records in three reads (2h2), each configuration
+            //      once per stretch shared by every row (N-3). A lookup refusal fails the whole response
+            //      through the Backend's one mapping (B4): never a compiled value or a floor.
 
             // (2h1) Each roster employee's part-time fraction at MONTH END (the dated profile, the same
             //       as-of /summary uses). PER-ROSTER FAULT-ISOLATED, the awayToday idiom (2g): a failure
@@ -1371,32 +1371,11 @@ public static class ApprovalEndpoints
                 fractionByEmployee = new Dictionary<string, decimal>(StringComparer.Ordinal);
             }
 
-            // Resolve each roster employee's (agreement, ok) once (users row), then weekly norm once
-            // per distinct pair. The agreement used is the PERIOD's when a period exists (the same
-            // dimension the period was submitted under), else the users fallback; ok comes from users.
-            var usersInfo = new Dictionary<string, (string Agreement, string OkVersion)>(StringComparer.Ordinal);
-            await using (var cmd = new NpgsqlCommand(
-                "SELECT user_id, agreement_code, ok_version FROM users WHERE user_id = ANY(@ids)", conn))
-            {
-                cmd.Parameters.AddWithValue("ids", employeeIds);
-                await using var reader = await cmd.ExecuteReaderAsync(ct);
-                while (await reader.ReadAsync(ct))
-                    usersInfo[reader.GetString(0)] = (reader.GetString(1), reader.GetString(2));
-            }
-
-            var weeklyNormCache = new Dictionary<(string, string), decimal>();
-            async Task<decimal> ResolveWeeklyNormAsync(string agreement, string okVersion)
-            {
-                var key = (agreement, okVersion);
-                if (weeklyNormCache.TryGetValue(key, out var cached))
-                    return cached;
-                var dbConfig = await agreementConfigRepo.GetActiveAsync(agreement, okVersion, ct);
-                var norm = dbConfig?.WeeklyNormHours
-                    ?? CentralAgreementConfigs.TryGetConfig(agreement, okVersion)?.WeeklyNormHours
-                    ?? 37.0m;
-                weeklyNormCache[key] = norm;
-                return norm;
-            }
+            // (2h2) Each roster employee's dated records over the month, read once (employee_profiles,
+            //       user_agreement_codes, user_organisations; set-based on this connection). A profile day
+            //       without its agreement-code or organisation row counts as a day no record covers (ADR-023 D3:
+            //       this screen renders).
+            var datedRecords = await DatedRecordTimeline.ReadAsync(conn, employeeIds, monthStart, monthEnd, ct);
 
             // (3) Assemble one row per roster employee.
             var employees = new List<TeamOverviewEmployeeRow>(roster.Count);
@@ -1411,16 +1390,13 @@ public static class ApprovalEndpoints
                 DateTime? decisionAt = status is "APPROVED" or "REJECTED" ? period?.ApprovedAt : null;
                 var rejectionReason = status == "REJECTED" ? period?.RejectionReason : null;
 
-                var (uAgreement, uOk) = usersInfo.TryGetValue(r.EmployeeId, out var ui)
-                    ? ui
-                    : (r.UsersAgreementCode, "OK24");
-                // Norm-expected uses the period's agreement when present (consistent with the row's
-                // displayed agreement), else the users agreement; ok is from users (the live cache).
-                var weeklyNorm = await ResolveWeeklyNormAsync(agreement, uOk);
-                // S146 / TASK-14602 (QUAL-198) — the employee's own norm; 1.0 when the fraction read
-                // (2h1) found no covering profile row or failed.
+                // S146 / TASK-14602 (QUAL-198) — the employee's own norm at the month-end fraction; 1.0 when
+                // the fraction read (2h1) found no covering profile row or failed. The row's agreement (the
+                // period's, else the users row's) is used only on a month with no record at its end (N-2).
                 var partTimeFraction = fractionByEmployee.TryGetValue(r.EmployeeId, out var fraction) ? fraction : 1.0m;
-                var normExpected = weekdays * DayNorm.ForWeekday(weeklyNorm, partTimeFraction);
+                var normExpected = await dailyNormCalculator.ComputeMonthNormAsync(
+                    day => datedRecords.On(r.EmployeeId, day).Record,
+                    monthStart, monthEnd, partTimeFraction, agreement, ct);
 
                 // S124 / TASK-12402 — the manager-visibility rule. `submittedToManager` is keyed on
                 // STATUS, not on `r.PeriodId`: a REAL DRAFT period row (created-but-not-submitted, or

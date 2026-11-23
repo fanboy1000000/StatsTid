@@ -41,7 +41,10 @@ public static class BalanceEndpoints
             int month,
             UserRepository userRepo,
             UserAgreementCodeRepository userAgreementCodeRepo,
-            AgreementConfigRepository configRepo,
+            // normHoursExpected's configured weekly norm per day and the merarbejde flag, through the dated
+            // lookup (B-9, N-3), over the records read on their own connection.
+            StatsTid.Backend.Api.Services.DailyNormCalculator dailyNormCalculator,
+            DbConnectionFactory connectionFactory,
             EntitlementConfigRepository entitlementConfigRepo,
             EntitlementBalanceRepository entitlementBalanceRepo,
             OvertimeBalanceRepository overtimeBalanceRepo,
@@ -121,12 +124,12 @@ public static class BalanceEndpoints
                 employeeId, monthStart, ct);
             var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
 
-            // ADR-023 D3: resolver-first, then existing fallback chain. Balance is a
-            // pure-HTTP non-rule-engine consumer — null resolver result falls through
-            // gracefully to AgreementConfig → CentralAgreementConfigs → 37.0m floor.
-            // Documented determinism gap on agreement_code: when admin soft-deletes a
-            // profile, this endpoint returns sensible default data (graceful), unlike
-            // the PCS-routed callers that fail-closed (ADR-023 D3 split).
+            // ADR-023 D3: Balance is a pure-HTTP non-rule-engine consumer, graceful about a
+            // missing employment record: with no dated profile the month figure below uses the
+            // agreement above, central only, at fraction 1.0 (N-2), so a profile-less or
+            // soft-deleted employee's summary still renders, unlike the PCS-routed callers that
+            // fail-closed (ADR-023 D3 split). A failed configuration read is not graceful: it
+            // fails the summary through the Backend's one mapping (P-13, B4).
             //
             // S60 / TASK-6005 — the resolver can throw EmployeeProfileNotFoundException when an
             // employee_profiles row exists but the dated user_agreement_codes row is missing
@@ -151,36 +154,34 @@ public static class BalanceEndpoints
             // hard-coded 1.0m.
             var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
 
-            // Get agreement config — try DB first (ACTIVE), fall back to central static config.
-            // S137 / ADR-040 D4 (QUAL-147): the OK version is the one governing the MONTH BEING
-            // READ (resolved from monthEnd — the seam's existing as-of anchor, see the dated
-            // part-time fraction above), NOT the live user.OkVersion, so a past OK24 month for a
-            // now-OK26 employee is valued under the OK24 norm.
-            var monthOkVersion = OkVersionResolver.ResolveVersion(monthEnd);
-            var dbConfig = await configRepo.GetActiveAsync(agreementCode, monthOkVersion, ct);
-            var weeklyNormHours = dbConfig?.WeeklyNormHours
-                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, monthOkVersion)?.WeeklyNormHours
-                ?? 37.0m;
-            var hasMerarbejde = dbConfig?.HasMerarbejde
-                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, monthOkVersion)?.HasMerarbejde
-                ?? false;
+            // The merarbejde flag: the agreement's central configuration in force at month end, at the
+            // month's OK version (ADR-040 D4, QUAL-147: never the live user.OkVersion), through the
+            // dated lookup; no position override or local profile changes it. No compiled value and no
+            // false floor (P-13).
+            var hasMerarbejde = (await dailyNormCalculator.ResolveCentralConfigAsync(
+                agreementCode, monthEnd, monthEnd, ct)).HasMerarbejde;
 
-            var weekdays = 0;
-            for (var day = monthStart; day <= monthEnd; day = day.AddDays(1))
+            // The employee's OWN monthly norm (S146 / TASK-14602, QUAL-198, owner Q-1 2026-10-14; B-9,
+            // NR-20 (b)): over the month's weekdays d, the sum of DayNorm.ForWeekday(W_d, f), each day
+            // rounded by the per-day helper the Rule Engine uses (ADR-002 S145 amendment). W_d is the
+            // weekly norm the dated lookup gives for d with d's own dated record at d's OK version (the
+            // month-end record on a day none covers); f is the part-time fraction at MONTH END read
+            // above, never each day's own (the ruling; QUAL-226 keeps the difference from payroll). No
+            // record at month end: the agreement above, central only, f = 1.0 (N-2). The same function as
+            // Teamoversigt's normExpected, so the two screens agree; the records are read once for the
+            // month and each configuration once per stretch (N-3). Public holidays do not reduce the norm
+            // here or in the engine.
+            StatsTid.Backend.Api.Services.DatedRecordTimeline datedRecords;
+            await using (var recordConn = connectionFactory.Create())
             {
-                if (DayNorm.IsWeekday(day))
-                    weekdays++;
+                await recordConn.OpenAsync(ct);
+                datedRecords = await StatsTid.Backend.Api.Services.DatedRecordTimeline.ReadAsync(
+                    recordConn, new[] { employeeId }, monthStart, monthEnd, ct);
             }
 
-            // S146 / TASK-14602 (QUAL-198, owner Q-1 2026-10-14) — the employee's OWN monthly norm:
-            // weekdays × the per-day norm the Rule Engine uses (DayNorm, ADR-002 S145 amendment),
-            // with the part-time fraction at MONTH END (the dated profile read above; 1.0 when there
-            // is none). Before, this was (weekdays / 5) × weeklyNormHours — a full-timer's norm shown
-            // to everyone: a 0.811 employee in a 22-weekday month saw 162.80 where the engine judges
-            // 22 × 6.00 = 132.00. Full-time values are unchanged (37.0 → 7.40/day, 36.0 → 7.20/day).
-            // A mid-month fraction change is valued at the month-end fraction for every weekday (the
-            // ruling); public holidays do not reduce the norm here or in the engine.
-            var normHoursExpected = weekdays * DayNorm.ForWeekday(weeklyNormHours, partTimeFraction);
+            var normHoursExpected = await dailyNormCalculator.ComputeMonthNormAsync(
+                day => datedRecords.On(employeeId, day).Record,
+                monthStart, monthEnd, partTimeFraction, agreementCode, ct);
 
             // Time entries: read from projection (date-range scoped to the month) — S27 TASK-2708.
             // Read-your-write is satisfied because the atomic POST handler (TASK-2707) commits

@@ -115,6 +115,13 @@ public static class OvertimeEndpoints
             var client = httpClientFactory.CreateClient(Http.RuleEngineClient.Name);
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true };
 
+            // The engine reads no configuration of its own (ADR-043 D12), so this legacy route sends the
+            // compiled one the engine used for it before: the profile's agreement and live OK version, no
+            // position (R-8). A pair with no compiled entry sends none, and the engine's refusal answers the
+            // 503 below, as the engine's failure did.
+            // shortcut(pending): the overtime-governance warning uses the compiled agreement config, not the dated configured one, so a published or local overtime ceiling or pre-approval setting does not reach it (R-8); upgrade when the governance route retires or moves to the dated lookup (stage 2, S1-4)
+            var config = StatsTid.SharedKernel.Config.CentralAgreementConfigs.TryGetConfig(agreementCode, user.OkVersion);
+
             var payload = new
             {
                 profile = new
@@ -128,6 +135,7 @@ public static class OvertimeEndpoints
                 periodEnd,
                 overtimeHoursInPeriod = overtimeHours,
                 hasPreApproval = hasPreApproval ?? false,
+                config,
             };
 
             var response = await client.PostAsJsonAsync(

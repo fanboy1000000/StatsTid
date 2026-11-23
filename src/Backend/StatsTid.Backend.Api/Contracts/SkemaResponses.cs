@@ -64,10 +64,10 @@ public sealed record SkemaWorkTimeDayRow(
     DateOnly Date,
     IReadOnlyList<SkemaWorkIntervalRow> Intervals);
 
-/// <summary>One { date, hours|null } day row — the shape of BOTH <c>dailyNorm</c> (per-day
-/// display norm; null for ANNUAL_ACTIVITY / no-profile days) and <c>consumptionBasis</c> (the
-/// ADR-032 served==guard basis; null where no dated profile covers the day). Identical shapes —
-/// ONE record (sibling rule).</summary>
+/// <summary>One { date, hours|null } day row — the shape of <c>dailyNorm</c> (per-day
+/// display norm; null for ANNUAL_ACTIVITY / no-profile days), <c>consumptionBasis</c> (the
+/// ADR-032 served==guard basis; null where no dated profile covers the day) and <c>minimumRest</c>
+/// (the minimum rest in force that day). Identical shapes — ONE record (sibling rule).</summary>
 public sealed record SkemaDayHoursRow(
     DateOnly Date,
     decimal? Hours);
@@ -112,8 +112,14 @@ public sealed record SkemaCatalogs(
     IReadOnlyList<SkemaAbsenceTypeRow> AbsenceTypes);
 
 /// <summary>The GET /api/skema/{employeeId}/month 200 body — the composite monthly spreadsheet
-/// payload (17 top-level members). <paramref name="FullDayNormAtMonthEnd"/> is the nullable R10
-/// scalar; <paramref name="Approval"/> is the nullable-complex member (S117 wrapper).</summary>
+/// payload (18 top-level members). <paramref name="FullDayNormAtMonthEnd"/> is the nullable R10
+/// scalar; <paramref name="Approval"/> is the nullable-complex member (S117 wrapper).
+/// <paramref name="MinimumRest"/> is the minimum rest (<c>MinimumRestHours</c>) of the agreement
+/// configuration in force on each day of <c>[monthStart, monthEnd + 1]</c>, one row per day, for the day's
+/// own dated record: the screen's instant rest warning judges each work end by the value of its own date
+/// (S0-4, RR-7), and a finding can fall on the next month's first day but never before the month.
+/// <c>hours</c> is null where no dated record covers the day, and on <c>monthEnd + 1</c> also where no
+/// configuration is in force yet.</summary>
 public sealed record SkemaMonthResponse(
     int Year,
     int Month,
@@ -131,7 +137,8 @@ public sealed record SkemaMonthResponse(
     SkemaCatalogs Catalogs,
     IReadOnlyList<SkemaWorkTimeDayRow> BoundaryWorkTime,
     decimal? FullDayNormAtMonthEnd,
-    IReadOnlyList<SkemaDayHoursRow> ConsumptionBasis);
+    IReadOnlyList<SkemaDayHoursRow> ConsumptionBasis,
+    IReadOnlyList<SkemaDayHoursRow> MinimumRest);
 
 /// <summary>The POST /api/skema/{employeeId}/save 200 receipt — <c>{ saved }</c>, the count of
 /// emitted events (entries + work-time days + absences).</summary>
