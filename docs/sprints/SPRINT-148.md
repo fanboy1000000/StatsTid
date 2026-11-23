@@ -3171,3 +3171,28 @@ M-40 included [O for the 14 facts of the five classes run].
 **TASK-14831 dispatched** (`payroll-integration`, on master `80d51054`; report header `## S148 TASK-14831 report`).
 - **What it builds:** payroll's recheck under the pay-inputs lock (T24): a refusal 409 `payroll-inputs-changed` if a month's inputs changed between calculating and recording, and the recording-time 503. Plus item 10.
 - **The batch-D owner question (§ 2)** was answered on 2026-11-19 with (a): close the wage-type gap after S148 (QUAL-259). It changes nothing here.
+
+**TASK-14831 returned** (`payroll-integration`; `18b665b1`, `4c2061b5` on `80d51054`; report `.claude/reviews/S148-TASK-14831-report.md`).
+- **What it builds, in plain words:**
+  - Recording a month (the export) or correcting one (`/recalculate`) now first takes its turn on the system-wide pay-inputs lock, in shared mode. Recordings run side by side; a change dated back into a month holds the lock exclusively.
+  - Inside its turn, payroll derives the month's inputs again: the stretches with their agreement, fraction, position, institution and full rule set; the employed days; and a leaver's last day. It compares them with what the calculation used.
+  - **If anything differs,** or a day can no longer be covered, the answer is 409 `payroll-inputs-changed` and nothing is recorded.
+  - **If the configuration cannot be read** at recording time, the answer is a 503 worded for that moment.
+  - **No payslip moves:** the check can only refuse.
+- **Item 10:** a record gap now answers 422 `payroll-employment-record-gap` on both calculating routes, with the ruled body. No fact pinned the old 500. The gap is raised before either transaction opens; inside a recording's turn it becomes `payroll-inputs-changed`.
+- **The lock order:**
+  - Export: the pay-inputs lock (shared), the ledger lock, the flex recheck, the pay-inputs recheck, then the approval rows.
+  - Correction: the same up to the pay-inputs recheck, then the record.
+  - No wait cycle can form, because every exclusive taker takes `(148, 1)` first and never the ledger key.
+  - The census holds 15 calls: 13 exclusive and 2 shared.
+- **The recheck** compares the cutoff, each piece and each `ConfigRuns` entry by value, through the calculation's own derivation methods, which are unchanged (called, not edited). A scratch probe gave 8 of 8 arms as expected, with no Rule Engine call.
+- **One `shortcut(pending)` as ruled** (`PeriodCalculationService.cs:1889`): the recheck borrows a second pooled connection (SEC-066's payroll variant). It is retagged to SEC-066 at the merge, with the ruled dated note.
+- **Gate:** build 0 errors, 125 warnings, CA2100 113; Unit 1724, DemoSeed 170, Regression non-Docker 147. The shortcut check gives 1 bad, the ruled pending line.
+- **Expected red at CI** until TASK-14831-T repairs it: `PayrollExportRecordTests.Export_CalculatingContext_…` (BC-5).
+- **Found, not fixed** (comment-only, outside its ranges; the Orchestrator fixes them at the merge or they go to 14831-T):
+  - two "first statement" remarks: `PeriodCalculationService.cs:1027-1028` and `PayrollExportRecordRepository.cs:28`;
+  - an incomplete method doc: `PayrollExportService.cs:177`;
+  - two log texts that are inexact when the recheck is the caller (PCS `:4136`, `:4295`);
+  - two test comments (`FlexLedgerRaceTests.cs:15`, `:98`), which go to 14831-T.
+- **The Orchestrator's checks:** the 6 authorized files; both trailers present.
+- **TASK-14831-T's brief gains Do 11** (`80d7ec67`): pin the 422 on both routes, with nothing written. **TASK-14831-T dispatched** (`test-qa`) on `4c2061b5`.
