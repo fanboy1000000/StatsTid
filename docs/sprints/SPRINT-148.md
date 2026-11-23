@@ -3048,3 +3048,25 @@ M-40 included [O for the 14 facts of the five classes run].
   - **Declined:** TASK-14830's option (ii), a `[JsonIgnore(Never)]` on the SharedKernel type, would change production serialization for a value that cannot occur.
   - The ruling goes to the 5a lenses with the pair.
 - **TASK-14830-T dispatched** (`test-qa`) on `fc5d0dfa`, with the ruling and the extra census sites from TASK-14830's Gate 6: `EngineConfigFromRequestTests.cs:88-90`, the stub engines' `configFingerprints` member in eight places, and four untrue comments.
+
+**TASK-14830-T returned** (`test-qa`, Sonnet 5.5; one commit `52ac6683` on `fc5d0dfa`; report `.claude/reviews/S148-TASK-14830-T-report.md`).
+- **What the facts prove, in plain words:**
+  - A replay of a paid month gives back exactly the original answer, even after a different rule set is published dated into that month (`FrozenConfigReplayTests.PublishChangedConfig_ReplayReproducesOriginal`).
+  - An older proof is refused by name, before the engine is asked, on both storage paths.
+  - Every setting survives storage.
+- **The facts:**
+  - **Docker:** five, one N plus two F and two R on the older shapes. Each refusal fact also asserts no engine request and unchanged row counts in four tables.
+  - **Unit:** the round-trip pin with three arms, arm (2) per the Orchestrator's ruling and extended to every enum member so `NormModel` is covered at zero; and the size fact.
+  - The marker pin is re-homed.
+- **Retired:** `ConfigFingerprintTests` (48 cases), the replay fingerprint fact (Docker) and the empty-fingerprints fact. The fingerprint arms, the helper and the stub engines' member are removed, and WP5 is re-pointed to each piece's OK version.
+- **Mutations (local):**
+  - M-51 turns exactly the two round-trip facts red.
+  - M-13 (replay re-resolves instead of sending the stored rules) turns `PublishChangedConfig_ReplayReproducesOriginal` red on a local cluster. That is CI-M5's frozen list.
+- **Gate:** build 0 errors, 125 warnings, CA2100 113. Unit 1764 + 3 − 49 = 1718. DemoSeed 170. Regression non-Docker 147.
+- **Local cluster (port 55449, not CI evidence):** green on the five new facts, `ReplayFrozenInputsTests`, `ManifestProjectionRebuildPlanInputsTests`, `FrozenInputsSlotTests`, WP5, both R42 pins and both PIN-1 facts. No pay line moved.
+- **Size:** a one-piece month's plan inputs grow from 427 B to 1,608 B, and the eight-piece worst case from 1,330 B to 10,673 B. They are stored twice; O-18's call follows the review.
+- **The Orchestrator's checks:** the commit touches `tests/**` only, and neither R42 pin is in the diff.
+- **The pair's review dispatched** on `f328d00d..52ac6683`:
+  - 5α (header `## S148 TASK-14830 5α`);
+  - Fable (`## S148 TASK-14830 5a reviewer`);
+  - Codex (`codex-14830-run.ps1` → `S148-TASK-14830-5a-codex.raw.md`).
