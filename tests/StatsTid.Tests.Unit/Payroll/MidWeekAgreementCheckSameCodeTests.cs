@@ -29,10 +29,12 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// </para>
 ///
 /// <para>
-/// <b>Red conditions.</b> The F fact (<see cref="SameCodeRowStart_Tuesday10November2026_Calculates"/>) is red at
-/// <c>043c5f35</c> structurally: <c>PlanHistories</c> has no <c>SameAgreementCodeRowStarts</c> member (it has four
-/// constructor arguments), so the five-argument constructor lookup fails. Its behavioural red is the Docker fact
-/// (refused 422 <c>agreement-change-mid-week</c> at <c>043c5f35</c>). The two R facts hold on the changed check
+/// <b>Red conditions.</b> The N fact (<see cref="SameCodeRowStart_Tuesday10November2026_Calculates"/>) covers the new
+/// check; at <c>043c5f35</c> it is red only structurally: <c>PlanHistories</c> has no <c>SameAgreementCodeRowStarts</c>
+/// member (it has four constructor arguments), so the five-argument constructor lookup fails, which a compile error
+/// would equally show. T3's F evidence is the Docker fact
+/// <c>CreatedPersonBackdatedPayrollTests.November2026_CalculatesWithNoRecordGap</c> (refused 422
+/// <c>agreement-change-mid-week</c> at <c>043c5f35</c>). The two R facts hold on the changed check
 /// and are green before it as well when the constructor is called with the arguments of that day.
 /// </para>
 /// </summary>
@@ -43,7 +45,7 @@ public sealed class MidWeekAgreementCheckSameCodeTests
     private static readonly DateOnly Nov10 = new(2026, 11, 10);  // Tuesday
     private static readonly DateOnly Nov30 = new(2026, 11, 30);  // Monday
 
-    /// <summary>F. A same-code row starting Tuesday 10 November, for someone employed the day before, calculates.</summary>
+    /// <summary>N. A same-code row starting Tuesday 10 November, for someone employed the day before, calculates.</summary>
     [Fact]
     public void SameCodeRowStart_Tuesday10November2026_Calculates()
     {

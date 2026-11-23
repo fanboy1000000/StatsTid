@@ -316,7 +316,9 @@ public class SmokeTests
         var compliance = await complianceResponse.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("REST_PERIOD_CHECK", compliance.GetProperty("ruleId").GetString());
         Assert.Equal(employeeId, compliance.GetProperty("employeeId").GetString());
-        Assert.True(compliance.GetProperty("success").GetBoolean());
+        // The hop's proof is the 200 and the result's shape, not a value: `success` is false on a real rest violation,
+        // which a lived-in stack could hold in the month, so only its type is asserted (5a ruling U10).
+        Assert.True(compliance.GetProperty("success").ValueKind is JsonValueKind.True or JsonValueKind.False);
         Assert.Equal(JsonValueKind.Array, compliance.GetProperty("violations").ValueKind);
         Assert.Equal(JsonValueKind.Array, compliance.GetProperty("warnings").ValueKind);
     }

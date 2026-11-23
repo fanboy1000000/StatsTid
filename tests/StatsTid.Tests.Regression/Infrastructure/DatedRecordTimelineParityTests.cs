@@ -47,7 +47,7 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
     /// profile.
     ///
     /// <para>
-    /// <b>Red conditions</b> (Docker-gated; CI-pending; N: no divergence is known). Any day on which the two readers differ, for example a
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; N: no divergence is known on the cases this fixture holds; overlapping profile rows do diverge, registered as QUAL-263). Any day on which the two readers differ, for example a
     /// reader that took the earliest start where rows overlap, ignored an end date, or answered a record where the organisation row is
     /// missing, appears in the mismatch list and fails the first assertion; the explicit-expectation assertions fail if the fixture ever
     /// stops containing an overlap or one of the gap kinds.

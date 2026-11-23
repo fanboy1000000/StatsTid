@@ -190,6 +190,32 @@ public sealed class RuleEngineAuthForwardingTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Array, body.GetProperty("warnings").ValueKind);
     }
 
+    /// <summary>
+    /// <b>Kind F (Docker, CI).</b> S148 T14b FU-4T (5a ruling U5): the engine's profile requires
+    /// <c>employmentCategory</c>, so the governance request body's <c>profile</c> carries it, equal to the seeded
+    /// user's (the route reads no dated profile). The user is seeded with the non-default category "Chef", so a
+    /// payload that sent the default or a constant would differ.
+    ///
+    /// <para><b>Red conditions.</b> At <c>043c5f35</c> the profile member is absent, so
+    /// <c>GetProperty("employmentCategory")</c> throws <see cref="KeyNotFoundException"/>; a body that carried a
+    /// different value fails the equality.</para>
+    /// </summary>
+    [Fact]
+    public async Task OvertimeGovernance_ProfileCarriesTheUsersEmploymentCategory()
+    {
+        var (client, capture) = CreateCaptureClient();
+        var employeeId = await SeedEmployeeAsync(fraction: 1.000m, employmentCategory: "Chef");
+        AuthorizeWithCorrelation(client, employeeId);
+
+        var rsp = await client.GetAsync(
+            $"/api/overtime/{employeeId}/governance?periodStart=2026-05-01&periodEnd=2026-05-31&overtimeHours=5");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        var governanceCall = Assert.Single(capture.Requests(CheckOvertimeGovernancePath));
+        using var doc = JsonDocument.Parse(governanceCall.Body);
+        Assert.Equal("Chef", doc.RootElement.GetProperty("profile").GetProperty("employmentCategory").GetString());
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // The R1a NEGATIVE pin + the no-header edge pins.
     // ════════════════════════════════════════════════════════════════════════
@@ -384,7 +410,8 @@ public sealed class RuleEngineAuthForwardingTests : IAsyncLifetime
     /// Fresh AC/OK24 employee: users row (+ optional birth_date for the senior gate), an OPEN
     /// dated AC agreement-code row and an OPEN dated profile row from '0001-01-01'.
     /// </summary>
-    private async Task<string> SeedEmployeeAsync(decimal fraction, DateOnly? birthDate = null)
+    private async Task<string> SeedEmployeeAsync(
+        decimal fraction, DateOnly? birthDate = null, string employmentCategory = "Standard")
     {
         var employeeId = "emp_s73_authfwd_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
@@ -393,13 +420,15 @@ public sealed class RuleEngineAuthForwardingTests : IAsyncLifetime
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO users (user_id, username, password_hash, display_name, email,
-                               primary_org_id, agreement_code, ok_version, is_active, birth_date)
-            VALUES (@u, @u, 'dev-only', 'S73 Auth Forwarding Pin User', NULL, @org, 'AC', 'OK24', TRUE, @dob)
+                               primary_org_id, agreement_code, ok_version, is_active, birth_date,
+                               employment_category)
+            VALUES (@u, @u, 'dev-only', 'S73 Auth Forwarding Pin User', NULL, @org, 'AC', 'OK24', TRUE, @dob, @cat)
             """, conn))
         {
             cmd.Parameters.AddWithValue("u", employeeId);
             cmd.Parameters.AddWithValue("org", OrgId);
             cmd.Parameters.AddWithValue("dob", (object?)birthDate ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("cat", employmentCategory);
             await cmd.ExecuteNonQueryAsync();
         }
 
