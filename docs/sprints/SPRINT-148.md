@@ -2907,3 +2907,18 @@ M-40 included [O for the 14 facts of the five classes run].
   - **QUAL-264:** the Error log on a tolerated absence (T11).
 - **Dispatched:** FU-4 (`backend-infrastructure`) on `e1787c56`, U1 and U2's clause, with a scratch probe of U1's roster order at both ends. FU-4T (`test-qa`) follows.
 - **Housekeeping:** the worktrees of FU-2, FU-3 (its logs copied to the scratchpad), TASK-14829 and TASK-14828-T are removed after unlinking their `node_modules` junctions. Their commits stay on their branches and the tip.
+
+**T14b FU-4 returned** (`backend-infrastructure`; `63a34e6d` on `e1787c56`; report `.claude/reviews/S148-T14b-FU-4-report.md`).
+- **U1 as built:** the memo is now one date per agreement and OK version, "nothing published through this day". A refusal raises it to the day before the next central version start (`AddNoneInForce(key, plan.CentralTo)`). The union of the proved ranges is "nothing through the latest".
+- **Unchanged:** a record-covered day never reads the memo, and the date reads stay outside the catch.
+- **The remarks:** the summary, the memo remark and the catch comment say "at most once per agreement and OK version per month computed", and say exactly what holds without the date repositories.
+- **U2's clause:** `DatedRecordTimeline`'s summary says that only the timeline takes the latest start on overlapping profile rows (QUAL-263).
+- **Scratch probe (database-free, deleted):** employee B adds 7 refused lookups at `e1787c56` (2–6, 9 and 10 March) and 0 at the tip. Both figures stay 162.80. A record-covered day still refuses.
+- **Gate:**
+  - Build 0 errors, 125 warnings, CA2100 113.
+  - Unit 1762, DemoSeed 170, Regression non-Docker 147.
+  - The shortcut check shows the three known sites.
+  - `openapi.json` is unchanged.
+- **The Orchestrator's check:** one file. The code change is the memo's write and its two members; the rest is comment.
+- **Found, not fixed:** `UserAgreementCodeRepository.cs:126-127`'s SQL comment says the sibling profile read uses the same tie-break, which it does not. This goes into QUAL-263's follow-up.
+- **FU-4T dispatched** (`test-qa`) on `63a34e6d`: U1's Unit F and R facts (and a Docker N fact only if the fixture can count lookups), U5's assertion, U2's sentence, U4's label, and U10's probe.
