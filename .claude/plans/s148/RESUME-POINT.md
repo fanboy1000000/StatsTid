@@ -50,10 +50,14 @@ Registers: SEC-062's 22 sites, SEC-065's two doors and QUAL-257 are all marked F
        - `WeeklyCalculationPipeline.cs:43-45`'s `Convert.ToDecimal` on `JsonElement` makes the Orchestrator's `weekly-calculation` task fail through `/execute` (since March), so the new smoke probe is expected red in CI.
      - Also for the review: the compliance smoke probe forbids only 503.
    - **REGEN** `061f8d55` on `b55a7a96`: `openapi.json` +7, the `minimumRest` member only, as predicted.
-   - **TASK-14829 dispatched** (`ux`) on `061f8d55`, with the served member as built and deviation 8 as a third null source.
+   - **TASK-14829 returned:** `043c5f35` on `061f8d55` (report `.claude/reviews/S148-TASK-14829-report.md`); declared deviation `ui/Checkbox.tsx` (`describedBy`); tsc and the new facts re-run green by the Orchestrator.
+   - **Stack review dispatched at `043c5f35`:**
+     - 5α (`constraint-validator`, header `## S148 T14b stack 5α`) → save to `.claude/reviews/S148-T14b-5alpha.md`;
+     - Fable `reviewer` (header `## S148 T14b stack 5a reviewer`) → `S148-T14b-5a-reviewer.md`;
+     - Codex (`codex-T14b-run.ps1`) → `S148-T14b-5a-codex-c1.raw.md`.
+     Then the adjudication, fix-ups, merge `--no-ff`, O-17 paperwork and the GATE with the five frontend checks.
    - **Carry to TASK-14830:** `EnsureConfigUnchanged`'s remark and text; `ReplayRefusedException.cs:37`; `IOrganisationHistoryReader.cs:12-15`; the `TryResolveDatedProfileAsync` log label.
    - **For the stack's review:** payroll answers an anonymous 500 for `EmployeeProfileNotFoundException` (a record gap or a missing organisation); register coverage `(unproven)`.
-   - **Then** the stack review at TASK-14829's tip (5α on the union, Fable reviewer and Codex), with every item above.
 4. **Then** 14830 + -T, 14831 + -T, 14846, CI-W5 and CI-M5 (M-9, M-12, M-13, M-15, M-49).
 5. **Owner ruling 2026-11-19 (a):** QUAL-259 is built after S148.
 6. **Housekeeping:** about 55 stale local `worktree-agent-*` branches from earlier waves. The T14b stack's worktrees for 14826, 14826-T and 14827 are removed (branches kept); 14828's and 14828-T's remain until the merge.

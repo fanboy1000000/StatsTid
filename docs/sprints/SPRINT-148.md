@@ -2676,3 +2676,30 @@ M-40 included [O for the 14 facts of the five classes run].
   - the served member's name, type and span as built;
   - TASK-14828's deviation 8, as a third source of a null day (the null rule treats it alike, so nothing about which days are null is pinned);
   - the junction rule for `node_modules`.
+
+**TASK-14829 returned** (`ux`; one commit `043c5f35` on `061f8d55`; report `.claude/reviews/S148-TASK-14829-report.md`).
+- **What it builds:**
+  - **The note goes from the three editors.** The agreement editor, the position-override page and the local-profile editor no longer say "does not yet affect pay", because those values now reach pay (R-26). Both `.stage0Label` CSS rules go with it.
+  - **The two overtime fields keep a note.** The profile editor's overtime ceiling and pre-approval fields each carry the ruled per-field note (ruling 23), linked to the field through `aria-describedby` and shown whether the override toggle is on or off. Only the overtime-governance warning reads those two fields, and it still uses the built-in values.
+  - **Skema's instant rest warning** judges each work end by the minimum rest served for its own date (RR-7).
+    - `analyzeRestPeriods` gains a per-day provider.
+    - A day with no served value is not judged (BC-8 (a)).
+    - `REST_MINIMUM_HOURS` is gone.
+    - The two sentences use `{M}` (ruling 24); with no served value, the long-day alert keeps only its first sentence.
+- **The Orchestrator's checks:**
+  - The diff touches 27 files, all authorized, plus the declared `ui/Checkbox.tsx` (four lines, an optional `describedBy`, which the checkbox needs for the ruled `aria-describedby`); it goes to 5α and the review.
+  - The note is byte-identical to ruling 23.
+  - Gate 5's three greps are empty, re-run on `043c5f35`.
+  - The only `SkemaDayPanel` renderer (`SkemaPage.tsx:1623`) passes `minimumRest`.
+  - `npx tsc --noEmit` exits 0, and the four new or changed fact files plus `restParity.test.ts` pass (5 files, 92 tests).
+- **The agent's gate:** tsc, lint, `typecheck:e2e`, build and vitest all exit 0; vitest has 101 files and 1211 tests.
+  - Its first full vitest run hung (about 11 s of CPU in 25 minutes, no workers). The Orchestrator saw it and the agent stopped those two processes by PID; the second run is the one counted.
+  - The before-counts are derived, `(unproven)`.
+- **Facts:** 12 reds proved by reverting the production files from a saved patch: `useSkema.servedMinimumRest`, `ProfileEditor.overtimeFieldNotes`, `configEditors.labelRemoved`, and two panel arms. `configEditors.stage0Label.test.tsx` (AC-S0-8a) is retired.
+- **Fixture census:** 9 typed month fixtures gain `minimumRest: []`, and `SkemaPage.test.tsx` serves 11 h for March so its rest assertion still fires. The `analyzeRestPeriods` test call sites pass `() => 11`.
+- **A brief challenge it raised:** opening Sunday 15 March in the worked example still shows Monday's finding, because Sunday's work lies in Monday's 24-hour window (the existing "shown" rule). Sunday's own end has no finding, and the fact asserts exactly that.
+- **The stack review dispatched at `043c5f35`** (`bb0677df..043c5f35`), on three lenses in parallel:
+  - 5α, the `constraint-validator`, on the union;
+  - 5a internal, the Fable `reviewer`;
+  - 5a Codex (`.claude/reviews/S148-session-helpers/codex-T14b-5a-prompt.txt`).
+  Both 5a lenses are asked to judge items (a)–(h): TASK-14828's deviations 2 and 8, `DatedRecordTimeline`, payroll's anonymous 500, AC-C13k (2), the weekly pipeline's `JsonElement` cast, the compliance smoke probe and the two untrue remarks.
