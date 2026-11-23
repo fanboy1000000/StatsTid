@@ -309,7 +309,7 @@ export function SkemaDayPanel({
               const shown = restDisplayHours(w.restSeconds)
               return (
                 <Alert key={`${w.date}-${w.endsAt}`} variant="warning">
-                  {`Denne registrering giver kun ${formatDanishNumber(shown, 1)} ${shown === 1 ? 'times' : 'timers'} sammenhængende hvile i de 24 timer før arbejdet slutter ${formatLongDanishDate(w.date)} kl. ${w.endsAt.slice(0, 5)}. Hvile under ${formatDanishNumber(minimumByDate.get(w.date) ?? 0, 1)} timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile.`}
+                  {`Denne registrering giver kun ${formatDanishNumber(shown, 1)} ${shown === 1 ? 'times' : 'timers'} sammenhængende hvile i de 24 timer før arbejdet slutter ${formatLongDanishDate(w.date)} kl. ${w.endsAt.slice(0, 5)}.${typeof w.minimumHours === 'number' ? ` Hvile under ${formatDanishNumber(w.minimumHours, 1)} timer registreres som et hviletidsbrud, der er synligt for din leder og kan udløse kompenserende hvile.` : ''}`}
                 </Alert>
               )
             })}

@@ -141,6 +141,36 @@ describe('SkemaDayPanel — R6 warnings (warning-ONLY, panel meta area)', () => 
     )
   })
 
+  // Kind R (S148 FU-3, T18): today's code renders "11,5" too (it re-reads the served map), so this
+  // arm is green before the change and pins the number. Red condition: any rendering of the
+  // threshold other than the served 11.5 in Danish form, e.g. "12" (rounded) or "11" (truncated).
+  it('S148 FU-3: a served 11.5 h minimum is named "Hvile under 11,5 timer"', () => {
+    const monthWorkTime: WorkTimeDay[] = [
+      { date: '2026-03-08', intervals: [{ start: '12:00', end: '23:00' }] },
+    ]
+    renderPanel({ monthWorkTime, periods: [per('p1', '07:00', '17:00')], minimumRest: served(11.5) })
+    expect(screen.getByText(/giver kun 8 timers sammenhængende hvile/).textContent).toContain('Hvile under 11,5 timer registreres')
+  })
+
+  // Kind F (S148 FU-3, T18). Red condition: a finding that carries no served minimum (the analysis
+  // is stubbed to return one, the served list having no value for its date) renders
+  // "Hvile under 0 timer" today, because the panel falls back to 0; it must render no threshold sentence.
+  it('S148 FU-3: a finding without a served minimum renders no threshold sentence and no "0 timer"', () => {
+    const mocked = vi.mocked(analyzeRestPeriods)
+    const real = mocked.getMockImplementation()
+    mocked.mockImplementation(
+      () => [{ date: '2026-03-09', endsAt: '17:00', restSeconds: 8 * 3600 }] as unknown as ReturnType<typeof analyzeRestPeriods>,
+    )
+    try {
+      renderPanel({ periods: [per('p1', '07:00', '17:00')], minimumRest: [] })
+      const text = screen.getByText(/giver kun 8 timers sammenhængende hvile/).textContent ?? ''
+      expect(text).not.toMatch(/Hvile under/)
+      expect(text).not.toMatch(/0 timer/)
+    } finally {
+      mocked.mockImplementation(real!)
+    }
+  })
+
   it('S148: with no served minimum for the open date the advisory is its first sentence only', () => {
     renderPanel({ periods: [per('p1', '08:00', '18:00')], minimumRest: served(null) })
     expect(screen.getByText(/Mere end 9 timers arbejde/).textContent).toBe(

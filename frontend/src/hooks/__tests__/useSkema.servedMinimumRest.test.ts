@@ -25,7 +25,7 @@ describe('analyzeRestPeriods — the served minimum rest, per judged end', () =>
   it('served 11 for Sunday and 12 for Monday: Monday warns at 11,5 h, Sunday does not', () => {
     const minimum = served({ '2026-03-15': 11, '2026-03-16': 12 })
     expect(analyzeRestPeriods(sundayThenMonday, [], '2026-03-16', minimum)).toEqual([
-      { date: '2026-03-16', endsAt: '14:00', restSeconds: 41400 },
+      { date: '2026-03-16', endsAt: '14:00', restSeconds: 41400, minimumHours: 12 },
     ])
     // Opened on Sunday the Monday finding also shows (its window holds Sunday's work); Sunday's own end has none.
     expect(analyzeRestPeriods(sundayThenMonday, [], '2026-03-15', minimum)?.map((w) => w.date)).toEqual(['2026-03-16'])
@@ -43,7 +43,7 @@ describe('analyzeRestPeriods — the served minimum rest, per judged end', () =>
     ]
     const minimum = served({ '2026-03-14': 11, '2026-03-15': 12, '2026-03-16': 11 })
     expect(analyzeRestPeriods(month, [], '2026-03-15', minimum)).toEqual([
-      { date: '2026-03-15', endsAt: '14:00', restSeconds: 41400 },
+      { date: '2026-03-15', endsAt: '14:00', restSeconds: 41400, minimumHours: 12 },
     ])
   })
 

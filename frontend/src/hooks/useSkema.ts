@@ -776,6 +776,8 @@ export interface RestPeriodWarning {
   endsAt: string
   /** The longest unbroken rest in the window, whole seconds, unrounded. Show it through `restDisplayHours`. */
   restSeconds: number
+  /** The minimum, in hours, this end was judged by (served for `date`); the warning text names it as is. */
+  minimumHours: number
 }
 
 /**
@@ -1020,13 +1022,13 @@ export function analyzeRestPeriods(
   }
 
   // One finding per day: the lowest value, the earliest end on a tie.
-  const perDay = new Map<string, JudgedEnd>()
+  const perDay = new Map<string, JudgedEnd & { minimumHours: number }>()
   for (const j of judged) {
     const minimum = minimumRestHours(j.date)
     if (minimum === null || j.restSeconds >= minimum * 3600) continue
     const kept = perDay.get(j.date)
     if (!kept || j.restSeconds < kept.restSeconds || (j.restSeconds === kept.restSeconds && j.end < kept.end)) {
-      perDay.set(j.date, j)
+      perDay.set(j.date, { ...j, minimumHours: minimum })
     }
   }
 
@@ -1038,7 +1040,7 @@ export function analyzeRestPeriods(
         allIntervals.some((iv) => iv.date === date && iv.start < j.end && iv.end > j.end - SECONDS_PER_DAY && iv.end > iv.start),
     )
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.end - b.end))
-  return shown.length > 0 ? shown.map((j) => ({ date: j.date, endsAt: j.endsAt, restSeconds: j.restSeconds })) : null
+  return shown.length > 0 ? shown.map((j) => ({ date: j.date, endsAt: j.endsAt, restSeconds: j.restSeconds, minimumHours: j.minimumHours })) : null
 }
 
 /**
