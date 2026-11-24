@@ -74,16 +74,17 @@ const GENERIC_FAILURE = 'Ændringen kunne ikke gemmes. Prøv igen.'
  * exists; DATE_OUT_OF_RANGE has no Danish text) but accepts it as a stop or single date; the screen is
  * stricter and every date input stops one day short. */
 const MAX_DATE = '9999-12-30'
-/** A real calendar date written yyyy-mm-dd (a five-digit year is not one). */
+/** A real calendar date written yyyy-mm-dd, year 1 or later (a five-digit year is not one). */
 function isRealDate(d: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false
   const [y, m, day] = d.split('-').map(Number)
+  if (y < 1) return false
   const t = new Date(Date.UTC(y, m - 1, day))
   t.setUTCFullYear(y)
   return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === day
 }
 /** A date the screen knows the server accepts: a real date, not before `min`, not after MAX_DATE. */
-const dateAllowed = (d: string, min?: string) => isRealDate(d) && (!min || d >= min) && d <= MAX_DATE
+export const dateAllowed = (d: string, min?: string) => isRealDate(d) && (!min || d >= min) && d <= MAX_DATE
 
 /** A code to its Danish sentence; an unknown code gets the generic one, never the code or the English
  * error. `nearest` is the server's nearestValid[0] (BEFORE_WITHDRAWAL names the earliest date). */
@@ -386,10 +387,15 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
       })
     inFlight.current = false
     if (liveOrg.current !== orgId) return
-    setBusy(false)
     const same = liveInline.current?.session === session && liveInline.current.rev === rev
+    if (result.ok && !same) {
+      // Busy stays on until the list is re-read, so the form on screen cannot act on the old list.
+      await refresh()
+      if (liveOrg.current === orgId) setBusy(false)
+      return
+    }
+    setBusy(false)
     if (result.ok) {
-      if (!same) { await refresh(); return }
       setInline(null)
       setFormError(null)
       setStatus(action === 'withdraw' ? `Dagen ophører fra ${longDate(date)}.` : `Dagen er genindført fra ${longDate(date)}.`)
@@ -400,7 +406,9 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
     const refusal = toRefusal(action, result.status, result.body)
     const first = Object.values(refusal.fields)[0]
     setStatus('')
-    setInline({ ...inline, refusal: refusal.text ?? first ?? GENERIC_FAILURE })
+    // Applied to the form on screen now, so a min recomputed by a refresh meanwhile survives.
+    setInline(cur => (cur && cur.session === session && cur.rev === rev
+      ? { ...cur, refusal: refusal.text ?? first ?? GENERIC_FAILURE } : cur))
   }
 
   // Controls shown now; a refusal naming a hidden control is shown in the form's error area instead.

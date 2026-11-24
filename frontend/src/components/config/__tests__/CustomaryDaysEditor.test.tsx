@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConfigManagement } from '../../../pages/config/ConfigManagement'
+import { dateAllowed } from '../CustomaryDaysEditor'
 
 // jsdom lacks what Radix Select and Tabs touch.
 Element.prototype.hasPointerCapture = () => false
@@ -544,7 +545,6 @@ describe('Kutymefridage editor: edits made while a save is pending', { timeout: 
     postGate = new Promise<void>(r => { open = r })
     return open
   }
-  const idle = () => new Promise<void>(r => setTimeout(r, 50))
   const setDate = (el: HTMLElement, value: string) => fireEvent.change(el, { target: { value } })
   const OVERLAP = 'Institutionen har allerede denne dag registreret for samme overenskomst i den valgte periode.'
   const a = { ...june5, validTo: '2026-11-02' }
@@ -589,7 +589,7 @@ describe('Kutymefridage editor: edits made while a save is pending', { timeout: 
     await u.click(within(row).getByRole('button', { name: 'Afslut' }))
     setDate(within(row).getByLabelText('Ophører fra'), '2026-12-01')
     done()
-    await idle()
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Afslut' })).toBeEnabled())
     expect(within(row).getByLabelText('Ophører fra')).toHaveValue('2026-12-01')
     expect(screen.queryByText('Dagen er allerede afsluttet. Genindlæs siden.')).not.toBeInTheDocument()
   })
@@ -608,26 +608,26 @@ describe('Kutymefridage editor: edits made while a save is pending', { timeout: 
     await waitFor(() => expect(posts()).toHaveLength(1))
     setDate(within(row).getByLabelText('Ophører fra'), '2026-12-01')
     done()
-    await idle()
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Afslut' })).toBeEnabled())
     expect(within(row).getByLabelText('Ophører fra')).toHaveValue('2026-12-01')
     expect(screen.queryByText('Dagen er allerede afsluttet. Genindlæs siden.')).not.toBeInTheDocument()
   })
 
-  // Red: "9999" passes only by chance; a five-digit year sorts before 9999 lexically, so the button
-  // is enabled and one POST goes out. Both inline actions and create are checked.
+  // Red: a five-digit year sorts above the minimum and below 9999 lexically, so the button is enabled
+  // and one POST goes out. Both inline actions and create are checked.
   it('sends no POST for a five-digit year, on an inline action or on create', async () => {
     rows = [june5, may15]
     const u = user()
     await openTab(u)
     const open = (await screen.findByText('Hvert år den 5. juni')).closest('tr') as HTMLElement
     await u.click(within(open).getByRole('button', { name: 'Afslut' }))
-    setDate(within(open).getByLabelText('Ophører fra'), '12026-11-02')
+    setDate(within(open).getByLabelText('Ophører fra'), '20260-11-02')
     expect(within(open).getByRole('button', { name: 'Afslut' })).toBeDisabled()
     await u.click(within(open).getByRole('button', { name: 'Afslut' }))
     await u.click(within(open).getByRole('button', { name: 'Annuller' }))
     const closed = rowOf('15. maj 2026')
     await u.click(within(closed).getByRole('button', { name: 'Genindfør' }))
-    setDate(within(closed).getByLabelText('Genindføres fra'), '12026-11-10')
+    setDate(within(closed).getByLabelText('Genindføres fra'), '20260-11-10')
     expect(within(closed).getByRole('button', { name: 'Genindfør' })).toBeDisabled()
     await u.click(within(closed).getByRole('button', { name: 'Genindfør' }))
 
@@ -668,6 +668,48 @@ describe('Kutymefridage editor: edits made while a save is pending', { timeout: 
     done()
     await waitFor(() => expect(within(rowOf('Hvert år den 5. juni')).getByText('2. november 2026')).toBeInTheDocument())
     expect(screen.getByRole('status')).toHaveTextContent('')
+  })
+
+  // Red: the late failure writes the form's old copy back, so the date input's min returns to 2026-11-16.
+  it('keeps a refreshed earliest date when a pending failure lands, and sends nothing from the form', async () => {
+    rows = [a, b]
+    const u = user()
+    await openTab(u)
+    await screen.findAllByText('Hvert år den 5. juni')
+    const rowsNow = () => screen.getAllByText('Hvert år den 5. juni').map(el => el.closest('tr') as HTMLElement)
+    await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    setDate(within(rowsNow()[0]).getByLabelText('Genindføres fra'), '2026-11-20')
+    expect(within(rowsNow()[0]).getByLabelText('Genindføres fra')).toHaveAttribute('min', '2026-11-16')
+    postQueue = [{ status: 409, body: { error: 'Customary day is not withdrawn' } }, { status: 201, body: june5 }]
+    const done = release()
+    await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    await waitFor(() => expect(posts()).toHaveLength(1))
+    postGate = null
+
+    // An unrelated create succeeds meanwhile and the re-read raises the earliest date to 2026-12-01.
+    await fillWorkedExample(u)
+    await choose(u, 'Gælder for', 'HK')
+    rows = [a, { ...b, validTo: '2026-12-01' }]
+    await u.click(screen.getByRole('button', { name: 'Tilføj' }))
+    await waitFor(() => expect(within(rowsNow()[0]).getByLabelText('Genindføres fra')).toHaveAttribute('min', '2026-12-01'))
+    expect(posts()).toHaveLength(2)
+
+    done()
+    await waitFor(() => expect(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' })).toHaveAttribute('aria-busy', 'false'))
+    expect(await screen.findByText('Dagen er ikke afsluttet. Genindlæs siden.')).toBeInTheDocument()
+    expect(within(rowsNow()[0]).getByLabelText('Genindføres fra')).toHaveAttribute('min', '2026-12-01')
+    await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    expect(posts()).toHaveLength(2)
+  })
+
+  // Red: year 0000 is a real date to the check. Asked of the check itself, because a date input
+  // (jsdom and browsers alike) drops year 0 before the editor sees it.
+  it('refuses year 0 and other dates that are not real', () => {
+    expect(dateAllowed('0000-01-01')).toBe(false)
+    expect(dateAllowed('20260-11-02')).toBe(false)
+    expect(dateAllowed('2026-02-30')).toBe(false)
+    expect(dateAllowed('0001-01-01')).toBe(true)
+    expect(dateAllowed('2026-11-02', '2026-11-02')).toBe(true)
   })
 
   // Red: the sentence is a plain paragraph, so no status region carries it.
