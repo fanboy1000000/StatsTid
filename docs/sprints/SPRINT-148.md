@@ -4175,3 +4175,22 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - **Prevention:** every dispatch that allows a throwaway cluster now requires a `5432` grep of the tests to be run, excluding every class that names it. The three such classes are those two and `Tests.Smoke/PayrollCalcAuditSmokeTests.cs:53`.
   - **Register candidate for the close:** the two Regression classes should use the shared harness, not a hard-coded connection string.
 - The throwaway cluster was stopped and its folder deleted.
+
+**TASK-14838 merge GATE, 2026-11-24 (on `cc261fd5`): green.**
+- The change is frontend only; the backend is unchanged since `1cc0cb1d`'s green GATE.
+- `tsc`, lint, `typecheck:e2e` and the build are clean. The shortcut check found 20, 0 bad.
+- **The full vitest run, done alone, passed: 118 files, 1341 tests.**
+- The five TASK-14838 worktrees were pruned, their `node_modules` junctions unlinked first.
+
+**REGEN** `b22e2ef7` (Orchestrator, on TASK-14836-T's tip `e882997c`): `openapi.json` +201 lines, additions only.
+- One path (GET, PUT) and three schemas.
+- A five-value enum on the responses' `overtimeRegime`, as TASK-14836 predicted.
+
+**TASK-14837 dispatched** (`ux`, the drawer's HR-facts section) on `b22e2ef7`. It carries:
+- the creation-day agreement observation;
+- the consult § 3.3 ruling: with an empty allowed set, no regime is offered and flex can still be saved;
+- a stop-and-report if ruled copy does not cover the empty-set case.
+
+**Codex 5a cycle 1 over the backend half** (`1cc0cb1d..b22e2ef7`) is running. Fable and 5α run over the stack's union once TASK-14837 returns.
+
+**Wave-7 briefs:** a planner is drafting TASK-14839 and -T at draft 1. A Fable adjudication follows.
