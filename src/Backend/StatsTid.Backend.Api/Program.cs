@@ -137,6 +137,7 @@ builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<ProjectRepository>();
 builder.Services.AddSingleton<SkemaRowPreferenceRepository>(); // S72 / TASK-7201 — R4 row-preference container + absence selections
 builder.Services.AddSingleton<AbsenceTypeVisibilityRepository>();
+builder.Services.AddSingleton<CustomaryDayRepository>();
 builder.Services.AddSingleton<AgreementConfigRepository>();
 builder.Services.AddSingleton<PositionOverrideRepository>();
 builder.Services.AddSingleton<WageTypeMappingRepository>();
