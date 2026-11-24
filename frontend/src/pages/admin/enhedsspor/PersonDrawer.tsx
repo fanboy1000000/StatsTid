@@ -493,6 +493,8 @@ export function PersonDrawer({
   const dateBlockedReason: string | null =
     !isNew && zoneError !== null
       ? zoneError
+      : orgChanged && today !== null && effectiveFrom > today
+        ? 'En flytning til en anden organisation kan kun gælde fra i dag eller en tidligere dato. Vælg dags dato eller en tidligere dato.'
       : profileRelation === 'beyond' && agreementRelation === 'beyond'
         ? 'Denne dato ligger efter både den planlagte ændring af deltid/stilling og den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
         : profileRelation === 'beyond'
@@ -767,6 +769,7 @@ export function PersonDrawer({
               value={effectiveFrom}
               onChange={setEffectiveFrom}
               today={today}
+              max={orgChanged && today !== null ? today : undefined}
               disabled={busy || isSelf}
               blockedReason={dateBlockedReason}
               coversScheduledNote={coversScheduledNote}

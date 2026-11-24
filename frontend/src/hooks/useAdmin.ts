@@ -219,6 +219,8 @@ export interface UserMutationError extends Error {
     error?: string
     expectedVersion?: number
     actualVersion?: number
+    /** The transfer refusals' shape (AdminEndpoints 400 "Transfer date validation failed"). */
+    fields?: { field?: string; code?: string; nearestValid?: string[] }[]
   }
 }
 

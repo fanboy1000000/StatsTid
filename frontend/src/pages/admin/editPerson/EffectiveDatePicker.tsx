@@ -128,6 +128,8 @@ export interface EffectiveDatePickerProps {
    * classification below rather than guessing against a day it does not have.
    */
   today: string | null
+  /** ISO yyyy-MM-dd upper limit for the input: set while the caller changes the organisation (a move cannot be future-dated, C-13). */
+  max?: string
   disabled?: boolean
   /**
    * SPRINT-END BLOCKER FIX — non-null when `value` is at or beyond an
@@ -172,12 +174,15 @@ export interface EffectiveDatePickerProps {
  * already existed at the API before this sprint; this control is simply the
  * first UI surface in this drawer that can drive either direction of it, and
  * narrowing it to future-only here would quietly take away a capability
- * nobody asked to lose.
+ * nobody asked to lose. The one upper limit is the caller's `max`: a move
+ * between organisations cannot be future-dated (C-13), so while the caller
+ * changes the organisation the input offers nothing after today.
  */
 export function EffectiveDatePicker({
   value,
   onChange,
   today,
+  max,
   disabled,
   blockedReason,
   coversScheduledNote,
@@ -191,6 +196,10 @@ export function EffectiveDatePicker({
   // so this is cosmetic-only and must not guess.
   const isFuture = today !== null && value > today
 
+  // Merged, never overwritten: the self-lock note and the block's own id, each only when present.
+  const describedBy =
+    [selfLockNoteId, blockedReason ? 'pd-effective-blocked' : undefined].filter(Boolean).join(' ') || undefined
+
   return (
     <section className={styles.section} aria-labelledby="pd-effective-heading">
       <h3 id="pd-effective-heading" className={styles.sectionLabel}>
@@ -198,28 +207,29 @@ export function EffectiveDatePicker({
       </h3>
       <div className={styles.formField}>
         <label className={styles.formLabel} htmlFor="pd-effective-from">
-          Overenskomstkode og deltid/stilling gælder fra
+          Organisation, overenskomstkode og deltid/stilling gælder fra
         </label>
         <input
           className={styles.input}
           id="pd-effective-from"
           type="date"
           value={value}
+          max={max}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
-          aria-describedby={selfLockNoteId}
+          aria-describedby={describedBy}
           data-testid="pd-effective-from"
         />
         {!selfLockNoteId && (
           <div className={styles.helperText}>
-            Forudfyldt med dagens dato. Vælg en senere dato for at planlægge ændringen frem i tiden — eller en
-            tidligere dato for at rette historikken. Navn, e-mail, organisation og ledelse gemmes straks, uanset
-            denne dato.
+            Forudfyldt med dagens dato. Vælg en senere dato for at planlægge en ændring af overenskomstkode eller
+            deltid/stilling, eller en tidligere dato for at rette historikken. En flytning til en anden organisation
+            kan ikke dateres frem i tiden. Navn, e-mail og ledelse gemmes straks, uanset denne dato.
           </div>
         )}
       </div>
       {blockedReason ? (
-        <div className={styles.sectionError} data-testid="pd-effective-blocked">
+        <div className={styles.sectionError} id="pd-effective-blocked" data-testid="pd-effective-blocked">
           {blockedReason}
         </div>
       ) : (
@@ -241,8 +251,8 @@ export function EffectiveDatePicker({
             <div className={styles.scheduledNotice} data-testid="pd-effective-future-notice">
               <p className={styles.scheduledText}>
                 Overenskomstkoden og deltid/stilling ændres ikke i dag — de forbliver som nu, indtil{' '}
-                <strong>{formatEffectiveDateLong(value)}</strong>, hvor denne ændring træder i kraft. (Navn, e-mail
-                og organisation på denne side gemmes straks, uanset denne dato.)
+                <strong>{formatEffectiveDateLong(value)}</strong>, hvor denne ændring træder i kraft. (Navn og
+                e-mail på denne side gemmes straks, uanset denne dato.)
               </p>
             </div>
           )}
