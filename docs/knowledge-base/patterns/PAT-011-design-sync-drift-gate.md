@@ -27,3 +27,12 @@ The uploaded `ds-bundle/_ds_sync.json` (`sourceHashes`) is keyed by bundle-artif
 ## Implementation notes
 - **LF-normalize before hashing** — there is no `.gitattributes` enforcing EOL and the working tree is mixed (some `.tsx` CRLF, `tokens.css` LF); a raw byte hash would be machine-dependent and CI would false-fire on the first run. The hasher strips `\r\n`/`\r` → `\n`. (An `eol=lf` `.gitattributes` is optional defense-in-depth; the hasher normalization is the actual fix — do not rely on gitattributes existing.)
 - The map-diff catches added/removed files inherently (a new component is a key not in the fingerprint); the stored `count` is a sanity check.
+
+## Amendment 2026-11-24 — advisory, not a hard fail (S148, owner ruling)
+
+**In plain words.** The gate now warns instead of failing. CI still lists which design-system files changed since the last Claude Design sync, and adds a warning annotation, but the `docs-consistency` job passes.
+
+- **Why.** The StatsTid UI Kit project in Claude Design has not been synced or used since the first import (the fingerprint dates from 2026-06-25; the sprint logs mention design handoffs up to S120). Since then the gate fired twice (S140 and S148), each time on a kit change with no design meaning, and each time it blocked CI where the re-sync could not be run (the `/design-sync` skill and Python are not on the development machine). S148's trigger was one optional accessibility prop (`Checkbox`'s `describedBy`, TASK-14829), which does not change how the checkbox looks.
+- **What it costs.** A kit change can now reach master without the Claude Design copy following. The warning names the drifted files, so the next person to design in Claude Design re-syncs first.
+- **What did not change.** `tools/check_design_sync.py` is unchanged in behaviour (`--check` still exits 1 on drift; `--update` and `--selftest` as before); only the CI step wraps it (`ci.yml`, "Run design-sync drift gate (advisory)"). `.design-sync/config.json`'s `Checkbox` entry was updated to the new prop ahead of a future sync (S148).
+- **How to make it hard again.** Remove the `|| echo "::warning …"` from the CI step once Claude Design is back in regular use.

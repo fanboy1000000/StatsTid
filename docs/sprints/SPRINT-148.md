@@ -3473,3 +3473,23 @@ M-40 included [O for the 14 facts of the five classes run].
   - the TASK-14831 stack's list (figure (4), the 503 facts, AC-PIL-i (6)–(9), the race and census classes).
 - **A red is triaged before anything else (T16).** CI-M5 (M-9, M-12, M-13, M-15, M-49) follows once CI-W5 is green. Wave 6 waits for both.
 - **Housekeeping:** the merged worktrees are pruned. One is still locked by its finished agent and goes later.
+
+**CI-W5's first reading** (run 45280970629, headSha `aadd2b10`): `build-and-test` is **success**, so every Unit, DemoSeed and Regression fact passed, the Docker-gated ones included. Smoke, E2E, frontend-build, gitleaks and lizard are **success**. The run is red on one job only, `docs-consistency`.
+- `check_docs.py` passed all hard checks.
+- **The failure is the design-sync drift gate** (PAT-011): `frontend/src/components/ui/Checkbox.tsx` changed since the last Claude Design sync, through TASK-14829's optional `describedBy` prop (T14b ruling T1).
+- **The re-sync cannot be run from this machine.** The `/design-sync` skill and Python are both absent, and refreshing only the fingerprint would claim a sync that did not happen (S140's lesson).
+- The detailed judgement against the plan's CI-W5 row follows.
+
+**Owner ruling, 2026-11-24: the design-sync gate becomes advisory** (asked with the facts in prose first; option "Make it a warning", the lean).
+- **The facts given:**
+  - The StatsTid UI Kit project in Claude Design has not been synced since the first import (fingerprint of 2026-06-25), and the sprint logs mention design handoffs up to S120 only.
+  - The gate has fired twice since, in S140 and now, each time on a kit change with no design meaning, blocking CI where the re-sync could not run.
+  - The gate cannot prove an upload in any case.
+- **The owner first asked what design sync is and what value it brings.** The answer: it keeps Claude Design's copy of the 20 kit components current, so new screens designed there match the code; its value depends on still designing there.
+- **Built (Orchestrator):**
+  - `ci.yml`'s step "Run design-sync drift gate (advisory)" runs the unchanged script and, on drift, prints the drifted files and a warning annotation without failing the job.
+  - The script's docstring, `.design-sync/NOTES.md` and the KB INDEX row say "advisory since S148".
+  - PAT-011 gains a dated amendment: why, what it costs, and how to make it hard again.
+  - `.design-sync/config.json`'s hand-written `Checkbox` props gained `describedBy?: string` (`f4414767`), so a future sync uploads the right shape.
+  - A Node mirror of the script's `--check` and `--update`, `.claude/reviews/S148-session-helpers/design-sync-fingerprint.js`, reproduces the 41 unchanged hashes exactly. It is for a machine without Python, after a real sync only.
+- **The fingerprint is not refreshed:** no sync happened, so the next CI run will show the advisory warning for `Checkbox.tsx` and `config.json`.

@@ -5,8 +5,9 @@ check_design_sync.py — the design-sync drift gate (code <-> Claude Design pari
 The repo's design system — the ui-kit components + the design tokens — is the single
 source of truth that BOTH the shipped app (Claude Code, working in-repo) AND the
 claude.ai/design "StatsTid UI Kit" project (synced via the /design-sync skill) derive
-from. This gate HARD-FAILS CI when that source has changed since the last sync, so design
-and code cannot silently drift apart.
+from. In --check mode it exits 1 when that source has changed since the last sync. CI runs it
+as an ADVISORY step since S148 (owner ruling 2026-11-24, PAT-011 amendment): a drift prints the
+drifted files and a warning annotation, and does not fail the job.
 
 HOW IT WORKS
   It hashes the in-scope source (LF-normalized so the hash is identical regardless of

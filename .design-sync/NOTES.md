@@ -39,7 +39,7 @@ node .ds-sync/resync.mjs --config .design-sync/config.json --node-modules ./fron
 (playwright 1.61.0 pins chromium build 1228, already in `~/.cache/ms-playwright`; install `playwright@1.61.0` into `.ds-sync` for the render check.)
 
 ## Drift gate (PAT-011) — refresh the fingerprint after EVERY sync
-`tools/check_design_sync.py` is a CI HARD-FAIL (in the `docs-consistency` job) that fires when the design-system source (ui-kit `*.{tsx,module.css}` + `index.ts` + `tokens.css` + this `.design-sync/config.json`) changes vs the committed `.design-sync/.synced-fingerprint.json`. So after the upload completes:
+`tools/check_design_sync.py` is a CI check (in the `docs-consistency` job; ADVISORY since S148, owner ruling 2026-11-24: a drift warns, it does not fail the job) that fires when the design-system source (ui-kit `*.{tsx,module.css}` + `index.ts` + `tokens.css` + this `.design-sync/config.json`) changes vs the committed `.design-sync/.synced-fingerprint.json`. So after the upload completes:
 ```sh
 python tools/check_design_sync.py --update    # rewrite the fingerprint from the current source
 git add .design-sync/.synced-fingerprint.json  # commit it WITH the design-system change
