@@ -3884,3 +3884,13 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - the extra plan lines are kept.
 - **Build order:** TASK-14851 and 14851-T may be built early (ruling 43). Their REGEN, TASK-14852 and the merge come after TASK-14850.
 - **Next free building slot:** TASK-14838 (the central editors, `ux`).
+- **FU-1 returned** `e811b089` (report `S148-TASK-14834-stack-FU-1-report.md`), with R1's three fixes:
+  - (a) a 9999-12-31 start is refused with `DATE_OUT_OF_RANGE`, and withdraw's suggested date is guarded;
+  - (b) the NUL guard sits at the top of `AgreementCodeExistsAsync`, the root of the crash. The Orchestrator ratifies this placement: the caller sees `UNKNOWN_VALUE` and the database is never reached;
+  - (c) the organisation lock takes only an active row; otherwise 403 "Organization not found".
+  - Gate: build 0 errors, CA2100 113, Unit 1846, DemoSeed 170, Regression non-Docker 147, lock lines 20.
+  - **Checked locally:** the lock waits on the delete and then finds no row.
+- **Carried to FU-3:** a Danish text for `DATE_OUT_OF_RANGE` is not needed, because the screen's `max` stops it.
+- **Noted:** a row stopped at 9999-12-31 can never be reinstated. That follows from (a) and gives no 500.
+- **TASK-14838 dispatched** (`ux`, the central editors, on `939e319b`).
+- **FU-2 dispatched** (`test-qa`) on `e811b089`.
