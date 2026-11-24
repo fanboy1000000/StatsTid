@@ -3646,3 +3646,5 @@ M-40 included [O for the 14 facts of the five classes run].
   - `DatedRecordTimelineParityTests` green;
   - the full Docker Regression with no new red (Fable's NOTE on the direct-SQL closers);
   - PIN-1/2/3 unchanged.
+- **GATE green on master `dafd68c0`** (TASK-14849 merged): build 0 errors; Unit 1746, DemoSeed 170, Regression non-Docker 147; shortcuts 20, 0 bad.
+- **Wave 6 dispatch begins:** TASK-14832 (`backend-infrastructure`, brief draft 2), on the commit after this line.
