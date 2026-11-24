@@ -32,8 +32,10 @@ public interface IEmploymentProfileResolver
     /// and since S138 / TASK-13804 that cell ALONE: the column is NOT NULL and the S137
     /// COALESCE-to-<c>users</c> fail-safe is retired, because with the category editable per
     /// date the live column is only the cache of the row covering TODAY and falling back to it
-    /// would mislabel a historical read. The one remaining live-joined sibling is <c>primary_org_id</c>
-    /// (org/unit membership history is a named follow-up program, ADR-040 D4 tail).
+    /// would mislabel a historical read. The organisation (<c>OrgId</c>) is dated too since S148 C-13
+    /// (ADR-040 D4; QUAL-206): the <c>org_id</c> of the <c>user_organisations</c> row covering
+    /// <paramref name="asOfDate"/>, never the live <c>users.primary_org_id</c>, so no field the
+    /// resolver returns is joined live from <c>users</c>.
     /// </summary>
     Task<EmploymentProfile?> GetByEmployeeIdAtAsync(
         string employeeId, DateOnly asOfDate, CancellationToken ct = default);
