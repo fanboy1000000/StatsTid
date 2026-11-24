@@ -40,7 +40,7 @@
     "Badge": "variant?: 'default' | 'success' | 'error' | 'warning' | 'info'; children: React.ReactNode",
     "Button": "variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; size?: 'sm' | 'md' | 'lg'; disabled?: boolean; type?: 'button' | 'submit' | 'reset'; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void; children: React.ReactNode",
     "Card": "header?: React.ReactNode; className?: string; children: React.ReactNode",
-    "Checkbox": "id: string; label: string; checked: boolean; onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; disabled?: boolean",
+    "Checkbox": "id: string; label: string; checked: boolean; onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; disabled?: boolean; describedBy?: string",
     "Dialog": "open: boolean; onOpenChange: (open: boolean) => void; title?: React.ReactNode; description?: React.ReactNode; children: React.ReactNode",
     "Divider": "className?: string",
     "Drawer": "open: boolean; onClose: () => void; ariaLabel: string; children: React.ReactNode",
