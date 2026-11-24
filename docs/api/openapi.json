@@ -3282,6 +3282,80 @@
         }
       }
     },
+    "/api/admin/employees/{employeeId}/hr-facts": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "asOf",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmployeeHrFactsResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.EmployeeHrFactsEndpoints.SaveHrFactsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmployeeHrFactsUpdatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/employees/{employeeId}/employment-start-date": {
       "get": {
         "tags": [
@@ -7189,6 +7263,114 @@
           "onCallDutyRate": {
             "type": "number",
             "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmployeeHrFactsResponse": {
+        "required": [
+          "agreementCode",
+          "allowedOvertimeRegimes",
+          "asOf",
+          "effectiveFrom",
+          "employeeId",
+          "liveEffectiveFrom",
+          "liveVersion",
+          "onFlexScheme",
+          "overtimeRegime"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date"
+          },
+          "agreementCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "allowedOvertimeRegimes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "overtimeRegime": {
+            "enum": [
+              "OVERTIME",
+              "EXEMPT",
+              "CONTRACTUAL",
+              "DISCRETIONARY",
+              "NONE"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "onFlexScheme": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "liveVersion": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "liveEffectiveFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmployeeHrFactsUpdatedResponse": {
+        "required": [
+          "effectiveFrom",
+          "employeeId",
+          "factsId",
+          "onFlexScheme",
+          "overtimeRegime",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "factsId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "overtimeRegime": {
+            "enum": [
+              "OVERTIME",
+              "EXEMPT",
+              "CONTRACTUAL",
+              "DISCRETIONARY",
+              "NONE"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "onFlexScheme": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -12644,6 +12826,25 @@
         "properties": {
           "userId": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.EmployeeHrFactsEndpoints.SaveHrFactsRequest": {
+        "type": "object",
+        "properties": {
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "overtimeRegime": {
+            "type": "string",
+            "nullable": true
+          },
+          "onFlexScheme": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "additionalProperties": false
