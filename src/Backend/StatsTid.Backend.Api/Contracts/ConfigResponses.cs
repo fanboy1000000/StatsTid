@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace StatsTid.Backend.Api.Contracts;
 
 // S119 / TASK-11900 (Fork B retrofit Pass 6, PAT-010/PAT-012) — named response records for the
@@ -6,9 +8,15 @@ namespace StatsTid.Backend.Api.Contracts;
 // serialized camelCase via the .NET 8 minimal-API JsonSerializerDefaults.Web default, NO
 // [JsonPropertyName]. BYTE-IDENTICAL wire JSON on all sites (S119 is a zero-wire-change pass).
 //
-// ZERO [AllowedValues] declarations in this family BY DESIGN (the S119 exclusions):
+// [property: AllowedValues] discriminators (S113 strict-types mechanism), authorities cited:
+//   LocalAgreementProfileResponse's five settings vocabularies — the init.sql CHECKs on
+//   local_agreement_profiles (flex_settlement_period, flex_cap_test_period {MONTH};
+//   flex_above_cap_action {FORFEIT}; flex_leaving_action {FORFEIT_POSITIVE_RECORD_NEGATIVE};
+//   paid_absence_credit_basis {PARAGRAPH_7_NR_2, OFFICE_HOURS}), which the save also enforces
+//   (ProfileAlignmentValidator). Nullable: null = not set.
+// REFUSED (the S119 exclusions):
 //   - absence-type strings have NO DB authority (free TEXT, no CHECK — init.sql absences;
-//     the set lives only in the C# AbsenceTypeLabels dict) → REFUSED;
+//     the set lives only in the C# AbsenceTypeLabels dict);
 //   - agreementCode / okVersion — agreement data, open sets (the standing refusal).
 //
 // The profile-PUT non-2xx surface (400 alignment/supersession, 403, 412, 428) stays
@@ -78,14 +86,15 @@ public sealed record AbsenceTypeVisibilityResponse(
     bool IsHidden);
 
 /// <summary>
-/// The local-agreement-profile row (13 members) — ONE record for the THREE success sites
-/// (PUT 200, GET 200, history-list rows; the S112 sibling-record rule), replacing the
-/// MapProfileResponse anonymous shape. The four overridable members are nullable BY CONTRACT
-/// (NULL = inherit central, ADR-017). <c>version</c> is the row-version optimistic-concurrency
-/// token (ADR-018 D7) surfaced in-body so the frontend can round-trip it as the next If-Match;
-/// the wire ETag header carries the same value RFC-7232-quoted. The 412 error-body
-/// <c>currentState</c> envelope embeds this serialization erased to object? but stays
-/// anonymous/UNDECLARED (the exclusion boundary).
+/// The local-agreement-profile row — ONE record for the THREE success sites (PUT 200, GET 200,
+/// history-list rows; the S112 sibling-record rule), replacing the MapProfileResponse anonymous
+/// shape. Every settable member of <c>LocalAgreementProfile</c> is here and nullable BY CONTRACT:
+/// NULL = inherit central for the legacy overridable members (ADR-017), not set for the flex,
+/// office-hours and credit-basis settings (ADR-043 D6). A clock time is <c>"HH:mm:ss"</c> on the
+/// wire. <c>version</c> is the row-version optimistic-concurrency token (ADR-018 D7) surfaced
+/// in-body so the frontend can round-trip it as the next If-Match; the wire ETag header carries
+/// the same value RFC-7232-quoted. The 412 error-body <c>currentState</c> envelope embeds this
+/// serialization erased to object? but stays anonymous/UNDECLARED (the exclusion boundary).
 /// </summary>
 public sealed record LocalAgreementProfileResponse(
     Guid ProfileId,
@@ -98,6 +107,24 @@ public sealed record LocalAgreementProfileResponse(
     decimal? MaxFlexBalance,
     decimal? MaxOvertimeHoursPerPeriod,
     bool? OvertimeRequiresPreApproval,
+    [property: AllowedValues("MONTH")] string? FlexSettlementPeriod,
+    [property: AllowedValues("MONTH")] string? FlexCapTestPeriod,
+    decimal? FlexPlusCapHours,
+    decimal? FlexMinusCapHours,
+    decimal? FlexDailyCreditCapHours,
+    [property: AllowedValues("FORFEIT")] string? FlexAboveCapAction,
+    [property: AllowedValues("FORFEIT_POSITIVE_RECORD_NEGATIVE")] string? FlexLeavingAction,
+    TimeOnly? OfficeHoursMonStart,
+    TimeOnly? OfficeHoursMonEnd,
+    TimeOnly? OfficeHoursTueStart,
+    TimeOnly? OfficeHoursTueEnd,
+    TimeOnly? OfficeHoursWedStart,
+    TimeOnly? OfficeHoursWedEnd,
+    TimeOnly? OfficeHoursThuStart,
+    TimeOnly? OfficeHoursThuEnd,
+    TimeOnly? OfficeHoursFriStart,
+    TimeOnly? OfficeHoursFriEnd,
+    [property: AllowedValues("PARAGRAPH_7_NR_2", "OFFICE_HOURS")] string? PaidAbsenceCreditBasis,
     string CreatedBy,
     DateTime CreatedAt,
     long Version);
