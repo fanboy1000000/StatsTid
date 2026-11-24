@@ -19,7 +19,7 @@
 //     always true.
 //   - A Save button that's disabled until at least one field has changed
 //     vs the loaded profile (or vs central if no profile exists). On click,
-//     the editor PUTs only what's different.
+//     the editor PUTs its full state (23 keys); the server clears anything it omits.
 //   - 412 stale-state banner + 400 per-field error rendering.
 //
 // SCOPE: basic functional only. No visual polish — Phase 5 owns that. The
@@ -49,6 +49,7 @@ import {
   type ChoiceMember,
   type OfficeHoursMember,
   type SettingMember,
+  UNPLACEABLE_REFUSAL,
 } from './profileSettingsCopy'
 
 // ── Field metadata. ──
@@ -138,6 +139,15 @@ const ALL_SETTING_MEMBERS: SettingMember[] = [
   ...CAP_MEMBERS,
   ...OFFICE_HOURS_MEMBERS,
 ]
+
+// The server's names for the 23 fields the editor sends and renders; a refusal naming anything
+// else cannot be placed under a control.
+const KNOWN_ERROR_FIELDS = new Set<string>([
+  'EffectiveFrom',
+  ...OVERRIDABLE_NUMBER_FIELDS.map(f => f.backendName),
+  ...OVERRIDABLE_BOOL_FIELDS.map(f => f.backendName),
+  ...ALL_SETTING_MEMBERS.map(m => m.charAt(0).toUpperCase() + m.slice(1)),
+])
 
 interface ProfileEditorProps {
   orgId: string
@@ -272,15 +282,19 @@ export function ProfileEditor({
         // Structured per-field errors from ConfigEndpoints (ADR-017 D9a):
         //   { error, fields: [{ field, code, nearestValid? }, ...] }
         // Render each under its own input.
+        // The first error for a field wins; an entry naming a field the editor does not render
+        // (or no field) goes to the banner, alone or mixed with placeable ones.
         const next: Record<string, ProfileFieldError> = {}
+        let unplaceable = false
         for (const f of e.body.fields) {
-          if (f.field) next[f.field] = f
+          if (f.field && KNOWN_ERROR_FIELDS.has(f.field)) {
+            if (!(f.field in next)) next[f.field] = f
+          } else {
+            unplaceable = true
+          }
         }
-        if (Object.keys(next).length > 0) {
-          setFieldErrors(next)
-        } else {
-          setSaveError(e.body.error || e.message || 'Validering fejlede.')
-        }
+        setFieldErrors(next)
+        if (unplaceable) setSaveError(UNPLACEABLE_REFUSAL)
       } else if (e.status === 400 && e.body?.error === 'Invalid profile supersession') {
         // S22 / ADR-018 D7: backdate-before-predecessor rejection
         // (InvalidProfileSupersessionException). No `fields` payload — surface

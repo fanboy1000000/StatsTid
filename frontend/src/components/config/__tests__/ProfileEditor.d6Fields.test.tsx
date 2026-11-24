@@ -184,25 +184,90 @@ describe('ProfileEditor — new settings', () => {
     expect(screen.queryByText(HINT)).toBeNull()
   })
 
-  const CODES: [string, string, string][] = [
-    ['MUST_BE_POSITIVE', 'FlexPlusCapHours', 'Skal være større end 0.'],
-    ['MUST_NOT_BE_NEGATIVE', 'FlexMinusCapHours', 'Må ikke være negativ.'],
-    ['TOO_MANY_DECIMALS', 'FlexDailyCreditCapHours', 'Brug højst to decimaler.'],
-    ['EXCEEDS_STORAGE_LIMIT', 'FlexPlusCapHours', 'Tallet er for stort til at blive gemt.'],
-    ['UNKNOWN_VALUE', 'FlexSettlementPeriod', 'Ugyldig værdi. Vælg en af de viste muligheder.'],
-    ['NOT_WHOLE_MINUTE', 'OfficeHoursMonStart', 'Angiv klokkeslættet i hele minutter.'],
-    ['WINDOW_INCOMPLETE', 'OfficeHoursTueEnd', 'Angiv både fra og til, eller lad begge stå tomme.'],
-    ['WINDOW_START_NOT_BEFORE_END', 'OfficeHoursWedEnd', '"Til" skal være senere end "fra".'],
+  // [code, field, message, where the message must sit, the control's or group's name]
+  type Place = 'input' | 'group'
+  const CODES: [string, string, string, Place, string][] = [
+    ['MUST_BE_POSITIVE', 'WeeklyNormHours', 'Skal være større end 0.', 'input', 'Ugentlig normtimer'],
+    ['MUST_NOT_BE_NEGATIVE', 'FlexMinusCapHours', 'Må ikke være negativ.', 'input',
+      'Loft for minussaldo på flex (timer, uden minustegn)'],
+    ['TOO_MANY_DECIMALS', 'FlexDailyCreditCapHours', 'Brug højst to decimaler.', 'input',
+      'Loft for daglig optjening af flex (timer)'],
+    ['EXCEEDS_STORAGE_LIMIT', 'FlexPlusCapHours', 'Tallet er for stort til at blive gemt.', 'input',
+      'Loft for plussaldo på flex (timer)'],
+    ['UNKNOWN_VALUE', 'FlexSettlementPeriod', 'Ugyldig værdi. Vælg en af de viste muligheder.', 'group',
+      'Afregningsperiode for flex'],
+    ['NOT_WHOLE_MINUTE', 'OfficeHoursMonStart', 'Angiv klokkeslættet i hele minutter.', 'input', 'Mandag fra'],
+    ['WINDOW_INCOMPLETE', 'OfficeHoursTueEnd', 'Angiv både fra og til, eller lad begge stå tomme.', 'input',
+      'Tirsdag til'],
+    ['WINDOW_START_NOT_BEFORE_END', 'OfficeHoursWedEnd', '"Til" skal være senere end "fra".', 'input', 'Onsdag til'],
     ['OFFICE_HOURS_WITHOUT_WINDOWS', 'PaidAbsenceCreditBasis',
-      'Kontortid kan kun vælges som grundlag, når der er angivet kontortid for mindst én ugedag.'],
+      'Kontortid kan kun vælges som grundlag, når der er angivet kontortid for mindst én ugedag.', 'group',
+      'Grundlag for godskrivning af betalt fravær'],
   ]
-  it.each(CODES)('(f) %s shows its Danish message under %s', async (code, field, message) => {
+  it.each(CODES)('(f) %s shows its Danish message inside the control of %s', async (code, field, message, place, name) => {
     vi.stubGlobal('fetch', mockResponse(400, {
       error: 'Profile validation failed', fields: [{ field, code }],
     }))
     renderEditor(emptyProfile)
     fireEvent.change(screen.getByLabelText('Loft for plussaldo på flex (timer)'), { target: { value: '1' } })
     fireEvent.click(saveButton())
-    expect(await screen.findByText(message)).toBeTruthy()
+    const msg = await screen.findByText(message)
+    expect(screen.getAllByText(message)).toHaveLength(1)
+    if (place === 'group') {
+      const group = screen.getByRole('group', { name })
+      expect(group.contains(msg)).toBe(true)
+      expect(msg.id).not.toBe('')
+      expect(ids(group)).toContain(msg.id)
+      expect(group.hasAttribute('aria-invalid')).toBe(false)
+    } else {
+      const input = screen.getByLabelText(name)
+      const label = document.querySelector(`label[for="${input.id}"]`) as HTMLElement
+      expect(label.parentElement!.contains(msg)).toBe(true)
+      expect(input.getAttribute('aria-invalid')).toBe('true')
+      // The legacy override row (WeeklyNormHours) renders its error through FormField, whose span
+      // has no id to point at; every control of this card references its message.
+      if (field !== 'WeeklyNormHours') {
+        expect(msg.id).not.toBe('')
+        expect(ids(input)).toContain(msg.id)
+      }
+    }
+  })
+
+  describe('a refusal the editor cannot place', () => {
+    const BANNER = 'Værdien kunne ikke gemmes.'
+    function refuse(fields: unknown[]) {
+      vi.stubGlobal('fetch', mockResponse(400, { error: 'Profile validation failed', fields }))
+      renderEditor(emptyProfile)
+      fireEvent.change(screen.getByLabelText('Loft for plussaldo på flex (timer)'), { target: { value: '1' } })
+      fireEvent.click(saveButton())
+    }
+
+    it('(g) an unknown field, or an empty one, alone shows the banner', async () => {
+      refuse([{ field: 'SomethingElse', code: 'MUST_BE_POSITIVE' }, { field: '', code: 'UNKNOWN_VALUE' }])
+      await screen.findByText(BANNER)
+      expect(screen.queryByText('Skal være større end 0.')).toBeNull()
+      expect(screen.queryByText('Ugyldig værdi. Vælg en af de viste muligheder.')).toBeNull()
+    })
+
+    it('(h) mixed with a known field, both the banner and the field message show', async () => {
+      refuse([
+        { field: 'SomethingElse', code: 'MUST_BE_POSITIVE' },
+        { field: 'FlexPlusCapHours', code: 'MUST_NOT_BE_NEGATIVE' },
+      ])
+      await screen.findByText(BANNER)
+      const cap = screen.getByLabelText('Loft for plussaldo på flex (timer)')
+      const msg = screen.getByText('Må ikke være negativ.')
+      expect(ids(cap)).toContain(msg.id)
+    })
+
+    it('(i) two entries for one field show only the first', async () => {
+      refuse([
+        { field: 'FlexPlusCapHours', code: 'MUST_NOT_BE_NEGATIVE' },
+        { field: 'FlexPlusCapHours', code: 'EXCEEDS_STORAGE_LIMIT' },
+      ])
+      await screen.findByText('Må ikke være negativ.')
+      expect(screen.queryByText('Tallet er for stort til at blive gemt.')).toBeNull()
+      expect(screen.queryByText(BANNER)).toBeNull()
+    })
   })
 })

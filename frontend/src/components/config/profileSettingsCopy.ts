@@ -27,6 +27,9 @@ export function formatHours(n: number): string {
   return String(Math.round(n * 100) / 100).replace('.', ',')
 }
 
+/** A 400 entry that names a field the editor does not show: nothing to place it under. */
+export const UNPLACEABLE_REFUSAL = 'Værdien kunne ikke gemmes.'
+
 export const CODE_MESSAGES: Record<string, string> = {
   MUST_BE_POSITIVE: 'Skal være større end 0.',
   MUST_NOT_BE_NEGATIVE: 'Må ikke være negativ.',
