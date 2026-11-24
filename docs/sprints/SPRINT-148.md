@@ -3868,3 +3868,19 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
     - `%00` in a route's `orgId` is registered as one SEC line, house-wide, unproven.
   - **R5: merge carries (O-20).**
 - **FU-1 dispatched** on `52d300c7`.
+
+**QUAL-268 repair-stack briefs at draft 2, plan "final + 31"** (planner, `.claude/reviews/S148-QUAL268-briefs-applied-report.md`).
+- **Counts:** 172 AC ids, 61 plan-added; 82 agent tasks.
+- **Copy checks:** ruling 3's chain, ruling 6's table and ruling 20's Danish copy were checked byte for byte.
+- **The Orchestrator ratifies the planner's readings:**
+  - Block C stays out of TASK-14852 (ruling 21 over ruling 11);
+  - `uncoveredSince` is L, as ruled;
+  - state (v) keeps the fields disabled;
+  - the fact name is kept;
+  - its fixture dates are accepted;
+  - the renamed pin is AC-Q268j's R part;
+  - the O-34 note wording stands;
+  - the "B/C" prefixes;
+  - the extra plan lines are kept.
+- **Build order:** TASK-14851 and 14851-T may be built early (ruling 43). Their REGEN, TASK-14852 and the merge come after TASK-14850.
+- **Next free building slot:** TASK-14838 (the central editors, `ux`).
