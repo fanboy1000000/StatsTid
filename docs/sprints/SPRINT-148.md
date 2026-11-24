@@ -3798,3 +3798,21 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **Settled:** `"12:00"` does not bind, so TASK-14835 sends `"HH:mm:ss"`.
 - **Found, not fixed:** `ConfigEndpoints.cs:364` falls back to `LocalAdmin` for the audit role when the claim is missing (probably unreachable; Low). It is carried to the 5a review.
 - **TASK-14834-T dispatched** on `3614319a`.
+- **TASK-14834-T returned** `4d278dcb` (report `S148-TASK-14834-T-report.md`): AC-C10a, AC-C10b (one fact, six arms) and AC-C10d (5 facts plus an 8-case theory). Gate: Unit 1846, DemoSeed 170, Regression non-Docker 147. **Local, not CI evidence:** 15/15 green on a throwaway cluster, and all 15 red with the routes unmapped.
+- **REGEN** `e985d032` (Orchestrator): `openapi.json` +347, additions only. It adds the three customary-days paths and four schemas, as predicted.
+- **TASK-14835 dispatched** (`ux`) on `e985d032`. Codex 5a cycle 1 over the backend half (`7cd4d728..e985d032`) is running.
+
+**QUAL-268 repair stack briefs adjudicated** (`.claude/reviews/S148-QUAL268-briefs-adjudication.md`, Fable 5.2, **RULED, no owner question**). A planner is applying the rulings and the plan "final + 31". In plain words:
+- **The route:** the existing profile edit with `If-None-Match: *` ("create only if nothing is there"). A dated ADR-019 note records it.
+- **The cancelled-change trap is closed in full** (ruling 3). The new profile always runs from HR's date. A change the close cancelled, which is still on the timeline as a zero-length row, is reopened in the same transaction with the new values, so nothing is parked.
+- **Three defects the draft missed are fixed in the briefs:**
+  - a re-create could adopt a cancelled change's employment category (ruling 5);
+  - a person who has not started could not be repaired (ruling 4);
+  - the drawer said "not found" for a failed read (ruling 18).
+- **No 1.000 ceiling on the part-time fraction.** Plustid exists, so 1.000 would be an invented ceiling (SEC-033/OQ-2). The server refuses zero or less, more than three decimals, and above 9.999 (the column).
+- **All Danish copy is fixed** (ruling 20).
+- **Told to the owner (O-17):**
+  - a fraction above 1.000 is still accepted;
+  - a re-create across a cancelled change reuses that change's rows;
+  - a re-create cannot be dated ahead;
+  - a person who has not started can be re-created before the first day.
