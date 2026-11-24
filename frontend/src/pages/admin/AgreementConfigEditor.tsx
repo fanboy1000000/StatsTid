@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback, type ChangeEvent, useRef } from 'reac
 import { useParams, useNavigate } from 'react-router-dom'
 import { apiFetchWithEtag } from '../../lib/api'
 import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
-import { useAgreementConfigActions, isConfigMutationError } from '../../hooks/useAgreementConfigs'
+import { useAgreementConfigActions, useNewestVersionDate, isConfigMutationError } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
 import { EntitlementSection, type Entitlement } from '../../components/admin/EntitlementSection'
 import { Spinner } from '../../components/ui'
+import { useCalendarToday } from '../../contexts/CalendarContext'
+import { formatEffectiveDateLong } from './editPerson/EffectiveDatePicker'
+import { dateRefusalFrom, type DateRefusal } from './nearestMondayOffer'
 import styles from './AgreementConfigEditor.module.css'
 
 // S118 / TASK-11801 (PAT-012) — the by-id GET rides the TYPED spec-keyed form;
@@ -161,6 +164,18 @@ export function AgreementConfigEditor() {
 
   const isReadOnly = config !== null && config.status !== 'DRAFT'
 
+  // The publish date: today by default, never later (the server refuses a future date), never before
+  // the newest published version of the key. The server stays the authority on all three date rules;
+  // a refusal is shown with the dates it would accept (nearestMondayOffer.ts).
+  const today = useCalendarToday()
+  // The version list is read when the publish dialog opens (an empty code skips the read).
+  const newestVersionDate = useNewestVersionDate(
+    confirmDialog === 'publish' ? (config?.agreementCode ?? '') : '',
+    config?.okVersion ?? '',
+  )
+  const [publishDate, setPublishDate] = useState<string | null>(null)
+  const [dateRefusal, setDateRefusal] = useState<DateRefusal | null>(null)
+
   // S126 / F2 — stale-response guard. Keyed on [configId, isNew]: navigating between config rows
   // while a load is in flight would otherwise let the abandoned config's response win, and this
   // handler also sets the ETag — so a stale landing would arm the NEXT If-Match with the wrong
@@ -261,15 +276,23 @@ export function AgreementConfigEditor() {
       setError('ETag mangler — genindlaes konfigurationen.')
       return
     }
-    setConfirmDialog(null)
     setSaving(true)
     setError(null)
     setStaleConflict(null)
+    setDateRefusal(null)
     try {
-      await publishConfig(configId, etag)
+      await publishConfig(configId, etag, publishDate ?? today)
       navigate('/global/overenskomster')
     } catch (err) {
-      handleMutationError(err)
+      // A refused date keeps the dialog open with the dates the server would accept; every other
+      // error closes it and shows as before.
+      const refusal = isConfigMutationError(err) ? dateRefusalFrom(err, today, newestVersionDate) : null
+      if (refusal) {
+        setDateRefusal(refusal)
+      } else {
+        setConfirmDialog(null)
+        handleMutationError(err)
+      }
     } finally {
       setSaving(false)
     }
@@ -345,7 +368,11 @@ export function AgreementConfigEditor() {
           )}
           {!isNew && status === 'DRAFT' && (
             <>
-              <button className={styles.secondaryBtn} onClick={() => setConfirmDialog('publish')} disabled={saving}>
+              <button
+                className={styles.secondaryBtn}
+                onClick={() => { setPublishDate(null); setDateRefusal(null); setConfirmDialog('publish') }}
+                disabled={saving}
+              >
                 Publicer
               </button>
               <button className={styles.dangerBtn} onClick={() => setConfirmDialog('archive')} disabled={saving}>
@@ -356,11 +383,6 @@ export function AgreementConfigEditor() {
           {!isNew && (status === 'ACTIVE' || status === 'ARCHIVED') && (
             <button className={styles.secondaryBtn} onClick={handleClone} disabled={saving}>
               Klon som kladde
-            </button>
-          )}
-          {!isNew && status === 'ACTIVE' && (
-            <button className={styles.dangerBtn} onClick={() => setConfirmDialog('archive')} disabled={saving}>
-              Arkiver
             </button>
           )}
           <button className={styles.secondaryBtn} onClick={() => navigate('/global/overenskomster')}>
@@ -610,6 +632,12 @@ export function AgreementConfigEditor() {
             <span className={styles.metadataValue}>{formatDateTime(config.updatedAt)}</span>
             <span className={styles.metadataLabel}>Publiceret</span>
             <span className={styles.metadataValue}>{formatDateTime(config.publishedAt)}</span>
+            {config.appliesFrom && (
+              <>
+                <span className={styles.metadataLabel}>Gælder fra</span>
+                <span className={styles.metadataValue}>{formatEffectiveDateLong(config.appliesFrom)}</span>
+              </>
+            )}
             <span className={styles.metadataLabel}>Klonet fra</span>
             <span className={styles.metadataValue}>{config.clonedFromId ?? '\u2014'}</span>
           </div>
@@ -638,6 +666,41 @@ export function AgreementConfigEditor() {
                 ? 'Er du sikker pa, at du vil publicere denne konfiguration? Den kan ikke redigeres efter publicering.'
                 : 'Er du sikker pa, at du vil arkivere denne konfiguration?'}
             </p>
+            {confirmDialog === 'publish' && (
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="ac-publish-date">Gælder fra</label>
+                <input
+                  className={styles.input}
+                  id="ac-publish-date"
+                  type="date"
+                  value={publishDate ?? today}
+                  max={today}
+                  min={newestVersionDate ?? undefined}
+                  onChange={(e) => { setPublishDate(e.target.value); setDateRefusal(null) }}
+                  aria-describedby="ac-publish-date-help"
+                />
+                <p className={styles.dialogText} id="ac-publish-date-help">
+                  {newestVersionDate
+                    ? `Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag eller før ${formatEffectiveDateLong(newestVersionDate)}, hvor den seneste publicerede version gælder fra.`
+                    : 'Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag.'}
+                </p>
+                {dateRefusal && (
+                  <div className={styles.alert} role="alert">
+                    {dateRefusal.text}
+                    {dateRefusal.buttons.map((b) => (
+                      <button
+                        key={b.date}
+                        type="button"
+                        className={styles.secondaryBtn}
+                        onClick={() => { setPublishDate(b.date); setDateRefusal(null) }}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className={styles.dialogActions}>
               <button className={styles.secondaryBtn} onClick={() => setConfirmDialog(null)}>
                 Annuller
@@ -645,6 +708,7 @@ export function AgreementConfigEditor() {
               <button
                 className={confirmDialog === 'publish' ? styles.primaryBtn : styles.dangerBtn}
                 onClick={confirmDialog === 'publish' ? handlePublish : handleArchive}
+                disabled={confirmDialog === 'publish' && (saving || !(publishDate ?? today))}
               >
                 {confirmDialog === 'publish' ? 'Publicer' : 'Arkiver'}
               </button>

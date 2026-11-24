@@ -1,9 +1,19 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { usePositionOverrides, type PositionOverrideConfig, type WithEtag } from '../../hooks/usePositionOverrides'
+import {
+  usePositionOverrides,
+  isPositionOverrideMutationError,
+  type PositionOverrideConfig,
+  type WithEtag,
+} from '../../hooks/usePositionOverrides'
 import { Spinner } from '../../components/ui'
+import { useAuth } from '../../contexts/AuthContext'
+import { useCalendarToday } from '../../contexts/CalendarContext'
+import { hasMinRole } from '../../lib/roles'
+import { dateRefusalFrom, type DateRefusal } from './nearestMondayOffer'
 import styles from './PositionOverrideManagement.module.css'
 
 interface CreateForm {
+  appliesFrom: string
   agreementCode: string
   okVersion: string
   positionCode: string
@@ -13,7 +23,9 @@ interface CreateForm {
   description: string
 }
 
+// An empty `appliesFrom` means today (the date field shows today until the administrator changes it).
 const emptyForm: CreateForm = {
+  appliesFrom: '',
   agreementCode: '',
   okVersion: '',
   positionCode: '',
@@ -43,18 +55,55 @@ export function PositionOverrideManagement() {
   // clears the banner.
   const [staleConflict, setStaleConflict] = useState<{ expected?: number; actual?: number } | null>(null)
 
+  // Every write is GlobalAdminOnly on the server (SEC-032); a local administrator reaches the page
+  // for the list, so the write actions are not offered to them (the server would answer 403).
+  const { role } = useAuth()
+  const canWrite = hasMinRole(role, 'GlobalAdmin')
+
+  // The date of a write: today by default, never later (the server refuses a future date), and for
+  // a change to an existing key never before its newest version (the row's own appliesFrom). The
+  // server stays the authority on all three date rules; a refusal is shown with the dates it would
+  // accept (nearestMondayOffer.ts). One row is in an edit or a pending switch at a time, so one
+  // `rowDate` serves both ('' = today).
+  const today = useCalendarToday()
+  const [rowDate, setRowDate] = useState('')
+  const [pending, setPending] = useState<{ id: string; kind: 'deactivate' | 'activate' } | null>(null)
+  const [dateRefusal, setDateRefusal] = useState<{ scope: string; refusal: DateRefusal } | null>(null)
+
   const handleChange = (field: keyof CreateForm) => (e: ChangeEvent<HTMLInputElement>) => {
     setForm((f) => ({ ...f, [field]: e.target.value }))
   }
 
-  const handleMutationError = (err: unknown) => {
-    const e = err as Error & { status?: number; body?: { expectedVersion?: number; actualVersion?: number } }
-    if (e.status === 412) {
-      setStaleConflict({ expected: e.body?.expectedVersion, actual: e.body?.actualVersion })
+  // `scope` is 'create' or the override id; `newest` is the key's newest version date (null for create).
+  const handleMutationError = (err: unknown, scope: string, newest: string | null) => {
+    if (isPositionOverrideMutationError(err) && err.status === 412) {
+      setStaleConflict({ expected: err.body?.expectedVersion, actual: err.body?.actualVersion })
+      return
+    }
+    const refusal = isPositionOverrideMutationError(err) ? dateRefusalFrom(err, today, newest) : null
+    if (refusal) {
+      setDateRefusal({ scope, refusal })
     } else {
       setFormError(err instanceof Error ? err.message : String(err))
     }
   }
+
+  const renderDateRefusal = (scope: string, setDate: (date: string) => void) =>
+    dateRefusal && dateRefusal.scope === scope ? (
+      <div className={styles.alert} role="alert">
+        {dateRefusal.refusal.text}
+        {dateRefusal.refusal.buttons.map((b) => (
+          <button
+            key={b.date}
+            type="button"
+            className={styles.actionBtn}
+            onClick={() => { setDate(b.date); setDateRefusal(null) }}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
+    ) : null
 
   const handleStaleRefresh = async () => {
     setStaleConflict(null)
@@ -69,8 +118,10 @@ export function PositionOverrideManagement() {
     }
     setSubmitting(true)
     setFormError(null)
+    setDateRefusal(null)
     try {
       await create({
+        appliesFrom: form.appliesFrom || today,
         agreementCode: form.agreementCode,
         okVersion: form.okVersion,
         positionCode: form.positionCode,
@@ -82,13 +133,16 @@ export function PositionOverrideManagement() {
       setForm(emptyForm)
       setShowCreate(false)
     } catch (err) {
-      handleMutationError(err)
+      handleMutationError(err, 'create', null)
     } finally {
       setSubmitting(false)
     }
   }
 
   const startEdit = (item: WithEtag<PositionOverrideConfig>) => {
+    setPending(null)
+    setDateRefusal(null)
+    setRowDate('')
     setEditingId(item.overrideId)
     setEditForm({
       maxFlexBalance: item.maxFlexBalance?.toString() ?? '',
@@ -101,12 +155,28 @@ export function PositionOverrideManagement() {
   const cancelEdit = () => {
     setEditingId(null)
     setEditForm({})
+    setDateRefusal(null)
+  }
+
+  // A switch on or off asks for its date first (no longer one click): it can change the weekly norm
+  // in force, so it obeys the same date rules as an edit.
+  const startSwitch = (item: WithEtag<PositionOverrideConfig>, kind: 'deactivate' | 'activate') => {
+    cancelEdit()
+    setRowDate('')
+    setPending({ id: item.overrideId, kind })
+  }
+
+  const cancelSwitch = () => {
+    setPending(null)
+    setDateRefusal(null)
   }
 
   const saveEdit = async (item: WithEtag<PositionOverrideConfig>) => {
     setSubmitting(true)
+    setDateRefusal(null)
     try {
       await update(item.overrideId, item.etag, {
+        appliesFrom: rowDate || today,
         agreementCode: item.agreementCode,
         okVersion: item.okVersion,
         positionCode: item.positionCode,
@@ -118,25 +188,19 @@ export function PositionOverrideManagement() {
       setEditingId(null)
       setEditForm({})
     } catch (err) {
-      handleMutationError(err)
+      handleMutationError(err, item.overrideId, item.appliesFrom)
     } finally {
       setSubmitting(false)
     }
   }
 
-  const handleDeactivate = async (item: WithEtag<PositionOverrideConfig>) => {
+  const confirmSwitch = async (item: WithEtag<PositionOverrideConfig>, kind: 'deactivate' | 'activate') => {
+    setDateRefusal(null)
     try {
-      await deactivate(item.overrideId, item.etag)
+      await (kind === 'deactivate' ? deactivate : activate)(item.overrideId, item.etag, rowDate || today)
+      setPending(null)
     } catch (err) {
-      handleMutationError(err)
-    }
-  }
-
-  const handleActivate = async (item: WithEtag<PositionOverrideConfig>) => {
-    try {
-      await activate(item.overrideId, item.etag)
-    } catch (err) {
-      handleMutationError(err)
+      handleMutationError(err, item.overrideId, item.appliesFrom)
     }
   }
 
@@ -148,17 +212,24 @@ export function PositionOverrideManagement() {
     <div className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Positionstilpasninger</h1>
-        <button
-          className={styles.createBtn}
-          onClick={() => {
-            setShowCreate(!showCreate)
-            setFormError(null)
-            setForm(emptyForm)
-          }}
-        >
-          {showCreate ? 'Annuller' : 'Opret ny'}
-        </button>
+        {canWrite && (
+          <button
+            className={styles.createBtn}
+            onClick={() => {
+              setShowCreate(!showCreate)
+              setFormError(null)
+              setDateRefusal(null)
+              setForm(emptyForm)
+            }}
+          >
+            {showCreate ? 'Annuller' : 'Opret ny'}
+          </button>
+        )}
       </div>
+
+      {!canWrite && (
+        <div className={styles.emptyState}>Tilpasningerne kan kun ændres af en global administrator.</div>
+      )}
 
       {staleConflict && (
         <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
@@ -174,7 +245,7 @@ export function PositionOverrideManagement() {
       )}
       {error && <div className={styles.alert}>{error}</div>}
 
-      {showCreate && (
+      {canWrite && showCreate && (
         <div className={styles.createForm}>
           <h2 className={styles.createFormTitle}>Opret positionstilpasning</h2>
           <form onSubmit={handleCreate}>
@@ -276,8 +347,22 @@ export function PositionOverrideManagement() {
                   placeholder="Valgfri beskrivelse"
                 />
               </div>
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="po-appliesfrom">
+                  Gælder fra
+                </label>
+                <input
+                  className={styles.input}
+                  id="po-appliesfrom"
+                  type="date"
+                  value={form.appliesFrom || today}
+                  max={today}
+                  onChange={handleChange('appliesFrom')}
+                />
+              </div>
             </div>
 
+            {renderDateRefusal('create', (date) => setForm((f) => ({ ...f, appliesFrom: date })))}
             {formError && <div className={styles.alert}>{formError}</div>}
 
             <div className={styles.formActions}>
@@ -302,6 +387,9 @@ export function PositionOverrideManagement() {
         <div className={styles.emptyState}>Ingen positionstilpasninger fundet</div>
       )}
 
+      {dateRefusal && dateRefusal.scope !== 'create' &&
+        renderDateRefusal(dateRefusal.scope, setRowDate)}
+
       {!loading && data.length > 0 && (
         <table className={styles.table}>
           <thead>
@@ -314,7 +402,8 @@ export function PositionOverrideManagement() {
               <th>Normperiode (uger)</th>
               <th>Ugentlig normtid</th>
               <th>Beskrivelse</th>
-              <th>Handlinger</th>
+              <th>Gælder fra</th>
+              {canWrite && <th>Handlinger</th>}
             </tr>
           </thead>
           <tbody>
@@ -384,6 +473,22 @@ export function PositionOverrideManagement() {
                   </td>
                   <td>
                     {isEditing ? (
+                      <input
+                        className={styles.inlineInput}
+                        type="date"
+                        aria-label="Ændringen gælder fra"
+                        value={rowDate || today}
+                        max={today}
+                        min={item.appliesFrom ?? undefined}
+                        onChange={(e) => setRowDate(e.target.value)}
+                      />
+                    ) : (
+                      item.appliesFrom ?? '—'
+                    )}
+                  </td>
+                  {canWrite && (
+                  <td>
+                    {isEditing ? (
                       <>
                         <button
                           className={styles.saveBtn}
@@ -396,6 +501,30 @@ export function PositionOverrideManagement() {
                           Annuller
                         </button>
                       </>
+                    ) : pending?.id === item.overrideId ? (
+                      <>
+                        <label htmlFor={`po-switch-${item.overrideId}`}>
+                          {pending.kind === 'deactivate' ? 'Deaktiveres fra' : 'Aktiveres fra'}
+                        </label>
+                        <input
+                          className={styles.inlineInput}
+                          id={`po-switch-${item.overrideId}`}
+                          type="date"
+                          value={rowDate || today}
+                          max={today}
+                          min={item.appliesFrom ?? undefined}
+                          onChange={(e) => setRowDate(e.target.value)}
+                        />
+                        <button
+                          className={pending.kind === 'deactivate' ? styles.deactivateBtn : styles.activateBtn}
+                          onClick={() => confirmSwitch(item, pending.kind)}
+                        >
+                          {pending.kind === 'deactivate' ? 'Deaktiver' : 'Aktiver'}
+                        </button>
+                        <button className={styles.actionBtn} onClick={cancelSwitch}>
+                          Annuller
+                        </button>
+                      </>
                     ) : (
                       <>
                         <button className={styles.actionBtn} onClick={() => startEdit(item)}>
@@ -404,14 +533,14 @@ export function PositionOverrideManagement() {
                         {item.status === 'ACTIVE' ? (
                           <button
                             className={styles.deactivateBtn}
-                            onClick={() => handleDeactivate(item)}
+                            onClick={() => startSwitch(item, 'deactivate')}
                           >
                             Deaktiver
                           </button>
                         ) : (
                           <button
                             className={styles.activateBtn}
-                            onClick={() => handleActivate(item)}
+                            onClick={() => startSwitch(item, 'activate')}
                           >
                             Aktiver
                           </button>
@@ -419,6 +548,7 @@ export function PositionOverrideManagement() {
                       </>
                     )}
                   </td>
+                  )}
                 </tr>
               )
             })}

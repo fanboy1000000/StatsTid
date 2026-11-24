@@ -5,63 +5,14 @@
 // form control associated with that label". Where a label text repeats (Start, Slut, Sats), each
 // lookup is scoped to its fieldset by the legend, so a tie to the wrong field fails too.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { screen, within, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { AgreementConfigEditor } from '../AgreementConfigEditor'
 import { renderWithCalendar } from '../../../test/renderWithCalendar'
+import { CONFIG_ID, draftConfig } from './agreementConfigFixture'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
-
-const CONFIG_ID = '11111111-1111-1111-1111-111111111111'
-
-const draftConfig = {
-  configId: CONFIG_ID,
-  agreementCode: 'AC',
-  okVersion: 'OK24',
-  status: 'DRAFT' as const,
-  version: 3,
-  weeklyNormHours: 37,
-  normPeriodWeeks: 1,
-  normModel: 'WEEKLY_HOURS',
-  annualNormHours: 1924,
-  maxFlexBalance: 150,
-  hasOvertime: false,
-  hasMerarbejde: false,
-  overtimeThreshold50: 0,
-  overtimeThreshold100: 0,
-  eveningSupplementEnabled: false,
-  nightSupplementEnabled: false,
-  weekendSupplementEnabled: false,
-  holidaySupplementEnabled: false,
-  eveningStart: 17,
-  eveningEnd: 23,
-  nightStart: 23,
-  nightEnd: 6,
-  eveningRate: 0,
-  nightRate: 0,
-  weekendSaturdayRate: 0,
-  weekendSundayRate: 0,
-  holidayRate: 0,
-  onCallDutyEnabled: false,
-  onCallDutyRate: 0,
-  callInWorkEnabled: false,
-  callInMinimumHours: 3,
-  callInRate: 1,
-  travelTimeEnabled: false,
-  workingTravelRate: 1,
-  nonWorkingTravelRate: 0.5,
-  createdBy: 'admin',
-  createdAt: '2026-04-01T00:00:00Z',
-  updatedAt: '2026-04-01T00:00:00Z',
-  publishedAt: null,
-  archivedAt: null,
-  appliesFrom: null,
-  clonedFromId: null,
-  description: null,
-  entitlements: [],
-  entitlementsReadOnly: false,
-}
 
 // [fieldset legend, label text, expected control tag]
 const FIELDS: [string, string, string][] = [
@@ -132,5 +83,28 @@ describe('AgreementConfigEditor — every label is tied to its field (N-7)', () 
     }
     // No two fields share an id (a repeated label text must not collapse onto one field).
     expect(ids.size).toBe(33)
+  })
+
+  it("reads the publish dialog's date input by its label too", async () => {
+    // The version list (read when the dialog opens) is a bare array; the by-id GET is the config.
+    mockFetch.mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ ETag: '"3"' }),
+      json: async () => (url.endsWith('/AC/OK24') ? [] : draftConfig),
+    }))
+    renderWithCalendar(
+      '2026-11-12',
+      <MemoryRouter initialEntries={[`/global/overenskomster/${CONFIG_ID}`]}>
+        <Routes>
+          <Route path="/global/overenskomster/:configId" element={<AgreementConfigEditor />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('AC / OK24')
+    fireEvent.click(screen.getByRole('button', { name: 'Publicer' }))
+    const date = screen.getByLabelText('Gælder fra')
+    expect(date.tagName).toBe('INPUT')
+    expect(date.getAttribute('type')).toBe('date')
   })
 })

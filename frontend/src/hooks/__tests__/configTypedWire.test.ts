@@ -273,7 +273,8 @@ describe('useAgreementConfigActions — precondition fidelity per the demand map
     expect(calls[0].url).toBe('/api/agreement-configs/cfg-1/clone')
   })
 
-  it('publishConfig → POST …/publish with If-Match, NO body; the spec envelope flows through', async () => {
+  // S148 T23: the publish now carries its applies-from date as the body (was: no body).
+  it('publishConfig → POST …/publish with If-Match and { appliesFrom }; the spec envelope flows through', async () => {
     const calls = captureCalls(() => ({
       body: { configId: 'cfg-1', status: 'ACTIVE', archivedConfigId: null, publishedAt: '2026-07-20T00:00:00Z' },
       etag: '"4"',
@@ -281,12 +282,12 @@ describe('useAgreementConfigActions — precondition fidelity per the demand map
     const { result } = renderHook(() => useAgreementConfigActions())
     let envelope: Awaited<ReturnType<typeof result.current.publishConfig>> | null = null
     await act(async () => {
-      envelope = await result.current.publishConfig('cfg-1', '"3"')
+      envelope = await result.current.publishConfig('cfg-1', '"3"', '2026-11-09')
     })
     expect(calls[0].url).toBe('/api/agreement-configs/cfg-1/publish')
     expect(calls[0].method).toBe('POST')
     expect(calls[0].headers['If-Match']).toBe('"3"')
-    expect(calls[0].body).toBeUndefined()
+    expect(calls[0].body).toEqual({ appliesFrom: '2026-11-09' })
     expect(envelope!.status).toBe('ACTIVE')
     expect(envelope!.version).toBe(4)
   })
@@ -386,22 +387,23 @@ describe('usePositionOverrides — precondition fidelity per the demand map', ()
     expect(put.headers['If-Match']).toBe('"2"')
   })
 
-  it('deactivate / activate → POST with If-Match, NO body; the spec envelopes flow through', async () => {
+  // S148 T23: deactivate and activate now carry their applies-from date as the body (was: no body).
+  it('deactivate / activate → POST with If-Match and { appliesFrom }; the spec envelopes flow through', async () => {
     const calls = overrideCalls()
     const { result } = await mount()
     await act(async () => {
-      const deactivated = await result.current.deactivate('ov-1', '"2"')
+      const deactivated = await result.current.deactivate('ov-1', '"2"', '2026-11-09')
       expect(deactivated.deactivated).toBe(true)
-      const activated = await result.current.activate('ov-1', '"3"')
+      const activated = await result.current.activate('ov-1', '"3"', '2026-11-10')
       expect(activated.activated).toBe(true)
     })
     const posts = calls.filter((c) => c.method === 'POST')
     expect(posts[0].url).toBe('/api/admin/position-overrides/ov-1/deactivate')
     expect(posts[0].headers['If-Match']).toBe('"2"')
-    expect(posts[0].body).toBeUndefined()
+    expect(posts[0].body).toEqual({ appliesFrom: '2026-11-09' })
     expect(posts[1].url).toBe('/api/admin/position-overrides/ov-1/activate')
     expect(posts[1].headers['If-Match']).toBe('"3"')
-    expect(posts[1].body).toBeUndefined()
+    expect(posts[1].body).toEqual({ appliesFrom: '2026-11-10' })
   })
 })
 

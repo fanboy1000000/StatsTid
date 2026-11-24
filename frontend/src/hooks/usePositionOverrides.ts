@@ -37,6 +37,9 @@ export interface PositionOverrideMutationError extends Error {
     expectedVersion?: number
     actualVersion?: number
     currentState?: unknown
+    /** The applies-from date refusal (400): one entry per refused field, with the dates the
+        server would accept (`nearestValid`). Read by `pages/admin/nearestMondayOffer.ts`. */
+    fields?: { field?: string; code?: string; nearestValid?: string[] }[]
   }
 }
 
@@ -46,6 +49,11 @@ function isMutationErrorBody(
   body: unknown,
 ): body is NonNullable<PositionOverrideMutationError['body']> {
   return typeof body === 'object' && body !== null
+}
+
+/** Runtime narrowing for thrown mutation errors (no `as` cast; the file is on the no-`as` surface). */
+export function isPositionOverrideMutationError(err: unknown): err is PositionOverrideMutationError {
+  return err instanceof Error && 'status' in err && typeof err.status === 'number'
 }
 
 function decorateRow(row: PositionOverrideConfig): WithEtag<PositionOverrideConfig> {
@@ -124,11 +132,13 @@ export function usePositionOverrides() {
   const deactivate = async (
     overrideId: string,
     ifMatch: string,
+    appliesFrom: string,
   ): Promise<DeactivateResponse & { etag: string | null; version: number | null }> => {
     const result = await apiFetchWithEtag('/api/admin/position-overrides/{overrideId}/deactivate', {
       method: 'POST',
       params: { path: { overrideId } },
       ifMatch,
+      body: { appliesFrom },
     })
     if (!result.ok) {
       throw makeMutationError(result.status, result.error, result.body)
@@ -142,11 +152,13 @@ export function usePositionOverrides() {
   const activate = async (
     overrideId: string,
     ifMatch: string,
+    appliesFrom: string,
   ): Promise<ActivateResponse & { etag: string | null; version: number | null }> => {
     const result = await apiFetchWithEtag('/api/admin/position-overrides/{overrideId}/activate', {
       method: 'POST',
       params: { path: { overrideId } },
       ifMatch,
+      body: { appliesFrom },
     })
     if (!result.ok) {
       throw makeMutationError(result.status, result.error, result.body)

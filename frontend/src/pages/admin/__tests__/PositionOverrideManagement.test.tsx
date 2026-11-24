@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
 import { PositionOverrideManagement } from '../PositionOverrideManagement'
 import type { PositionOverrideConfig } from '../../../hooks/usePositionOverrides'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
+
+// S148 T23: the page reads the role (write buttons are for a GlobalAdmin) and the Copenhagen today.
+vi.mock('../../../contexts/AuthContext', () => ({
+  useAuth: () => ({ role: 'GlobalAdmin' }),
+}))
 
 // Mock localStorage
 const mockStorage: Record<string, string> = {}
@@ -67,13 +73,13 @@ describe('PositionOverrideManagement', () => {
   it('renders the page title', () => {
     // Return a pending promise so loading stays true
     mockFetch.mockReturnValue(new Promise(() => {}))
-    render(<PositionOverrideManagement />)
+    renderWithCalendar('2026-11-12', <PositionOverrideManagement />)
     expect(screen.getByText('Positionstilpasninger')).toBeDefined()
   })
 
   it('shows loading state initially', () => {
     mockFetch.mockReturnValue(new Promise(() => {}))
-    render(<PositionOverrideManagement />)
+    renderWithCalendar('2026-11-12', <PositionOverrideManagement />)
     expect(screen.getByRole('status')).toBeDefined()
   })
 
@@ -84,7 +90,7 @@ describe('PositionOverrideManagement', () => {
       json: async () => mockOverrides,
     })
 
-    render(<PositionOverrideManagement />)
+    renderWithCalendar('2026-11-12', <PositionOverrideManagement />)
 
     await waitFor(() => {
       expect(screen.getByText('DEPARTMENT_HEAD')).toBeDefined()
@@ -130,7 +136,7 @@ describe('PositionOverrideManagement — 412 banner-with-retry', () => {
       }),
     })
 
-    render(<PositionOverrideManagement />)
+    renderWithCalendar('2026-11-12', <PositionOverrideManagement />)
 
     await waitFor(() => {
       expect(screen.getByText('DEPARTMENT_HEAD')).toBeDefined()
@@ -139,6 +145,8 @@ describe('PositionOverrideManagement — 412 banner-with-retry', () => {
     // Find and click the "Deaktiver" button on the first row.
     const deactivateBtns = screen.getAllByText('Deaktiver')
     fireEvent.click(deactivateBtns[0])
+    // S148 T23: the switch asks for its date first; the row's confirm button is the first "Deaktiver" now.
+    fireEvent.click(screen.getAllByText('Deaktiver')[0])
 
     await waitFor(() => {
       const banner = screen.getByTestId('stale-conflict-banner')
@@ -173,12 +181,14 @@ describe('PositionOverrideManagement — 412 banner-with-retry', () => {
       json: async () => mockOverrides.map((o) => ({ ...o, version: 4 })),
     })
 
-    render(<PositionOverrideManagement />)
+    renderWithCalendar('2026-11-12', <PositionOverrideManagement />)
 
     await waitFor(() => {
       expect(screen.getByText('DEPARTMENT_HEAD')).toBeDefined()
     })
 
+    fireEvent.click(screen.getAllByText('Deaktiver')[0])
+    // S148 T23: second click confirms the switch (the date step comes first).
     fireEvent.click(screen.getAllByText('Deaktiver')[0])
 
     await waitFor(() => {

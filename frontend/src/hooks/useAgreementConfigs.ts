@@ -54,6 +54,9 @@ export interface ConfigMutationError extends Error {
     expectedVersion?: number
     actualVersion?: number
     currentState?: unknown
+    /** The applies-from date refusal (400): one entry per refused field, with the dates the
+        server would accept (`nearestValid`). Read by `pages/admin/nearestMondayOffer.ts`. */
+    fields?: { field?: string; code?: string; nearestValid?: string[] }[]
   }
 }
 
@@ -118,6 +121,37 @@ export function useAgreementConfigs(statusFilter?: string) {
   useEffect(() => { fetchConfigs() }, [fetchConfigs])
 
   return { configs, loading, error, refetch: fetchConfigs }
+}
+
+/**
+ * The date the newest PUBLISHED version of a key applies from (the lower limit of a new publish's
+ * date), read once from the per-key version list. Null while loading, when the key has no published
+ * version, or when the read fails: the server stays the authority and refuses a date before it.
+ * Pass an empty `agreementCode` to skip the read (a config that is not loaded yet).
+ */
+export function useNewestVersionDate(agreementCode: string, okVersion: string): string | null {
+  const [newest, setNewest] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!agreementCode || !okVersion) return
+    let cancelled = false
+    apiClient
+      .get('/api/agreement-configs/{agreementCode}/{okVersion}', {
+        params: { path: { agreementCode, okVersion } },
+      })
+      .then((result) => {
+        if (cancelled || !result.ok) return
+        const dates: string[] = []
+        for (const c of result.data) {
+          if (c.publishedAt !== null && c.appliesFrom !== null) dates.push(c.appliesFrom)
+        }
+        dates.sort()
+        setNewest(dates.length > 0 ? dates[dates.length - 1] : null)
+      })
+    return () => { cancelled = true }
+  }, [agreementCode, okVersion])
+
+  return newest
 }
 
 export function useAgreementConfig(configId: string) {
@@ -233,11 +267,13 @@ export function useAgreementConfigActions() {
   const publishConfig = async (
     configId: string,
     ifMatch: string,
+    appliesFrom: string,
   ): Promise<PublishResponse & { etag: string | null; version: number | null }> => {
     const result = await apiFetchWithEtag('/api/agreement-configs/{configId}/publish', {
       method: 'POST',
       params: { path: { configId } },
       ifMatch,
+      body: { appliesFrom },
     })
     if (!result.ok) {
       throw makeMutationError(result.status, result.error, result.body)
