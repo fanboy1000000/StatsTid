@@ -3532,3 +3532,11 @@ M-40 included [O for the 14 facts of the five classes run].
     - **M-9's pay half also mutates `GetPublishedAppliesFromDatesAsync`.** Payroll's boundary read must see the draft too, or the pay half cannot discriminate. Ratified as M-9's form, consistent with the row's "select by status alone".
     - **M-12's extra red** (`DatedRecordTimelineParityTests`, from the fraction field the mutation adds) stays on the frozen list, under NR-P25's "everything the mutations break".
     - **The partial local census is accepted.** An unlisted red at CI-M5 is triaged against each mutation before anything else.
+
+**CI-M5 started, 2026-11-24:** `ci/s148-m5` = the builder's `645178f1` + the evidence `ci.yml` commit `7377dcf2` (a cherry-pick of CI-M4a's `5f3f9a72`: `if: ${{ !cancelled() }}` on exactly the three build-and-test steps). It is pushed with draft **PR #68**, run 45362153082. It is judged from the trx files against the builder's frozen list of 12 facts (1 Unit, 11 Docker; `.claude/reviews/S148-CI-M5-builder-report.md` § 5). The worktree for TASK-14847-T (`agent-a01d94703991b3557`, merged) is pruned.
+
+**TASK-14848 + -T (QUAL-263), briefs written by the Orchestrator** from the T14b stack's adjudications (T12 in c1, U2 in c2) and QUAL-263's disposition. They are transcriptions with no new ruling:
+- **TASK-14848** (`backend-infrastructure`): `EmploymentProfileResolver`'s profile SELECT gains `ORDER BY ep.effective_from DESC LIMIT 1`, the rule its three sibling reads already apply. Two comments are made true (`UserAgreementCodeRepository.cs:126-127`, `DatedRecordTimeline`'s summary). There is a report-only census of every `employee_profiles` read.
+- **TASK-14848-T** (`test-qa`, per U2's "with tests by `test-qa`"): the parity fixture gains an overlapping profile row with an explicit expectation. It is shown to discriminate on a throwaway local cluster: green on the fix, red under a scratch `ASC` mutation.
+- **The order is RED-by-mutation rather than RED-first.** On undefined order a red-first pin would be flaky (U2 accepted FU-T's omission for that reason).
+- Review: 5α plus both 5a lenses; one merge; the Docker fact is CI-verified at the next CI run.
