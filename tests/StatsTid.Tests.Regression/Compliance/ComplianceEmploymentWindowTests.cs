@@ -76,8 +76,9 @@ public sealed class ComplianceEmploymentWindowTests : IAsyncLifetime
         _ = _factory.CreateClient(); // boot the seeders once
 
         // The ONE derived host every test uses — built BEFORE per-test seeding so its boot-time
-        // seeders cannot backfill anything for the hire-dated employees the tests create (both
-        // seeders only fill users lacking a LIVE row, but building first removes the question).
+        // seeders cannot backfill anything for the hire-dated employees the tests create (the profile
+        // seeder fills only users with no profile row at all since S148, QUAL-267, and the agreement-code
+        // seeder fills users lacking an open row; building first removes the question).
         _stubbed = _factory.WithWebHostBuilder(builder =>
             builder.ConfigureTestServices(services =>
             {

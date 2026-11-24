@@ -581,7 +581,7 @@ public sealed class EmployeeProfileRepository
     /// "should never hit this case because it guards on existing rows"). Its guard is a NOT EXISTS
     /// read taken OUTSIDE the per-row transaction, so two application instances starting at the same
     /// moment can both pass it for the same employee; the loser's INSERT loses the race on
-    /// <c>idx_employee_profiles_live</c>, and <c>EmployeeProfileSeeder</c> catches the 23505, rolls
+    /// <c>idx_employee_profiles_live</c> or <c>idx_employee_profiles_history</c> (both rows start on the year-1 anchor), and <c>EmployeeProfileSeeder</c> catches the 23505, rolls
     /// that one row back and carries on (it is logged as a skipped concurrent-startup race, not an
     /// error — the winner already wrote the row the loser wanted).
     /// </para>

@@ -140,7 +140,7 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
         // wins although POS-D also ENDS later (24 and 25 March are POS-D alone). The profile gap from 26 March stays. The fractions of
         // POS-C and POS-D differ from 1.000 so the rows are not interchangeable; the outcome mapping does not compare them.
         // The insert order is deliberate, for two different readers: POS-C follows POS-B, so a resolver with no ORDER BY reads POS-B
-        // first and is red on 12 and 13 March; POS-D PRECEDES POS-B, so a "most recently inserted wins" reader reads POS-B and is
+        // first and is red on 12 and 13 March (on this fixture's plan; an unordered query's order is not guaranteed); POS-D PRECEDES POS-B, so a "most recently inserted wins" reader reads POS-B and is
         // red on 22 and 23 March, where POS-D (the later start) is the right answer. Do not reorder.
         await InsertProfileAsync("POS-A", "2026-03-01", "2026-03-10");
         await InsertProfileAsync("POS-D", "2026-03-22", "2026-03-26", 0.750m);

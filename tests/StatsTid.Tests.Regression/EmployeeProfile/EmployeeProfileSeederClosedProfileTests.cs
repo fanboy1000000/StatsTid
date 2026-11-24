@@ -121,7 +121,7 @@ public sealed class EmployeeProfileSeederClosedProfileTests : DatedConfigDockerF
     /// <summary><b>F (CI).</b> QUAL-267. HR created a person through the admin route (profile from Monday 2 February 2026), then
     /// closed the profile on Tuesday 31 March through the DELETE route (204); the person stays active. The seeder runs. The row set
     /// is identical before and after (nothing written, the closed row untouched), and no new <c>EmployeeProfileCreated</c>
-    /// event, no <c>SYSTEM_SEED</c> event and no audit row exists for the person.
+    /// event, no <c>SYSTEM_SEED</c> event and no new audit row is written for the person (the create and the close already wrote theirs).
     /// <para><b>Red conditions.</b> At <c>6790ee63</c> the seeder finds no OPEN row and writes <c>[0001-01-01, open)</c> beside
     /// the closed one: the row-set comparison fails, as do the event and audit counts.</para></summary>
     [Fact]
