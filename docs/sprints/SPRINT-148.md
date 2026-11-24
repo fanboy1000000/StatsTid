@@ -3685,3 +3685,17 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **Wave 6's merge order:** the 14832 stack → the 14834 stack → the 14836 stack → 14850 → **the QUAL-268 stack** (merged together, last, against the final drawer) → CI-W6. TASK-14838 goes at any boundary.
 - **All Danish copy is fixed verbatim** (rulings 15, 27 and 38).
 - **Eight plan-added AC ids.** **M-55** is local only; wave 6 still has no CI mutation run.
+
+**TASK-14832 returned** `cb657327` on `33f502cf` (report `.claude/reviews/S148-TASK-14832-report.md`).
+- **What it built:** the local profile's eighteen new settings are saved, read back and audited. Every settable value is checked before any lock or write (ruling 4's nine codes, at most one error per field; SEC-061's legacy ranges). The no-op comparator and `ComputeChangedFields` name the same twenty-two members in one order.
+- **Gate:** build 0 errors (CA2100 113, unchanged); Unit 1746, DemoSeed 170, Regression non-Docker 147. The 20 lock lines are unchanged. M-49's two sites are not edited (Gate 4).
+- **Proven locally** on a throwaway cluster: the repository round trip of all 22 columns and the no-op cases.
+- **CI-pending:** the route-level effects.
+- **Settled:** `"HH:mm"` does not bind; clients send `"HH:mm:ss"`.
+- **Expected red for 14832-T:** `S119ProfileSpecRuntimeTests`' 13-key pins and `EventStoreInTxTests.VersionBackfill_ExistingProfileReturns1`.
+- **Declared deviations, for review:**
+  - D1: the step-5 heading comment.
+  - D2: the `FieldValidationError` summary.
+  - D3: one `using`.
+  - D4: one shared parameter binder for the INSERT and the UPDATE, so the two cannot write different columns. This is why the census reads 28, not 29.
+- **TASK-14832-T dispatched** on `cb657327`.
