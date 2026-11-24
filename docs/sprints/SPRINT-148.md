@@ -3841,3 +3841,30 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 
   Plus eight NOTEs, among them a wrong future start date blocking earlier dates for that day and scope.
 - **W4 is an Orchestrator miss**, logged for the record: the plan's checklist item 4 requires a read-only `security` consult for TASK-14834 before the merge, and it was not dispatched with the build. It is running now (`S148-TASK-14834-security-consult.md`). Its negative-test list feeds the fix-ups.
+- **Security consult** (`S148-TASK-14834-security-consult.md`, Sonnet, read-only): **RESIDUALS, none blocking.**
+  - Role, scope and organisation binding are correct on every route.
+  - Its negative-test list shows the GET's, withdraw's and reinstate's access checks largely unpinned.
+  - It confirms the 9999-12-31 defect.
+  - It adds a likely 500 on a NUL character in `agreementCode`, and the soft-delete window between the scope check and the organisation lock.
+- **Ruled by the Orchestrator** (`S148-TASK-14834-stack-5a-rulings-c1.md`, R1–R6). No lens contradicts another on a fact, and every ruling takes the stricter remedy.
+  - The one differing point is whether the add form must refuse a known duplicate. Codex calls it a BLOCKER; Fable leaves it to the adjudicator. It is ruled in under the wave's general rule, "a screen never offers an action the server refuses".
+  - **R1, FU-1 (`backend-infrastructure`):**
+    - a 9999-12-31 start is refused (`DATE_OUT_OF_RANGE`; the storage limit, not an invented ceiling), and withdraw's arithmetic is guarded;
+    - a NUL guard;
+    - the organisation lock requires `is_active` and refuses with 403 "Organization not found".
+  - **R2, FU-2 (`test-qa`):**
+    - access arms on all four routes (consult § 2);
+    - the reinstate wrong-address 404 and the list leak check;
+    - W6's audit before-image and the two date-rule arms;
+    - R1's arms.
+  - **R3, FU-3 (`ux`):**
+    - `key={selectedOrgId}` and guards against stale results;
+    - dates before the minimum and duplicates never sent; a busy flag;
+    - optional, additive aria pass-through on the kit's `Select` and `Radio` (a kit change, authorized; the design-sync gate warns);
+    - tests that reject wrong code.
+  - **R4: NOTEs accepted.**
+    - A wrong future start blocks earlier dates: the owner is told at O-17, plus a ROADMAP line for S1-9.
+    - The overlap key leaves out `kind`.
+    - `%00` in a route's `orgId` is registered as one SEC line, house-wide, unproven.
+  - **R5: merge carries (O-20).**
+- **FU-1 dispatched** on `52d300c7`.
