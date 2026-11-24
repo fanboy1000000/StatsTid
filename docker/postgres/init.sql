@@ -2754,6 +2754,36 @@ INSERT INTO role_config_overrides (employment_category, agreement_code, ok_versi
     ('Kontorchef',       'AC', 'OK26', '0001-01-01', 'NONE',          'SYSTEM_SEED', 'SYSTEM_SEED')
 ON CONFLICT DO NOTHING;
 
+-- S148 C-11 / ADR-043 D4 — the starting HR facts (employee_hr_facts) of the 19 users this file seeds,
+-- named by an explicit list, never every users row: tests re-apply this file to live databases, and a
+-- row for a test-created user would make that test's DELETE FROM users fail (23503; the table
+-- references users with no cascade). A user added to the users seed needs a line here too.
+-- One open row each, from the history-covering anchor 0001-01-01, so no month gains a boundary.
+-- The regime: HK and PROSA OVERTIME; the AC family (AC, or a code starting AC_) the
+-- merarbejde_compensation_right of the live role_config_overrides row of the user's category and OK
+-- version (ADR-024's rows, above), NULL when the category has none ('Standard', which every seeded user
+-- has, so the 8 AC users start NULL: "missing" in the editor, HRP-025); NULL for any other code.
+-- The values are provisional (ADR-043 provisional item 5). No audit row and no event: greenfield seed
+-- data, as the seeds above. A product-created user gets no row; HR records it at hire.
+-- shortcut(pending): every seeded person is on the flex scheme (R-17); upgrade when a central source lists the positions off flex, or HR has recorded the exceptions (HRP-026)
+INSERT INTO employee_hr_facts (employee_id, overtime_regime, on_flex_scheme, effective_from)
+SELECT u.user_id,
+       CASE
+           WHEN u.agreement_code IN ('HK', 'PROSA') THEN 'OVERTIME'
+           WHEN u.agreement_code = 'AC' OR starts_with(u.agreement_code, 'AC_') THEN rco.merarbejde_compensation_right
+       END,
+       TRUE,
+       DATE '0001-01-01'
+FROM users u
+LEFT JOIN role_config_overrides rco
+       ON rco.employment_category = u.employment_category
+      AND rco.agreement_code = 'AC'
+      AND rco.ok_version = u.ok_version
+      AND rco.effective_to IS NULL
+WHERE u.user_id IN ('admin01', 'admin02', 'ladm01', 'ladm02', 'hr01', 'hr02', 'mgr01', 'mgr02', 'mgr03',
+                    'emp001', 'emp002', 'emp003', 'emp004', 'emp005', 'emp006', 'emp007', 'emp008', 'emp009', 'emp010')
+ON CONFLICT DO NOTHING;
+
 -- =========================================================================
 -- S40 / ADR-024 D7 — overtime_pre_approvals extension + overtime_authorization_audit.
 -- Adds 4 columns to overtime_pre_approvals (S17 introduction at L1504) and
