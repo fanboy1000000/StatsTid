@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
 import { AgreementConfigEditor } from '../AgreementConfigEditor'
 import { PositionOverrideManagement } from '../PositionOverrideManagement'
 import { ProfileEditor } from '../../../components/config/ProfileEditor'
@@ -33,8 +34,14 @@ function expectNoLabel() {
   expect(screen.queryByText(/indbyggede værdier/i)).toBeNull()
 }
 
+// S148 T23: both editors read the Copenhagen today and the override page reads the role, so they render
+// inside a calendar and under a GlobalAdmin.
+vi.mock('../../../contexts/AuthContext', () => ({
+  useAuth: () => ({ role: 'GlobalAdmin' }),
+}))
+
 function renderAgreementEditor(path: string) {
-  return render(
+  return renderWithCalendar('2026-11-12',
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/global/overenskomster/new" element={<AgreementConfigEditor />} />
@@ -73,7 +80,7 @@ describe('the stage-0 label is gone from the config editors', () => {
   })
 
   it('position-override page', () => {
-    render(<PositionOverrideManagement />)
+    renderWithCalendar('2026-11-12', <PositionOverrideManagement />)
     expectNoLabel()
   })
 

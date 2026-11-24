@@ -4122,3 +4122,29 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - SEC-068's class reaches `{employeeId}` segments too (`OrgScopeValidator.cs:169`). The row is widened at this stack's merge.
   - A stale comment at `Contracts/EmployeeFieldResponses.cs:41-42` ("today UTC"; the Copenhagen business day since S142).
 - **The security consult and TASK-14836-T were dispatched together** on `e9618cb8`. The consult's negatives go to -T as they arrive.
+
+**TASK-14838 reviewed, cycle 5, and merged, 2026-11-24.**
+- **Codex c5, rerun after its usage limit reset: APPROVED.** It found no new finding and closed all of cycle 4. The only item left open is Fable c4 NOTE 5, which is pre-existing, unproven and accepted under C4-R2.
+- **Both lenses approved at cycle 5.** 5α c5 passed, and the full vitest run passed with 1311 tests.
+- **Merged** `--no-ff` (this commit). It carries TASK-14838, FU-1 to FU-4, and the reviews of cycles 1 to 5.
+- **What the owner gets, in plain words.** The agreement-config publish dialog and the position-override page now show and send an "applies from" date.
+  - They offer only dates the server accepts: not in the future, and not before the version being replaced.
+  - When a change needs a Monday, the screen offers the nearest Mondays as "Brug …" buttons.
+  - Refusals are shown in Danish.
+  - A late answer from the server never disturbs what the administrator is doing now, and one form's refusal never wipes another's.
+- **O-33 (1), the interim ends:** O-12 (7)'s interim ends at this merge. Until now, four actions were refused on any day but a Monday: publishing a change to the weekly norm, overtime, merarbejde or norm model, and creating, switching off or switching on a position override. The editors now send a date and offer the nearest Monday. QUAL-BF-007's row is updated in this commit; the Monday rule itself stays until stage 1.
+- **Carried to the close (register candidates):**
+  - (1) **A lost update on the position-override page.** This is pre-existing and Medium in engineering terms (Fable c5 NOTE 5; ADR-019, optimistic concurrency).
+    - What happens: a list re-read under an open row edit refreshes the row's ETag, the version stamp sent with the save. Another admin's change is then overwritten without the 412 banner.
+    - The fix: send the ETag captured when the edit opened.
+  - (2) After a failed list re-read, "Opret" stays disabled with no retry control, and the error banner has no `role="alert"` (pre-existing).
+  - (3) A failed quiet re-read after a late publish success leaves the old draft on screen (C4-R2, unproven).
+  - (4) Two slightly untrue comments: `PositionOverrideManagement.tsx:152`, and the hook's `hasRows` comment and name.
+  - (5) FU-4's two side effects, accepted:
+    - a create form reopened during a slow create stays key-locked until the old answer arrives;
+    - "Opret" is not held back during a quiet re-read.
+- **For the model-routing register:** TASK-14838 took five review cycles.
+  - Each fix-up closed the previous cycle's findings, and the next cycle found a narrower interaction edge in the editors' async state.
+  - The pattern matches the 14834 stack: the server side settled early and the long tail was frontend late-answer handling.
+  - Codex led cycles 1 to 3; Fable found cycle 4's second gap, the table re-mount.
+- **The next CI run must show:** the frontend build with AC-C2v and AC-C2w (CI-W6).

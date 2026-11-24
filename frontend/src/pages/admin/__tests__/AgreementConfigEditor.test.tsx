@@ -6,9 +6,10 @@
 // Asserts the stale-state banner renders with the version pair, then asserts
 // that clicking "Genindlaes" triggers a refetch and clears the banner.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { AgreementConfigEditor } from '../AgreementConfigEditor'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -89,8 +90,9 @@ beforeEach(() => {
   Object.keys(mockStorage).forEach((k) => delete mockStorage[k])
 })
 
+// S148 T23: the editor reads the Copenhagen today (the publish date), so it renders inside a calendar.
 function renderEditor() {
-  return render(
+  return renderWithCalendar('2026-11-12',
     <MemoryRouter initialEntries={['/global/overenskomster/11111111-1111-1111-1111-111111111111']}>
       <Routes>
         <Route path="/global/overenskomster/:configId" element={<AgreementConfigEditor />} />

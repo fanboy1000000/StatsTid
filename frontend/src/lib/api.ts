@@ -282,8 +282,9 @@ export type OperationIn<Paths, M extends MethodKey, P extends keyof Paths> = Pat
   ? Op
   : never
 
-/** The declared JSON request-body type of an operation; `undefined` when the
-    operation takes no body (the generated `requestBody?: never`). */
+/** The declared REQUIRED JSON request-body type of an operation; `undefined` when
+    the body is forbidden (the generated `requestBody?: never`) or optional (see
+    `OptionalBodyOf`). */
 export type RequestBodyOf<Op> = Op extends {
   requestBody: { content: { 'application/json': infer B } }
 }
@@ -309,13 +310,27 @@ export type QueryParamsOf<Op> = ParametersOf<Op> extends { query?: infer X }
 
 /** The structured options for a typed body-verb call: `params.path` REQUIRED
     for a templated route, FORBIDDEN for a literal one; `query` optional when
-    declared; `body` REQUIRED when the operation declares a JSON request body,
-    FORBIDDEN otherwise. */
+    declared; `body` has three cases: REQUIRED when the operation declares a JSON
+    request body, OPTIONAL and typed when it declares `requestBody?`, FORBIDDEN
+    otherwise. */
 export type StructuredOptionsForOp<Op> = (PathParamsOf<Op> extends undefined
   ? { params?: undefined }
   : { params: { path: PathParamsOf<Op> } }) &
   (QueryParamsOf<Op> extends undefined ? { query?: undefined } : { query?: QueryParamsOf<Op> }) &
-  (RequestBodyOf<Op> extends undefined ? { body?: undefined } : { body: RequestBodyOf<Op> })
+  (RequestBodyOf<Op> extends undefined
+    ? OptionalBodyOf<Op> extends undefined
+      ? { body?: undefined }
+      : { body?: OptionalBodyOf<Op> }
+    : { body: RequestBodyOf<Op> })
+
+/** The JSON body type of an operation whose `requestBody` is optional; `undefined` when it has none. */
+type OptionalBodyOf<Op> = Op extends { requestBody?: infer R }
+  ? [NonNullable<R>] extends [never]
+    ? undefined
+    : NonNullable<R> extends { content: { 'application/json': infer B } }
+      ? B
+      : undefined
+  : undefined
 
 // The real-spec bindings (fully evaluated literal-key unions).
 type PostPath = TypedPathIn<paths, 'post'>

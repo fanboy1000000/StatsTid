@@ -54,6 +54,9 @@ export interface ConfigMutationError extends Error {
     expectedVersion?: number
     actualVersion?: number
     currentState?: unknown
+    /** The applies-from date refusal (400): one entry per refused field, with the dates the
+        server would accept (`nearestValid`). Read by `pages/admin/nearestMondayOffer.ts`. */
+    fields?: { field?: string; code?: string; nearestValid?: string[] }[]
   }
 }
 
@@ -118,6 +121,65 @@ export function useAgreementConfigs(statusFilter?: string) {
   useEffect(() => { fetchConfigs() }, [fetchConfigs])
 
   return { configs, loading, error, refetch: fetchConfigs }
+}
+
+export interface NewestVersionDate {
+  /** `loading` from the start of every read; `loaded` when the list was read; `failed` when it was not. */
+  status: 'loading' | 'loaded' | 'failed'
+  /** The newest published version's date; null unless `loaded`, and null when `loaded` with no published version. */
+  date: string | null
+  /** Reads the list again (after a failure). */
+  retry: () => void
+}
+
+/**
+ * The date the newest PUBLISHED version of a key applies from (the lower limit of a new publish's
+ * date), read from the per-key version list. Each result is stored with the key and the attempt it
+ * answers, and the hook returns `loading` whenever those differ from the current inputs: a previous
+ * key's, a failed attempt's or a not-yet-started read's value is never carried over, not even for
+ * the render before the effect runs. The status is `loaded` with the date (null when the key has no
+ * published version) or `failed`; `retry` reads again. Pass an empty `agreementCode` to skip the
+ * read (the status stays `loading`). The server stays the authority and refuses a date before the
+ * newest version.
+ */
+export function useNewestVersionDate(agreementCode: string, okVersion: string): NewestVersionDate {
+  const key = `${agreementCode}|${okVersion}`
+  const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<{
+    key: string
+    attempt: number
+    status: NewestVersionDate['status']
+    date: string | null
+  }>({ key: '', attempt: 0, status: 'loading', date: null })
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
+
+  useEffect(() => {
+    setState({ key, attempt, status: 'loading', date: null })
+    if (!agreementCode || !okVersion) return
+    let cancelled = false
+    apiClient
+      .get('/api/agreement-configs/{agreementCode}/{okVersion}', {
+        params: { path: { agreementCode, okVersion } },
+      })
+      .then((result) => {
+        if (cancelled) return
+        if (!result.ok) {
+          setState({ key, attempt, status: 'failed', date: null })
+          return
+        }
+        const dates: string[] = []
+        for (const c of result.data) {
+          if (c.publishedAt !== null && c.appliesFrom !== null) dates.push(c.appliesFrom)
+        }
+        dates.sort()
+        setState({ key, attempt, status: 'loaded', date: dates.length > 0 ? dates[dates.length - 1] : null })
+      })
+    return () => { cancelled = true }
+  }, [key, agreementCode, okVersion, attempt])
+
+  return state.key === key && state.attempt === attempt
+    ? { status: state.status, date: state.date, retry }
+    : { status: 'loading', date: null, retry }
 }
 
 export function useAgreementConfig(configId: string) {
@@ -233,11 +295,13 @@ export function useAgreementConfigActions() {
   const publishConfig = async (
     configId: string,
     ifMatch: string,
+    appliesFrom: string,
   ): Promise<PublishResponse & { etag: string | null; version: number | null }> => {
     const result = await apiFetchWithEtag('/api/agreement-configs/{configId}/publish', {
       method: 'POST',
       params: { path: { configId } },
       ifMatch,
+      body: { appliesFrom },
     })
     if (!result.ok) {
       throw makeMutationError(result.status, result.error, result.body)

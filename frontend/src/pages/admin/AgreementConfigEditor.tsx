@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback, type ChangeEvent, useRef } from 'reac
 import { useParams, useNavigate } from 'react-router-dom'
 import { apiFetchWithEtag } from '../../lib/api'
 import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
-import { useAgreementConfigActions, isConfigMutationError } from '../../hooks/useAgreementConfigs'
+import { useAgreementConfigActions, useNewestVersionDate, isConfigMutationError } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
 import { EntitlementSection, type Entitlement } from '../../components/admin/EntitlementSection'
 import { Spinner } from '../../components/ui'
+import { useCalendarToday } from '../../contexts/CalendarContext'
+import { formatEffectiveDateLong } from './editPerson/EffectiveDatePicker'
+import { dateBoundRefusal, dateRefusalFrom, isCalendarDate, laterDate, predecessorFloor, type DateRefusal } from './nearestMondayOffer'
 import styles from './AgreementConfigEditor.module.css'
 
 // S118 / TASK-11801 (PAT-012) — the by-id GET rides the TYPED spec-keyed form;
@@ -161,16 +164,56 @@ export function AgreementConfigEditor() {
 
   const isReadOnly = config !== null && config.status !== 'DRAFT'
 
+  // The publish date: today by default, never later (the server refuses a future date), never before
+  // the newest published version of the key. The server stays the authority on all three date rules;
+  // a refusal is shown with the dates it would accept (nearestMondayOffer.ts).
+  const today = useCalendarToday()
+  // The version list is read when the publish dialog opens (an empty code skips the read).
+  const newestVersion = useNewestVersionDate(
+    confirmDialog === 'publish' ? (config?.agreementCode ?? '') : '',
+    config?.okVersion ?? '',
+  )
+  // The date the server last named as the earliest it accepts (a BEFORE_PREDECESSOR answer): it
+  // raises the version read's bound, never lowers it; the next opening of the publish dialog clears it.
+  const [floor, setFloor] = useState<string | null>(null)
+  const publishBound = laterDate(newestVersion.date, floor)
+  // The current dialog interaction, bumped (changed()) when a dialog opens, when the publish date is
+  // changed, when a "Brug ..." offer is taken, and when closeDialog() closes it. The not-DRAFT effect
+  // below closes without bumping; harmless, as no publish is pending then. The answer to an earlier
+  // publish compares its value with the current one to tell whether it still belongs to what is on screen.
+  const interaction = useRef(0)
+  const changed = () => { interaction.current += 1 }
+  const closeDialog = () => { changed(); setConfirmDialog(null) }
+  // null = untouched (today); a cleared field is '' and disables the confirm.
+  const [publishDate, setPublishDate] = useState<string | null>(null)
+  const [dateRefusal, setDateRefusal] = useState<DateRefusal | null>(null)
+  const publishDateInput = useRef<HTMLInputElement>(null)
+  const effectivePublishDate = publishDate ?? today
+  // The refusal the screen already knows (a date out of bounds), shown before anything is sent.
+  const boundRefusal =
+    newestVersion.status === 'loaded'
+      ? dateBoundRefusal(effectivePublishDate, today, publishBound)
+      : null
+  const publishBlocked =
+    newestVersion.status !== 'loaded' || !isCalendarDate(effectivePublishDate) || boundRefusal !== null
+  const shownRefusal = boundRefusal ?? dateRefusal
+
+  // The dialog opens with focus on its date input (publish only; archive has no field).
+  useEffect(() => {
+    if (confirmDialog === 'publish') publishDateInput.current?.focus()
+  }, [confirmDialog])
+
   // S126 / F2 — stale-response guard. Keyed on [configId, isNew]: navigating between config rows
   // while a load is in flight would otherwise let the abandoned config's response win, and this
   // handler also sets the ETag — so a stale landing would arm the NEXT If-Match with the wrong
   // version, turning a display race into a failed or misdirected write.
   const latestConfigRequestId = useRef(0)
 
-  const fetchConfig = useCallback(async () => {
+  // `quiet`: read again without replacing the page with the spinner, so an open dialog is not remounted.
+  const fetchConfig = useCallback(async (quiet = false) => {
     if (isNew || !configId) return
     const requestId = ++latestConfigRequestId.current
-    setLoading(true)
+    if (!quiet) setLoading(true)
     setError(null)
     // S25 / TASK-2506: capture the by-id ETag header for the next If-Match
     // (header-preferred, body.version fallback for cross-origin deployments).
@@ -197,6 +240,13 @@ export function AgreementConfigEditor() {
   }, [configId, isNew])
 
   useEffect(() => { fetchConfig() }, [fetchConfig])
+
+  // Defence in depth: a dialog never stays open on a config that is no longer a draft. Not reachable
+  // from the screen today (Publicer and Arkiver only show for a draft, and a late publish success
+  // arrives after its dialog is closed).
+  useEffect(() => {
+    if (config && config.status !== 'DRAFT') setConfirmDialog(null)
+  }, [config])
 
   const setField = <K extends keyof ConfigForm>(key: K, value: ConfigForm[K]) => {
     setForm((f) => ({ ...f, [key]: value }))
@@ -261,15 +311,37 @@ export function AgreementConfigEditor() {
       setError('ETag mangler — genindlaes konfigurationen.')
       return
     }
-    setConfirmDialog(null)
+    if (publishBlocked) return
+    const mine = interaction.current
     setSaving(true)
     setError(null)
     setStaleConflict(null)
+    setDateRefusal(null)
     try {
-      await publishConfig(configId, etag)
-      navigate('/global/overenskomster')
+      await publishConfig(configId, etag, effectivePublishDate)
+      // An answer for a dialog that was closed since changes nothing on screen except the config, which
+      // is read again without the page spinner (it is now published; the effect above closes any dialog).
+      if (mine === interaction.current) navigate('/global/overenskomster')
+      else await fetchConfig(true)
     } catch (err) {
-      handleMutationError(err)
+      if (mine !== interaction.current) return
+      // A refused date keeps the dialog open with the dates the server would accept; every other
+      // error closes it and shows as before. The server's own floor is kept and the version read
+      // is taken again, so the screen's bound catches up with the key.
+      const named = isConfigMutationError(err) ? predecessorFloor(err) : null
+      if (named) {
+        setFloor(named)
+        newestVersion.retry()
+      }
+      const refusal = isConfigMutationError(err)
+        ? dateRefusalFrom(err, today, laterDate(publishBound, named))
+        : null
+      if (refusal) {
+        setDateRefusal(refusal)
+      } else {
+        closeDialog()
+        handleMutationError(err)
+      }
     } finally {
       setSaving(false)
     }
@@ -281,7 +353,7 @@ export function AgreementConfigEditor() {
       setError('ETag mangler — genindlaes konfigurationen.')
       return
     }
-    setConfirmDialog(null)
+    closeDialog()
     setSaving(true)
     setError(null)
     setStaleConflict(null)
@@ -345,10 +417,14 @@ export function AgreementConfigEditor() {
           )}
           {!isNew && status === 'DRAFT' && (
             <>
-              <button className={styles.secondaryBtn} onClick={() => setConfirmDialog('publish')} disabled={saving}>
+              <button
+                className={styles.secondaryBtn}
+                onClick={() => { changed(); setPublishDate(null); setDateRefusal(null); setFloor(null); setConfirmDialog('publish') }}
+                disabled={saving}
+              >
                 Publicer
               </button>
-              <button className={styles.dangerBtn} onClick={() => setConfirmDialog('archive')} disabled={saving}>
+              <button className={styles.dangerBtn} onClick={() => { changed(); setConfirmDialog('archive') }} disabled={saving}>
                 Arkiver
               </button>
             </>
@@ -356,11 +432,6 @@ export function AgreementConfigEditor() {
           {!isNew && (status === 'ACTIVE' || status === 'ARCHIVED') && (
             <button className={styles.secondaryBtn} onClick={handleClone} disabled={saving}>
               Klon som kladde
-            </button>
-          )}
-          {!isNew && status === 'ACTIVE' && (
-            <button className={styles.dangerBtn} onClick={() => setConfirmDialog('archive')} disabled={saving}>
-              Arkiver
             </button>
           )}
           <button className={styles.secondaryBtn} onClick={() => navigate('/global/overenskomster')}>
@@ -389,24 +460,24 @@ export function AgreementConfigEditor() {
         <legend>Grundlaeggende</legend>
         <div className={styles.fieldGrid}>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Overenskomstkode</label>
-            <input className={styles.input} type="text" value={form.agreementCode} onChange={handleTextChange('agreementCode')} readOnly={isReadOnly} placeholder="f.eks. AC" />
+            <label className={styles.formLabel} htmlFor="ac-agreementCode">Overenskomstkode</label>
+            <input id="ac-agreementCode" className={styles.input} type="text" value={form.agreementCode} onChange={handleTextChange('agreementCode')} readOnly={isReadOnly} placeholder="f.eks. AC" />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>OK-version</label>
-            <input className={styles.input} type="text" value={form.okVersion} onChange={handleTextChange('okVersion')} readOnly={isReadOnly} placeholder="f.eks. OK24" />
+            <label className={styles.formLabel} htmlFor="ac-okVersion">OK-version</label>
+            <input id="ac-okVersion" className={styles.input} type="text" value={form.okVersion} onChange={handleTextChange('okVersion')} readOnly={isReadOnly} placeholder="f.eks. OK24" />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Normmodel</label>
-            <select className={styles.select} value={form.normModel} onChange={handleTextChange('normModel')} disabled={isReadOnly}>
+            <label className={styles.formLabel} htmlFor="ac-normModel">Normmodel</label>
+            <select id="ac-normModel" className={styles.select} value={form.normModel} onChange={handleTextChange('normModel')} disabled={isReadOnly}>
               {NORM_MODELS.map((m) => (
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </select>
           </div>
           <div className={`${styles.formField} ${styles.fieldGridFull}`}>
-            <label className={styles.formLabel}>Beskrivelse</label>
-            <textarea className={styles.textarea} value={form.description ?? ''} onChange={handleTextChange('description')} readOnly={isReadOnly} placeholder="Valgfri beskrivelse" />
+            <label className={styles.formLabel} htmlFor="ac-description">Beskrivelse</label>
+            <textarea id="ac-description" className={styles.textarea} value={form.description ?? ''} onChange={handleTextChange('description')} readOnly={isReadOnly} placeholder="Valgfri beskrivelse" />
           </div>
         </div>
       </fieldset>
@@ -416,16 +487,16 @@ export function AgreementConfigEditor() {
         <legend>Normtid</legend>
         <div className={styles.fieldGrid}>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Ugentlige normtimer</label>
-            <input className={styles.input} type="number" step="0.01" value={form.weeklyNormHours} onChange={handleNumberChange('weeklyNormHours')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-weeklyNormHours">Ugentlige normtimer</label>
+            <input id="ac-weeklyNormHours" className={styles.input} type="number" step="0.01" value={form.weeklyNormHours} onChange={handleNumberChange('weeklyNormHours')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Normperiode (uger)</label>
-            <input className={styles.input} type="number" step="1" value={form.normPeriodWeeks} onChange={handleNumberChange('normPeriodWeeks')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-normPeriodWeeks">Normperiode (uger)</label>
+            <input id="ac-normPeriodWeeks" className={styles.input} type="number" step="1" value={form.normPeriodWeeks} onChange={handleNumberChange('normPeriodWeeks')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Arlige normtimer</label>
-            <input className={styles.input} type="number" step="0.01" value={form.annualNormHours} onChange={handleNumberChange('annualNormHours')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-annualNormHours">Arlige normtimer</label>
+            <input id="ac-annualNormHours" className={styles.input} type="number" step="0.01" value={form.annualNormHours} onChange={handleNumberChange('annualNormHours')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -435,8 +506,8 @@ export function AgreementConfigEditor() {
         <legend>Flex</legend>
         <div className={styles.fieldGrid}>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Maks. flexsaldo (timer)</label>
-            <input className={styles.input} type="number" step="0.01" value={form.maxFlexBalance} onChange={handleNumberChange('maxFlexBalance')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-maxFlexBalance">Maks. flexsaldo (timer)</label>
+            <input id="ac-maxFlexBalance" className={styles.input} type="number" step="0.01" value={form.maxFlexBalance} onChange={handleNumberChange('maxFlexBalance')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -454,12 +525,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="hasMerarbejde">Merarbejde aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Overarbejdsgraense 50% (timer)</label>
-            <input className={styles.input} type="number" step="0.01" value={form.overtimeThreshold50} onChange={handleNumberChange('overtimeThreshold50')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-overtimeThreshold50">Overarbejdsgraense 50% (timer)</label>
+            <input id="ac-overtimeThreshold50" className={styles.input} type="number" step="0.01" value={form.overtimeThreshold50} onChange={handleNumberChange('overtimeThreshold50')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Overarbejdsgraense 100% (timer)</label>
-            <input className={styles.input} type="number" step="0.01" value={form.overtimeThreshold100} onChange={handleNumberChange('overtimeThreshold100')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-overtimeThreshold100">Overarbejdsgraense 100% (timer)</label>
+            <input id="ac-overtimeThreshold100" className={styles.input} type="number" step="0.01" value={form.overtimeThreshold100} onChange={handleNumberChange('overtimeThreshold100')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -473,16 +544,16 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="eveningSupplementEnabled">Aftentillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Start (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.eveningStart} onChange={handleNumberChange('eveningStart')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-eveningStart">Start (time)</label>
+            <input id="ac-eveningStart" className={styles.input} type="number" step="1" value={form.eveningStart} onChange={handleNumberChange('eveningStart')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Slut (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.eveningEnd} onChange={handleNumberChange('eveningEnd')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-eveningEnd">Slut (time)</label>
+            <input id="ac-eveningEnd" className={styles.input} type="number" step="1" value={form.eveningEnd} onChange={handleNumberChange('eveningEnd')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.eveningRate} onChange={handleNumberChange('eveningRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-eveningRate">Sats</label>
+            <input id="ac-eveningRate" className={styles.input} type="number" step="0.01" value={form.eveningRate} onChange={handleNumberChange('eveningRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -496,16 +567,16 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="nightSupplementEnabled">Nattillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Start (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.nightStart} onChange={handleNumberChange('nightStart')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nightStart">Start (time)</label>
+            <input id="ac-nightStart" className={styles.input} type="number" step="1" value={form.nightStart} onChange={handleNumberChange('nightStart')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Slut (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.nightEnd} onChange={handleNumberChange('nightEnd')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nightEnd">Slut (time)</label>
+            <input id="ac-nightEnd" className={styles.input} type="number" step="1" value={form.nightEnd} onChange={handleNumberChange('nightEnd')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.nightRate} onChange={handleNumberChange('nightRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nightRate">Sats</label>
+            <input id="ac-nightRate" className={styles.input} type="number" step="0.01" value={form.nightRate} onChange={handleNumberChange('nightRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -519,12 +590,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="weekendSupplementEnabled">Weekendtillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Lordagssats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.weekendSaturdayRate} onChange={handleNumberChange('weekendSaturdayRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-weekendSaturdayRate">Lordagssats</label>
+            <input id="ac-weekendSaturdayRate" className={styles.input} type="number" step="0.01" value={form.weekendSaturdayRate} onChange={handleNumberChange('weekendSaturdayRate')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sondagssats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.weekendSundayRate} onChange={handleNumberChange('weekendSundayRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-weekendSundayRate">Sondagssats</label>
+            <input id="ac-weekendSundayRate" className={styles.input} type="number" step="0.01" value={form.weekendSundayRate} onChange={handleNumberChange('weekendSundayRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -538,8 +609,8 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="holidaySupplementEnabled">Helligdagstillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.holidayRate} onChange={handleNumberChange('holidayRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-holidayRate">Sats</label>
+            <input id="ac-holidayRate" className={styles.input} type="number" step="0.01" value={form.holidayRate} onChange={handleNumberChange('holidayRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -553,8 +624,8 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="onCallDutyEnabled">Radighedsvagt aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.onCallDutyRate} onChange={handleNumberChange('onCallDutyRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-onCallDutyRate">Sats</label>
+            <input id="ac-onCallDutyRate" className={styles.input} type="number" step="0.01" value={form.onCallDutyRate} onChange={handleNumberChange('onCallDutyRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -568,12 +639,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="callInWorkEnabled">Tilkald aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Minimumstimer</label>
-            <input className={styles.input} type="number" step="0.01" value={form.callInMinimumHours} onChange={handleNumberChange('callInMinimumHours')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-callInMinimumHours">Minimumstimer</label>
+            <input id="ac-callInMinimumHours" className={styles.input} type="number" step="0.01" value={form.callInMinimumHours} onChange={handleNumberChange('callInMinimumHours')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.callInRate} onChange={handleNumberChange('callInRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-callInRate">Sats</label>
+            <input id="ac-callInRate" className={styles.input} type="number" step="0.01" value={form.callInRate} onChange={handleNumberChange('callInRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -587,12 +658,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="travelTimeEnabled">Rejsetid aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Arbejdsrejse-sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.workingTravelRate} onChange={handleNumberChange('workingTravelRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-workingTravelRate">Arbejdsrejse-sats</label>
+            <input id="ac-workingTravelRate" className={styles.input} type="number" step="0.01" value={form.workingTravelRate} onChange={handleNumberChange('workingTravelRate')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Ikke-arbejdsrejse-sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.nonWorkingTravelRate} onChange={handleNumberChange('nonWorkingTravelRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nonWorkingTravelRate">Ikke-arbejdsrejse-sats</label>
+            <input id="ac-nonWorkingTravelRate" className={styles.input} type="number" step="0.01" value={form.nonWorkingTravelRate} onChange={handleNumberChange('nonWorkingTravelRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -610,6 +681,12 @@ export function AgreementConfigEditor() {
             <span className={styles.metadataValue}>{formatDateTime(config.updatedAt)}</span>
             <span className={styles.metadataLabel}>Publiceret</span>
             <span className={styles.metadataValue}>{formatDateTime(config.publishedAt)}</span>
+            {config.appliesFrom && (
+              <>
+                <span className={styles.metadataLabel}>Gælder fra</span>
+                <span className={styles.metadataValue}>{formatEffectiveDateLong(config.appliesFrom)}</span>
+              </>
+            )}
             <span className={styles.metadataLabel}>Klonet fra</span>
             <span className={styles.metadataValue}>{config.clonedFromId ?? '\u2014'}</span>
           </div>
@@ -622,15 +699,20 @@ export function AgreementConfigEditor() {
           configId={configId}
           entitlements={entitlements}
           readOnly={entitlementsReadOnly}
-          onRefresh={fetchConfig}
+          onRefresh={() => fetchConfig()}
         />
       )}
 
       {/* Confirm dialogs */}
       {confirmDialog && (
-        <div className={styles.overlay} onClick={() => setConfirmDialog(null)}>
-          <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
-            <h2 className={styles.dialogTitle}>
+        <div className={styles.overlay} onClick={closeDialog}>
+          <div
+            className={styles.dialog}
+            role="dialog"
+            aria-labelledby="ac-dialog-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className={styles.dialogTitle} id="ac-dialog-title">
               {confirmDialog === 'publish' ? 'Publicer overenskomst' : 'Arkiver overenskomst'}
             </h2>
             <p className={styles.dialogText}>
@@ -638,13 +720,67 @@ export function AgreementConfigEditor() {
                 ? 'Er du sikker pa, at du vil publicere denne konfiguration? Den kan ikke redigeres efter publicering.'
                 : 'Er du sikker pa, at du vil arkivere denne konfiguration?'}
             </p>
+            {confirmDialog === 'publish' && (
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="ac-publish-date">Gælder fra</label>
+                <input
+                  className={styles.input}
+                  id="ac-publish-date"
+                  type="date"
+                  ref={publishDateInput}
+                  value={effectivePublishDate}
+                  max={today}
+                  min={publishBound ?? undefined}
+                  disabled={saving}
+                  onChange={(e) => { changed(); setPublishDate(e.target.value); setDateRefusal(null) }}
+                  aria-describedby={newestVersion.status === 'loaded' ? 'ac-publish-date-help' : undefined}
+                />
+                {newestVersion.status === 'failed' && (
+                  <div className={styles.alert} role="alert">
+                    Datoen for den seneste publicerede version kunne ikke hentes.
+                    <button type="button" className={styles.secondaryBtn} onClick={() => { newestVersion.retry(); publishDateInput.current?.focus() }}>
+                      Prøv igen
+                    </button>
+                  </div>
+                )}
+                {newestVersion.status === 'loaded' && (
+                  <p className={styles.dialogText} id="ac-publish-date-help">
+                    {newestVersion.date
+                      ? `Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag eller før ${formatEffectiveDateLong(newestVersion.date)}, hvor den seneste publicerede version gælder fra.`
+                      : 'Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag.'}
+                  </p>
+                )}
+                {shownRefusal && (
+                  <div className={styles.alert} role="alert">
+                    {shownRefusal.text}
+                    {shownRefusal.buttons.map((b) => (
+                      <button
+                        key={b.date}
+                        type="button"
+                        className={styles.secondaryBtn}
+                        disabled={saving}
+                        onClick={() => {
+                          changed()
+                          setPublishDate(b.date)
+                          setDateRefusal(null)
+                          publishDateInput.current?.focus()
+                        }}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className={styles.dialogActions}>
-              <button className={styles.secondaryBtn} onClick={() => setConfirmDialog(null)}>
+              <button className={styles.secondaryBtn} onClick={closeDialog}>
                 Annuller
               </button>
               <button
                 className={confirmDialog === 'publish' ? styles.primaryBtn : styles.dangerBtn}
                 onClick={confirmDialog === 'publish' ? handlePublish : handleArchive}
+                disabled={confirmDialog === 'publish' && (saving || publishBlocked)}
               >
                 {confirmDialog === 'publish' ? 'Publicer' : 'Arkiver'}
               </button>
