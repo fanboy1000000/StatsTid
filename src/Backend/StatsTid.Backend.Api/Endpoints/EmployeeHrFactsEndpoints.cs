@@ -23,7 +23,7 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// their own record and treats a person past the leaver grace as gone. A person may read their own
 /// facts; nobody writes them: the regime decides the person's own pay, so the write refuses a self
 /// actor with 403, every role, GlobalAdmin included, and a second administrator makes the change
-/// (RES-003, through the shared predicate <see cref="ApprovalSelfGuard.IsSelf(ActorContext, string)"/>).</para>
+/// (RES-003, through the shared predicate of <see cref="ApprovalSelfGuard"/>).</para>
 ///
 /// <para><b>Each write is one transaction</b> (ADR-018 D3, ADR-026 D2): the person's <c>users</c> row
 /// locked, its organisation compared with the one the scope check authorised (SEC-062; 409 when a
