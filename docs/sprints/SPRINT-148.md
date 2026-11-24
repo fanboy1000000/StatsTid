@@ -3987,3 +3987,19 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
     - disabling actions the list already knows the server refuses, a register candidate;
     - a worded label for the anchor date, a register candidate.
   - **Cycle 3** runs on FU-2's delta (2 of 5 cycles used).
+
+**The 14834 stack, cycle 3** (`6630ad5a..4641778f`, FU-4; saved verbatim):
+- **FU-4 returned** `4641778f` (report `S148-TASK-14834-stack-FU-4-report.md`). Inline actions reconcile after every refresh. Late answers carry session and revision checks. Dates must be in a strict format. It adds two pins and an announced overlap sentence. vitest 1271; five facts red on `6630ad5a`.
+- **5α c3:** PASS.
+- **Codex c3:** CHANGES-REQUIRED. Every cycle-2 finding is closed. **One WARNING:** a late failure brings back the old earliest date, leaving a "Genindfør" button that silently does nothing. Two NOTEs: the inline year-test values, and year 0.
+- **Fable c3:** APPROVED-WITH-WARNINGS. It gives the same WARNING with the same case and fix, and says a one-line follow-up is enough.
+- **Ruled by the Orchestrator** (`S148-TASK-14834-stack-5a-rulings-c3.md`):
+  - **FU-5,** a continuation of the FU-4 agent:
+    - a functional state update;
+    - two facts;
+    - discriminating year values;
+    - year at least 1;
+    - positive test anchors;
+    - the button stays busy until the refresh returns.
+  - **Accepted:** a late success after a retyped date is not announced. Register candidate.
+  - **Cycle 4** is a light review of FU-5's delta (3 of 5 cycles used).
