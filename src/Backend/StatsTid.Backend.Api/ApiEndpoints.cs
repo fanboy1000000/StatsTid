@@ -24,6 +24,7 @@ public static class ApiEndpoints
         app.MapUnitEndpoints(); // S104 ADR-038 D3 — units CRUD + leader designate/remove + same-Org person unit-assign
         app.MapApprovalEndpoints();
         app.MapConfigEndpoints();
+        app.MapCustomaryDayEndpoints();
         app.MapSkemaEndpoints();
         app.MapProjectEndpoints();
         app.MapAgreementConfigEndpoints();

@@ -6,8 +6,10 @@
 //
 // The user picks (Organization, Agreement, OkVersion) and the profile editor
 // loads the currently active profile (or signals "no profile — central applies"
-// for first creation). All work happens inside the (org, agreement, OkVersion)
-// scope — you can switch tuples freely without losing tab state.
+// for first creation). Profile work happens inside the (org, agreement, OkVersion)
+// scope — you can switch tuples freely without losing tab state. Customary days are the
+// exception: they are scoped to the organisation alone, and their editor is remounted per
+// organisation so no pending write or draft crosses a switch.
 //
 // SCOPE: basic functional only — no Phase-5 polish (per the user's S21 cycle-1
 // resolution).
@@ -33,6 +35,7 @@ import {
   Table,
 } from '../../components/ui'
 import { ProfileEditor } from '../../components/config/ProfileEditor'
+import { CustomaryDaysEditor } from '../../components/config/CustomaryDaysEditor'
 import { historySettingLines } from '../../components/config/profileSettingsCopy'
 import styles from './ConfigManagement.module.css'
 
@@ -324,6 +327,17 @@ export function ConfigManagement() {
       ) : (
         <div className={styles.emptyState}>
           Vaelg organisation, overenskomst og OK-version for at se historik.
+        </div>
+      ),
+    },
+    {
+      value: 'customs',
+      label: 'Kutymefridage',
+      content: selectedOrgId ? (
+        <CustomaryDaysEditor key={selectedOrgId} orgId={selectedOrgId} agreementOptions={AGREEMENT_OPTIONS} />
+      ) : (
+        <div className={styles.emptyState}>
+          Vælg en organisation for at se kutymefridage.
         </div>
       ),
     },

@@ -13,6 +13,8 @@ interface SelectProps {
   placeholder?: string
   disabled?: boolean
   id?: string
+  invalid?: boolean
+  describedBy?: string
 }
 
 export function Select({
@@ -22,6 +24,8 @@ export function Select({
   placeholder = 'Select...',
   disabled = false,
   id,
+  invalid,
+  describedBy,
 }: SelectProps) {
   return (
     <SelectPrimitive.Root
@@ -29,7 +33,12 @@ export function Select({
       onValueChange={onValueChange}
       disabled={disabled}
     >
-      <SelectPrimitive.Trigger className={styles.trigger} id={id}>
+      <SelectPrimitive.Trigger
+        className={styles.trigger}
+        id={id}
+        aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
+      >
         <SelectPrimitive.Value placeholder={placeholder} />
         <SelectPrimitive.Icon className={styles.icon}>
           <ChevronDownIcon />

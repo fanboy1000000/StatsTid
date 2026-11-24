@@ -4027,3 +4027,28 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **Its full vitest never completed.** One run was cut off by a pipe; the rerun was reaped. On the way it found and fixed one regression.
 - **The Orchestrator** stopped the two orphaned vitest processes and is running the full suite alone.
 - **Cycle 3** is running: Codex and 5α, then Fable.
+
+**The 14834 stack reviewed, cycles 4 and 5, and merged, 2026-11-24.**
+- **FU-6** `db953d63`: only the newest list re-read releases the inline lock. One fact, red on `58cad448`.
+- **Cycle 5 (the last): both lenses APPROVED.** 5α c5 PASS; Codex c5 APPROVED; Fable c5 APPROVED, with two NOTEs: a release-after-late-success fact is unpinned, and a 50 ms wait. Both are accepted.
+- **Orchestrator comment-only commit** `a65ce939` (C2-R2): the access test's docstrings say what the arms pin. The write arms pin "refused either way"; the GET arms pin the validator.
+- **Merged** `--no-ff` (this commit). It carries TASK-14834 + -T, REGEN, TASK-14835, the security consult, FU-1 to FU-6 and the remarks.
+- **In the merge commit:**
+  - O-20 / C2-R3: `CustomaryDayChanged.cs`'s "Nothing emits it yet" sentence and the catalog row's "define-only" note are made true.
+  - The ROADMAP line for S1-9, widened by C2-R3 to a wrong stop date as well as a wrong start. It also records the form-exact overlap key and the precedence the reader must define.
+  - **SEC-068** (Low, unproven): a NUL in a route's organisation id is likely answered by a 500 (consult § 3.3, R4).
+- **What the owner gets, in plain words.** A local administrator records the institution's own days off and closure days on a new "Kutymefridage" tab, and can stop and later reinstate them.
+  - Every change is audited.
+  - Only that institution's own administrators can see or change them.
+  - The screen never offers a duplicate or a date the server would refuse, and it stays correct when saves overlap.
+  - Nothing reaches pay before S1-9.
+- **Told to the owner (O-17; told, not asked):**
+  - (1) A wrong far-future start or stop date cannot be undone in the product. S1-9 decides a void (ROADMAP).
+  - (2) The overlap key leaves out `kind` and treats a recurring day and a single date as different, as ruling 8 is written.
+  - (3) The kit's `Select` and `Radio` gained optional, additive accessibility props. The design-sync gate will warn; it is advisory.
+- **Carried to the close (register candidates):**
+  - the lock-time 403 writes no log line;
+  - a late success after a retyped date is not announced;
+  - `confirm()`'s re-check is unpinned defence in depth.
+- **For the model-routing register:** the 14834 stack took five review cycles. Each of FU-3 to FU-6 closed the previous cycle's findings and exposed a narrower async edge in the editor. Codex found each new edge first; Fable agreed or called it harmless. The server side was settled at cycle 2.
+- **The next CI run must show:** AC-C10a, -10b (the six arms and the 40-case theory), -10d (with FU-1's edges and the soft-delete staging) and -10e green, and PIN-1 unchanged.
