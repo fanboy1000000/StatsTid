@@ -3931,3 +3931,13 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
     - BLOCKER: the override page's lower limit uses the row's own date, not the latest date across every row of the key; the database allows several inactive rows per key.
     - WARNINGs: a failed version read is treated as "no predecessor"; row-action errors are invisible.
   - The Fable lens is running.
+- **TASK-14838 5a cycle 1: Fable APPROVED-WITH-WARNINGS** (`S148-TASK-14838-5a-reviewer.md`). Its summary said the override lower bound "matches the server's … row's own date", which contradicts Codex's BLOCKER 2.
+  - **Adjudicated** (`S148-TASK-14838-5a-adjudication-c1.md`, Fable 5.2, RULED, no owner question). **Codex is upheld on both blockers.**
+  - (A) The server checks an override date against the newest version across every override row of the key (`PositionOverrideRepository.cs:665-703`). Several inactive rows may share a key. The brief's "one head per key" was false, and the internal lens repeated it.
+  - The remedy needs no new read: the loaded list holds every row, so the key's highest `appliesFrom` is the bound.
+  - (B) A client guard on both bounds is required on all five writes (the 14834 stack's R3(b) precedent).
+  - **Also fixed:** a failed or in-flight version read blocks "Publicer", with a message and a retry (new ruled copy); row-action errors become visible; the `api.ts` comments; an in-flight guard; the stale refusal; focus; dialog semantics; one date format; the tests.
+  - **Carried:** full dialog focus-trap accessibility goes to the QUAL floor at close.
+  - **Brief edits applied by the Orchestrator:** rulings 1 and 2's text in `TASK-14838.md`; § 3's line in `TASK-14850.md`, so `formatEffectiveDateLong` keeps its export.
+  - **For the model-routing register:** the internal lens repeated a brief's wrong fact; Codex caught it against the server code.
+  - **TASK-14838 FU-1 (`ux`)** follows, with a cycle 2 on its delta.
