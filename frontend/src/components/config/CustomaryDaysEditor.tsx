@@ -70,6 +70,12 @@ const FORBIDDEN_TEXT = 'Du har ikke adgang til at ændre denne institutions kuty
 const NOT_FOUND_TEXT = 'Dagen findes ikke længere. Genindlæs siden.'
 const GENERIC_FAILURE = 'Ændringen kunne ikke gemmes. Prøv igen.'
 
+/** The last date the screen sends: 9999-12-31 has no later end date, so the server refuses it
+ * (DATE_OUT_OF_RANGE, which has no Danish text), and every date input stops one day short. */
+const MAX_DATE = '9999-12-30'
+/** A date the screen knows the server accepts: filled, not before `min`, not after MAX_DATE. */
+const dateAllowed = (d: string, min?: string) => !!d && (!min || d >= min) && d <= MAX_DATE
+
 /** A code to its Danish sentence; an unknown code gets the generic one, never the code or the English
  * error. `nearest` is the server's nearestValid[0] (BEFORE_WITHDRAWAL names the earliest date). */
 export function customaryDayErrorText(code: string | undefined, nearest?: string): string {
@@ -192,7 +198,23 @@ function formComplete(f: FormState): boolean {
   const dayOk = f.dayForm === 'yearly' ? !!f.month && !!f.day : f.dayForm === 'single' && !!f.date
   const partOk = f.part === 'WHOLE_DAY' || (f.part === 'FROM_TIME' && !!f.time) || (f.part === 'HOURS' && Number(f.hours) > 0)
   const modeOk = f.kind === 'CLOSURE_DAY' || (f.kind === 'PAID_DAY_OFF' && !!f.paidMode)
-  return dayOk && !!f.kind && partOk && modeOk && !!f.validFrom
+  return dayOk && !!f.kind && partOk && modeOk && dateAllowed(f.validFrom)
+    && (f.dayForm !== 'single' || dateAllowed(f.date))
+}
+
+/** True when a listed row already holds the draft's day for the same agreement scope and is open
+ * or ends after the draft's start: the server would answer 409 (form-exact key, ruling 8). */
+function duplicateListed(f: FormState, all: CustomaryDay[]): boolean {
+  if (!f.validFrom) return false
+  const yearly = f.dayForm === 'yearly' && !!f.month && !!f.day
+  const single = f.dayForm === 'single' && !!f.date
+  if (!yearly && !single) return false
+  const scope = f.agreement === ALL_AGREEMENTS ? null : f.agreement
+  return all.some(r => r.agreementCode === scope
+    && (yearly
+      ? r.recurringMonth === Number(f.month) && r.recurringDay === Number(f.day) && !r.singleDate
+      : r.singleDate === f.date)
+    && (!r.validTo || r.validTo > f.validFrom))
 }
 
 /** Only the chosen form's members are sent; the other form's are omitted. */
@@ -229,7 +251,8 @@ interface RadioGroupProps {
   error?: string
 }
 
-/** A `<fieldset>` with a `<legend>`; its refusal text is tied to the fieldset (no aria-invalid there). */
+/** A `<fieldset>` with a `<legend>`; its refusal text is tied to the fieldset, and each radio input
+ * of a refused group carries aria-invalid (the fieldset never does). */
 function RadioGroup({ legend, name, options, value, onChange, errorId, error }: RadioGroupProps) {
   return (
     <fieldset style={fieldsetStyle} aria-describedby={error ? errorId : undefined}>
@@ -243,6 +266,7 @@ function RadioGroup({ legend, name, options, value, onChange, errorId, error }: 
             value={o.value}
             label={o.label}
             checked={value === o.value}
+            invalid={!!error}
             onChange={() => onChange(o.value)}
           />
         ))}
@@ -263,7 +287,18 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState('')
   const [inline, setInline] = useState<Inline | null>(null)
+  const [busy, setBusy] = useState(false)
   const latest = useRef(0)
+  // What a completion is checked against: the organisation shown now (null once unmounted) and the
+  // row action being edited now. A result for anything else is not this screen's to show.
+  const liveOrg = useRef<string | null>(orgId)
+  const liveInline = useRef<Inline | null>(null)
+  const inFlight = useRef(false)
+  liveInline.current = inline
+  useEffect(() => {
+    liveOrg.current = orgId
+    return () => { liveOrg.current = null }
+  }, [orgId])
 
   const refresh = useCallback(async () => {
     const request = ++latest.current
@@ -282,7 +317,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    if (!formComplete(form) || saving) return
+    if (!formComplete(form) || saving || duplicateListed(form, rows)) return
     setSaving(true)
     setFieldErrors({})
     setFormError(null)
@@ -292,6 +327,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
       params: { path: { orgId } },
       body: toBody(form),
     })
+    if (liveOrg.current !== orgId) return
     setSaving(false)
     if (result.ok) {
       setForm(EMPTY_FORM)
@@ -305,8 +341,10 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
   }
 
   async function confirm() {
-    if (!inline || !inline.date) return
+    if (!inline || !dateAllowed(inline.date, inline.min) || inFlight.current) return
     const { id, action, date } = inline
+    inFlight.current = true
+    setBusy(true)
     const result = action === 'withdraw'
       ? await apiFetchWithEtag('/api/config/{orgId}/customary-days/{customId}/withdraw', {
         method: 'POST', params: { path: { orgId, customId: id } }, body: { validTo: date },
@@ -314,15 +352,22 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
       : await apiFetchWithEtag('/api/config/{orgId}/customary-days/{customId}/reinstate', {
         method: 'POST', params: { path: { orgId, customId: id } }, body: { validFrom: date },
       })
+    inFlight.current = false
+    if (liveOrg.current !== orgId) return
+    setBusy(false)
+    const same = liveInline.current?.id === id && liveInline.current.action === action
     if (result.ok) {
+      if (!same) { await refresh(); return }
       setInline(null)
       setFormError(null)
       setStatus(action === 'withdraw' ? `Dagen ophører fra ${longDate(date)}.` : `Dagen er genindført fra ${longDate(date)}.`)
       await refresh()
       return
     }
+    if (!same) return
     const refusal = toRefusal(action, result.status, result.body)
     const first = Object.values(refusal.fields)[0]
+    setStatus('')
     setInline({ ...inline, refusal: refusal.text ?? first ?? GENERIC_FAILURE })
   }
 
@@ -338,6 +383,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
   const err = (k: string) => fieldErrors[k]
   const inputProps = (k: string) => (err(k) ? { error: true, 'aria-describedby': errId(k) } : {})
   const maxDay = form.month ? daysInMonth(Number(form.month)) : 31
+  const duplicate = duplicateListed(form, rows)
   const dayOptions: Option[] = Array.from({ length: maxDay }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }))
 
   return (
@@ -383,10 +429,16 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
                         aria-describedby={here.refusal ? `cd-inline-err-${r.customId}` : undefined}
                         error={!!here.refusal}
                         min={here.min}
+                        max={MAX_DATE}
                         value={here.date}
                         onChange={e => setInline({ ...here, date: e.target.value, refusal: null })}
                       />
-                      <Button size="sm" disabled={!here.date} onClick={() => void confirm()}>
+                      <Button
+                        size="sm"
+                        disabled={!dateAllowed(here.date, here.min) || busy}
+                        aria-busy={busy}
+                        onClick={() => void confirm()}
+                      >
                         {here.action === 'withdraw' ? 'Afslut' : 'Genindfør'}
                       </Button>
                       <Button size="sm" variant="secondary" onClick={() => setInline(null)}>Annuller</Button>
@@ -424,6 +476,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
             <FormField label="Måned" htmlFor="cd-month">
               <Select
                 id="cd-month" options={MONTH_OPTIONS} value={form.month} placeholder="Vælg..."
+                invalid={!!err('recurringMonth')} describedBy={err('recurringMonth') ? errId('recurringMonth') : undefined}
                 onValueChange={v => set({ month: v, day: Number(form.day) > daysInMonth(Number(v)) ? '' : form.day })}
               />
               <FieldError id={errId('recurringMonth')} text={err('recurringMonth')} />
@@ -431,6 +484,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
             <FormField label="Dag" htmlFor="cd-day">
               <Select
                 id="cd-day" options={dayOptions} value={form.day} placeholder="Vælg..."
+                invalid={!!err('recurringDay')} describedBy={err('recurringDay') ? errId('recurringDay') : undefined}
                 onValueChange={v => set({ day: v })}
               />
               <FieldError id={errId('recurringDay')} text={err('recurringDay')} />
@@ -439,7 +493,10 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
         )}
         {form.dayForm === 'single' && (
           <FormField label="Dato" htmlFor="cd-date">
-            <Input id="cd-date" type="date" value={form.date} onChange={e => set({ date: e.target.value })} />
+            <Input
+              id="cd-date" type="date" max={MAX_DATE} value={form.date}
+              onChange={e => set({ date: e.target.value })} {...inputProps('singleDate')}
+            />
           </FormField>
         )}
 
@@ -483,6 +540,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
         <FormField label="Gælder for" htmlFor="cd-agreement">
           <Select
             id="cd-agreement" value={form.agreement} onValueChange={v => set({ agreement: v })}
+            invalid={!!err('agreementCode')} describedBy={err('agreementCode') ? errId('agreementCode') : undefined}
             options={[{ value: ALL_AGREEMENTS, label: 'Alle overenskomster' }, ...agreementOptions]}
           />
           <FieldError id={errId('agreementCode')} text={err('agreementCode')} />
@@ -490,7 +548,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
 
         <FormField label="Gælder fra" htmlFor="cd-valid-from">
           <Input
-            id="cd-valid-from" type="date" value={form.validFrom}
+            id="cd-valid-from" type="date" max={MAX_DATE} value={form.validFrom}
             onChange={e => set({ validFrom: e.target.value })} {...inputProps('validFrom')}
           />
           <FieldError id={errId('validFrom')} text={err('validFrom')} />
@@ -500,7 +558,14 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
           <Alert variant="error">{formError ?? unplaced.join(' ')}</Alert>
         )}
 
-        <Button type="submit" disabled={!formComplete(form) || saving} aria-busy={saving}>
+        {duplicate && <p id="cd-overlap" style={errorStyle}>{OVERLAP_TEXT}</p>}
+
+        <Button
+          type="submit"
+          disabled={!formComplete(form) || saving || duplicate}
+          aria-busy={saving}
+          aria-describedby={duplicate ? 'cd-overlap' : undefined}
+        >
           {saving ? 'Gemmer...' : 'Tilføj'}
         </Button>
       </form>

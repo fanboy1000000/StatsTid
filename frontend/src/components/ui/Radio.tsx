@@ -9,6 +9,8 @@ interface RadioProps {
   value: string
   id: string
   disabled?: boolean
+  invalid?: boolean
+  describedBy?: string
 }
 
 export function Radio({
@@ -19,6 +21,8 @@ export function Radio({
   value,
   id,
   disabled = false,
+  invalid,
+  describedBy,
 }: RadioProps) {
   return (
     <label htmlFor={id} className={styles.wrapper}>
@@ -31,6 +35,8 @@ export function Radio({
           checked={checked}
           onChange={onChange}
           disabled={disabled}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
           className={styles.input}
         />
         <span
