@@ -3941,3 +3941,26 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - **Brief edits applied by the Orchestrator:** rulings 1 and 2's text in `TASK-14838.md`; § 3's line in `TASK-14850.md`, so `formatEffectiveDateLong` keeps its export.
   - **For the model-routing register:** the internal lens repeated a brief's wrong fact; Codex caught it against the server code.
   - **TASK-14838 FU-1 (`ux`)** follows, with a cycle 2 on its delta.
+
+**The 14834 stack, cycle 2** (`52d300c7..6630ad5a`; saved verbatim):
+- **FU-3 returned** `6630ad5a` (report `S148-TASK-14834-stack-FU-3-report.md`): R3's editor fixes and the additive kit props on `Select`/`Radio`. vitest 108 / 1264. The Orchestrator ratifies its three judgement calls.
+- **5α c2: PASS** (`S148-TASK-14834-stack-5alpha-c2.md`). The one assertion it could not trace, the `Tildeling` aria check, was verified present and stricter.
+- **Codex c2: CHANGES-REQUIRED** (`S148-TASK-14834-stack-5a-codex-c2.raw.md`).
+  - BLOCKER: an inline "Genindfør" stays offered after a refresh makes it ineligible.
+  - WARNING: a late failure restores an old draft.
+  - WARNING: a five-digit year passes the date check.
+- **Fable c2: APPROVED** (`S148-TASK-14834-stack-5a-reviewer-c2.md`), NOTEs 1–6. It did not trace Codex's inline-across-refresh case.
+- **Ruled by the Orchestrator** (`S148-TASK-14834-stack-5a-rulings-c2.md`, C2-R1 to R4), taking the stricter remedy:
+  - **FU-4 (`ux`):** reconcile inline actions after every refresh; session ids and revisions for late responses; strict date format; pins for FU-3's two calls; `role="status"` on the duplicate sentence; one comment.
+  - The Orchestrator makes the access-test docstring edits (C2-R2).
+  - The merge carries widen the S1-9 ROADMAP line to a wrong stop date (C2-R3).
+  - Cycle 3 runs on FU-4's delta (cycles used: 2 of 5).
+
+**TASK-14838 FU-1 returned** `a10cd057` (report `S148-TASK-14838-FU-1-report.md`): adjudication rulings 1–5.
+- The key-wide lower bound, `newestKeyDate`.
+- Both bounds guarded on all five writes.
+- The version read gets a status and a retry.
+- Row errors are visible.
+- The R5 items.
+- Checks: vitest 112 / 1285; 18 facts red on `f474897f`; tsc, lint, `typecheck:e2e` and build clean.
+- Cycle 2 is running: Codex and 5α, then Fable.
