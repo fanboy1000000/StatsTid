@@ -261,6 +261,7 @@ describe('other refusals and other errors', () => {
     expect((screen.getByLabelText('Ændringen gælder fra') as HTMLInputElement).value).toBe(TODAY)
   })
 
+  // R (ruling 33): an error that is not one of the three date codes shows as it did before.
   it('a 400 without a date code keeps the page\'s own message (no Monday sentence)', async () => {
     mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {
