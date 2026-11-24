@@ -3668,3 +3668,20 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - routes are mapped in `ApiEndpoints.MapAll`, not `Program.cs`;
   - the absence-visibility write moved to `ConfigEndpoints.cs:584-607` and writes no audit row;
   - `init.sql`'s HR-facts seed belongs to 14836.
+
+**Wave 6 batches B and C adjudicated** (`.claude/reviews/S148-wave6BC-briefs-adjudication.md`, Fable 5.2, **RULED, no owner question**). A planner is applying the rulings and the plan "final + 30". The rulings, in plain words:
+- **Customary days:**
+  - The same day cannot be recorded twice while one is in force: a 409, behind an organisation-row lock.
+  - They get their own tab, "Kutymefridage".
+  - A stopped custom shows "Ophører fra", the first day it no longer applies.
+- **HR facts:**
+  - They are dated today or earlier, never before the current record. Future dating waits for S149, when pay first reads them; the owner is told at O-17.
+  - The write carries SEC-062's "the person moved while you saved" guard.
+  - Flex membership can be recorded without the overtime regime.
+  - The `init.sql` seed covers only the 19 named users: 11 OVERTIME and 8 NULL. The planner's counts were wrong, and a seed over every user would have leaked onto test users.
+- **TASK-14838 is split.**
+  - TASK-14838 keeps the central editors (the dates, both admissible Mondays offered, the lower limit at the newest version, no "Arkiver" on an active configuration, N-7's labels, four GlobalAdmin-only buttons hidden from a LocalAdmin). It can run at any stack boundary.
+  - **TASK-14850** (new, `ux`) takes the edit-person drawer (NR-P4, X7, the transfer refusals in Danish), after TASK-14837.
+- **Wave 6's merge order:** the 14832 stack → the 14834 stack → the 14836 stack → 14850 → **the QUAL-268 stack** (merged together, last, against the final drawer) → CI-W6. TASK-14838 goes at any boundary.
+- **All Danish copy is fixed verbatim** (rulings 15, 27 and 38).
+- **Eight plan-added AC ids.** **M-55** is local only; wave 6 still has no CI mutation run.
