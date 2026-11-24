@@ -27,7 +27,7 @@ namespace StatsTid.Tests.Regression.Infrastructure;
 /// not) corresponds to a null record naming <c>organisation</c> or <c>agreement_code</c>.
 /// Overlapping profile rows are included: the resolver's profile query takes the latest start (QUAL-263), as the timeline does, so the
 /// two agree there. The outcome mapping does not compare the part-time fraction, so the overlapping row's fraction (0.500) is
-/// present but not checked here. Docker-gated: CI-verified, never locally green.
+/// present but not checked here. Docker-gated, so CI is the verifier.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -48,7 +48,8 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
     ///
     /// <para>
     /// <b>Red conditions</b> (Docker-gated; CI-pending; N: the fixture includes overlapping profile rows, the divergence QUAL-263 pinned). Any day on which the two readers differ, for example a
-    /// resolver whose profile read takes the earliest start, or has no order, where profile rows overlap (12 and 13 March), a
+    /// resolver whose profile read takes the earliest start where profile rows overlap (12 and 13 March; red by rule), or has no order there
+    /// (red only while the database returns POS-B first, which it does on this fixture because POS-C is inserted last; not guaranteed), a
     /// reader that took the earliest start where other rows overlap, ignored an end date, or answered a record where the organisation row is
     /// missing, appears in the mismatch list and fails the first assertion; the explicit-expectation assertions fail if the fixture ever
     /// stops containing an overlap or one of the gap kinds.
@@ -132,6 +133,7 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
         // Profile rows: POS-A from 1 March to 10 March (exclusive), POS-B from 10 March to 26 March, POS-C 12-14 March (exclusive)
         // inside POS-B, so 12 and 13 March are covered by two rows and the latest start (POS-C) wins (QUAL-263). Its fraction differs
         // from 1.000 so the rows are not interchangeable; the outcome mapping does not compare it.
+        // POS-C is inserted after POS-B on purpose: a resolver with no ORDER BY then reads POS-B first and the fact is red. Do not reorder.
         await InsertProfileAsync("POS-A", "2026-03-01", "2026-03-10");
         await InsertProfileAsync("POS-B", "2026-03-10", "2026-03-26");
         await InsertProfileAsync("POS-C", "2026-03-12", "2026-03-14", 0.500m);
