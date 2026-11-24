@@ -881,7 +881,7 @@ function fieldErrorMessage(err: ProfileFieldError | undefined): string | undefin
   }
   if (err.code && CODE_MESSAGES[err.code]) return CODE_MESSAGES[err.code]
   if (err.message) return err.message
-  if (err.code) return err.code
+  if (err.code) return UNPLACEABLE_REFUSAL
   return 'Validering fejlede.'
 }
 

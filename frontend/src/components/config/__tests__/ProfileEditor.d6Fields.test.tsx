@@ -187,6 +187,8 @@ describe('ProfileEditor — new settings', () => {
   // [code, field, message, where the message must sit, the control's or group's name]
   type Place = 'input' | 'group'
   const CODES: [string, string, string, Place, string][] = [
+    // The legacy row keeps FormField's id-less error span (batch-A adjudication § 3): placement and
+    // aria-invalid only, no id / aria-describedby check for this case.
     ['MUST_BE_POSITIVE', 'WeeklyNormHours', 'Skal være større end 0.', 'input', 'Ugentlig normtimer'],
     ['MUST_NOT_BE_NEGATIVE', 'FlexMinusCapHours', 'Må ikke være negativ.', 'input',
       'Loft for minussaldo på flex (timer, uden minustegn)'],
@@ -258,6 +260,15 @@ describe('ProfileEditor — new settings', () => {
       const cap = screen.getByLabelText('Loft for plussaldo på flex (timer)')
       const msg = screen.getByText('Må ikke være negativ.')
       expect(ids(cap)).toContain(msg.id)
+    })
+
+    it('(j) a known field with an unmapped code shows the banner text under its control, never the code', async () => {
+      refuse([{ field: 'FlexPlusCapHours', code: 'SOMETHING_NEW' }])
+      const msg = await screen.findAllByText(BANNER)
+      expect(screen.queryByText('SOMETHING_NEW')).toBeNull()
+      const cap = screen.getByLabelText('Loft for plussaldo på flex (timer)')
+      expect(msg.some(m => ids(cap).includes(m.id))).toBe(true)
+      expect(cap.getAttribute('aria-invalid')).toBe('true')
     })
 
     it('(i) two entries for one field show only the first', async () => {
