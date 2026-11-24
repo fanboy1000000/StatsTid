@@ -162,6 +162,35 @@ public sealed class EventStoreInTxTests : IAsyncLifetime
         // (no closed rows here so a no-op for that branch), extends audit-action CHECK.
         await LegacyProfileSchema.RunS22MigrationAsync(_harness.ConnectionString);
 
+        // S148 C-4 (T16): the repository reads the profile's current shape; the pre-S22 table gains the eighteen settings columns before the read.
+        await using (var alterConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await alterConn.OpenAsync();
+            await using var alterCmd = new NpgsqlCommand(
+                """
+                ALTER TABLE local_agreement_profiles
+                    ADD COLUMN IF NOT EXISTS flex_settlement_period TEXT,
+                    ADD COLUMN IF NOT EXISTS flex_cap_test_period TEXT,
+                    ADD COLUMN IF NOT EXISTS flex_plus_cap_hours NUMERIC(6,2),
+                    ADD COLUMN IF NOT EXISTS flex_minus_cap_hours NUMERIC(6,2),
+                    ADD COLUMN IF NOT EXISTS flex_daily_credit_cap_hours NUMERIC(5,2),
+                    ADD COLUMN IF NOT EXISTS flex_above_cap_action TEXT,
+                    ADD COLUMN IF NOT EXISTS flex_leaving_action TEXT,
+                    ADD COLUMN IF NOT EXISTS office_hours_mon_start TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_mon_end TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_tue_start TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_tue_end TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_wed_start TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_wed_end TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_thu_start TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_thu_end TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_fri_start TIME,
+                    ADD COLUMN IF NOT EXISTS office_hours_fri_end TIME,
+                    ADD COLUMN IF NOT EXISTS paid_absence_credit_basis TEXT
+                """, alterConn);
+            await alterCmd.ExecuteNonQueryAsync();
+        }
+
         // Repo-side projection: Version reads as 1 (the column DEFAULT backfilled).
         var repo = new LocalAgreementProfileRepository(_harness.Factory);
         var current = await repo.GetCurrentOpenAsync(OrgId, AgreementCode, OkVersion);
