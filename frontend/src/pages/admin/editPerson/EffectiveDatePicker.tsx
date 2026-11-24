@@ -19,9 +19,9 @@
 //
 // SCOPE, stated precisely because the backend's own doc comments name the
 // same distinction (`AdminEndpoints.cs`, the `UpdateUserRequest` handler):
-// only the AGREEMENT CODE and the profile fields (deltid/stilling) are
-// temporal — this date decides when THOSE take effect. Name, e-mail,
-// organisation-placering and leadership are plain mutable columns with no
+// only the AGREEMENT CODE, the profile fields (deltid/stilling) and a move to
+// another organisation (TASK-14820) are temporal — this date decides when THOSE
+// take effect. Name, e-mail and leadership are plain mutable columns with no
 // "as of" concept in the domain model, and the same save always writes them
 // IMMEDIATELY regardless of this control. The banner below is worded to
 // that scope rather than claiming the whole save waits.
@@ -229,7 +229,7 @@ export function EffectiveDatePicker({
         )}
       </div>
       {blockedReason ? (
-        <div className={styles.sectionError} id="pd-effective-blocked" data-testid="pd-effective-blocked">
+        <div className={styles.sectionError} id="pd-effective-blocked" role="alert" data-testid="pd-effective-blocked">
           {blockedReason}
         </div>
       ) : (

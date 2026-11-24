@@ -219,7 +219,7 @@ export interface UserMutationError extends Error {
     error?: string
     expectedVersion?: number
     actualVersion?: number
-    /** The transfer refusals' shape (AdminEndpoints 400 "Transfer date validation failed"). */
+    /** The transfer refusals' shape (AdminEndpoints 400, `error` "Transfer date validation failed"). The error's own message is the raw response body, so a screen that does not map `fields` shows that body. */
     fields?: { field?: string; code?: string; nearestValid?: string[] }[]
   }
 }

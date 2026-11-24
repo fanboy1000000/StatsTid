@@ -758,10 +758,11 @@ export function PersonDrawer({
             />
           )}
 
-          {/* S141 / TASK-14111 — the effective-date picker. Governs BOTH
+          {/* S141 / TASK-14111 — the effective-date picker. Governs the
               dated writes this drawer performs (the agreement-code field
-              just above, and the profile fields further down) — one HR
-              decision for the whole save. Edit mode only: a brand-new
+              just above, the profile fields further down, and a move to
+              another organisation, TASK-14820) — one HR decision for the
+              whole save. Edit mode only: a brand-new
               person has no "existing value" for a scheduled change to
               apply against. */}
           {!isNew && (

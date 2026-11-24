@@ -40,6 +40,7 @@ import {
 } from '../pages/admin/editPerson/types'
 import { useCalendarToday } from '../contexts/CalendarContext'
 import { formatEffectiveDateLong } from '../pages/admin/editPerson/EffectiveDatePicker'
+import { UNPLACEABLE_REFUSAL } from '../components/config/profileSettingsCopy'
 
 // S34 TASK-3409 (ADR-023 D8) introduced this call as `todayIsoUtc()`, matching the backend's
 // then-UTC `same-day-only-edit` reference. S142 / TASK-14209 renamed it `todayIso()` and pointed it
@@ -248,8 +249,10 @@ export function useEditPerson() {
         }
         // The server is the authority on the transfer's date (C-13). Its two date refusals
         // arrive as a 400 with a `fields` entry on EffectiveFrom, `EFFECTIVE_FROM_NOT_TODAY_OR_PAST`
-        // or `BEFORE_CURRENT_ORGANISATION`; both are shown in Danish. Anything else is the
-        // server's own message.
+        // or `BEFORE_CURRENT_ORGANISATION`; both are shown in Danish, except that
+        // `BEFORE_CURRENT_ORGANISATION` without a `nearestValid` date shows the house's
+        // `UNPLACEABLE_REFUSAL` (no date to name). Anything else is the error's message, which is
+        // the raw response body (`api.ts`).
         const transferField =
           e.status === 400
             ? e.body?.fields?.find(
@@ -262,8 +265,10 @@ export function useEditPerson() {
         const msg =
           transferField?.code === 'EFFECTIVE_FROM_NOT_TODAY_OR_PAST'
             ? 'En flytning til en anden organisation kan ikke dateres frem i tiden.'
-            : transferField?.code === 'BEFORE_CURRENT_ORGANISATION' && nearest
-              ? `Flytningen kan tidligst gælde fra ${formatEffectiveDateLong(nearest)}, hvor medarbejderen kom til sin nuværende organisation.`
+            : transferField?.code === 'BEFORE_CURRENT_ORGANISATION'
+              ? nearest
+                ? `Flytningen kan tidligst gælde fra ${formatEffectiveDateLong(nearest)}, hvor medarbejderen kom til sin nuværende organisation.`
+                : UNPLACEABLE_REFUSAL
               : e instanceof Error
                 ? e.message
                 : String(e)

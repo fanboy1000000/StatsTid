@@ -195,3 +195,42 @@ describe('PersonDrawer — S148 / TASK-14850 NR-P4: no future date while the org
     expect(calls.find((c) => c.url.endsWith('/users/EMP1') && c.method === 'PUT')!.body?.effectiveFrom).toBe('2026-12-01')
   })
 })
+
+// C1-R1 (b), (d): the rewritten date-field texts are pinned exactly, and the block is announced.
+describe('PersonDrawer — S148 / TASK-14850 FU-1: date-field copy and the announced block', () => {
+  const HELPER =
+    'Forudfyldt med dagens dato. Vælg en senere dato for at planlægge en ændring af overenskomstkode eller deltid/stilling, eller en tidligere dato for at rette historikken. En flytning til en anden organisation kan ikke dateres frem i tiden. Navn, e-mail og ledelse gemmes straks, uanset denne dato.'
+
+  /** Pinned so the old, false wording cannot return unnoticed. Red conditions: the label or the helper text differs from the ruled string. */
+  it('(b1) the label and the full helper text on a non-self record are the ruled strings', async () => {
+    renderEdit()
+    await waitForHydrated()
+
+    expect(screen.getByLabelText('Organisation, overenskomstkode og deltid/stilling gælder fra')).toBe(
+      screen.getByTestId('pd-effective-from'),
+    )
+    expect(screen.getByText(HELPER).textContent).toBe(HELPER)
+  })
+
+  it('(b2) case (2): the future notice carries the ruled parenthesis', async () => {
+    renderEdit()
+    await waitForHydrated()
+
+    fireEvent.change(screen.getByTestId('pd-effective-from'), { target: { value: '2026-12-01' } })
+
+    expect(screen.getByTestId('pd-effective-future-notice').textContent).toContain(
+      '(Navn og e-mail på denne side gemmes straks, uanset denne dato.)',
+    )
+  })
+
+  /** Red conditions: the blocked text has no role="alert" on 8471e464. */
+  it('(d) the blocked text is announced as an alert', async () => {
+    renderEdit()
+    await waitForHydrated()
+
+    fireEvent.change(screen.getByTestId('ep-primary-org'), { target: { value: 'STY03' } })
+    fireEvent.change(screen.getByTestId('pd-effective-from'), { target: { value: '2026-12-01' } })
+
+    expect(screen.getByTestId('pd-effective-blocked').getAttribute('role')).toBe('alert')
+  })
+})
