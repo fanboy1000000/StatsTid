@@ -7,6 +7,10 @@
 //     toggle is OFF the central value is shown read-only and the saved
 //     value is NULL ("inherit central"). When ON the user types a value
 //     and that value is what gets PUT.
+//   - A second card with the institution's own flex, office-hours and paid-absence-credit
+//     settings (ADR-043 D6): nine fields, each with a note that nothing reads them yet, an
+//     office-hours warning that never blocks the save, and AC's "default by analogy" label.
+//     Their Danish copy lives in profileSettingsCopy.ts.
 //   - The remaining ~21 central agreement-config fields rendered read-only
 //     ("see what you can't override"). These come from the central agreement
 //     config and are NOT part of the profile schema.
@@ -15,17 +19,38 @@
 //     always true.
 //   - A Save button that's disabled until at least one field has changed
 //     vs the loaded profile (or vs central if no profile exists). On click,
-//     the editor PUTs only what's different.
+//     the editor PUTs its full state (23 keys); the server clears anything it omits.
 //   - 412 stale-state banner + 400 per-field error rendering.
 //
 // SCOPE: basic functional only. No visual polish — Phase 5 owns that. The
 // component intentionally uses `useState` only; no global state, no form
 // library.
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Alert, FormField, Input, Checkbox } from '../ui'
+import { Button, Card, Alert, FormField, Input, Checkbox, Radio, Label } from '../ui'
 import { saveProfile, type LocalAgreementProfile, type ProfileFieldError } from '../../hooks/useConfig'
+import type { ProfileSaveRequest } from '../../api/profileApi'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
 import { MondayDatePicker } from './MondayDatePicker'
+import {
+  CAP_LABELS,
+  CARD_HEADING,
+  CHOICE_SPECS,
+  CODE_MESSAGES,
+  D6_NOTE,
+  D8B_LABEL,
+  FIELDS_BEFORE_OFFICE_HOURS,
+  KONTORTID_HINT,
+  OFFICE_HOURS_LEGEND,
+  OFFICE_HOURS_MEMBERS,
+  WEEKDAYS,
+  isChoiceMember,
+  officeHoursWarning,
+  type CapMember,
+  type ChoiceMember,
+  type OfficeHoursMember,
+  type SettingMember,
+  UNPLACEABLE_REFUSAL,
+} from './profileSettingsCopy'
 
 // ── Field metadata. ──
 //
@@ -34,9 +59,10 @@ import { MondayDatePicker } from './MondayDatePicker'
 const NOT_IN_PAY_NOTE =
   'Påvirker endnu ikke lønberegningen. Advarslerne om overarbejde bruger stadig aftalens indbyggede værdi.'
 
-// Four overridable fields — must mirror the backend's ProfileSaveRequest /
-// LocalAgreementProfile. Adding a fifth requires schema + alignment-policy
-// changes upstream; this list is the UI side of that contract.
+// The overridable fields with an "Override central" toggle — they mirror the backend's
+// ProfileSaveRequest / LocalAgreementProfile. A new one requires schema + alignment-policy
+// changes upstream; this list is the UI side of that contract. The institution's own settings
+// (profileSettingsCopy.ts) have no toggle: "not set" is their inherit.
 type OverridableNumberField = 'weeklyNormHours' | 'maxFlexBalance' | 'maxOvertimeHoursPerPeriod'
 type OverridableBoolField = 'overtimeRequiresPreApproval'
 
@@ -102,7 +128,26 @@ interface EditorState {
   effectiveFrom: string  // yyyy-MM-dd
   numbers: Record<OverridableNumberField, NumberDraft>
   bools: Record<OverridableBoolField, BoolDraft>
+  // The institution's own settings as raw input text: '' = not set, a cap as typed, a clock time
+  // as "HH:mm", a choice as its vocabulary value.
+  settings: Record<SettingMember, string>
 }
+
+const CAP_MEMBERS: CapMember[] = ['flexPlusCapHours', 'flexMinusCapHours', 'flexDailyCreditCapHours']
+const ALL_SETTING_MEMBERS: SettingMember[] = [
+  ...(Object.keys(CHOICE_SPECS) as ChoiceMember[]),
+  ...CAP_MEMBERS,
+  ...OFFICE_HOURS_MEMBERS,
+]
+
+// The server's names for the 23 fields the editor sends and renders; a refusal naming anything
+// else cannot be placed under a control.
+const KNOWN_ERROR_FIELDS = new Set<string>([
+  'EffectiveFrom',
+  ...OVERRIDABLE_NUMBER_FIELDS.map(f => f.backendName),
+  ...OVERRIDABLE_BOOL_FIELDS.map(f => f.backendName),
+  ...ALL_SETTING_MEMBERS.map(m => m.charAt(0).toUpperCase() + m.slice(1)),
+])
 
 interface ProfileEditorProps {
   orgId: string
@@ -163,6 +208,18 @@ export function ProfileEditor({
   const hasAnyChange = changedFieldNames.length > 0 || effectiveFromChangedVsLoaded
   const weeklyNormHoursIsChanged = changedFieldNames.includes('WeeklyNormHours')
 
+  // The office-hours warning and the "Kontortid" gate read the draft (never the loaded profile).
+  const hasWindow = WEEKDAYS.some(d => state.settings[`officeHours${d.key}Start`] !== '' && state.settings[`officeHours${d.key}End`] !== '')
+  const officeSumMinutes = officeHoursMinutes(state.settings)
+  const weekNorm = pickNumber(state.numbers.weeklyNormHours)
+  const normHours = weekNorm !== null && weekNorm > 0 ? weekNorm : 37
+  const officeWarning = officeSumMinutes !== null && officeSumMinutes !== Math.round(normHours * 60)
+    ? officeHoursWarning(officeSumMinutes, normHours)
+    : ''
+
+  function updateSetting(member: SettingMember, text: string) {
+    setState(prev => ({ ...prev, settings: { ...prev.settings, [member]: text } }))
+  }
   function updateNumber(key: OverridableNumberField, patch: Partial<NumberDraft>) {
     setState(prev => ({
       ...prev,
@@ -197,6 +254,7 @@ export function ProfileEditor({
       maxFlexBalance: pickNumber(state.numbers.maxFlexBalance),
       maxOvertimeHoursPerPeriod: pickNumber(state.numbers.maxOvertimeHoursPerPeriod),
       overtimeRequiresPreApproval: pickBool(state.bools.overtimeRequiresPreApproval),
+      ...settingsWireValues(state.settings),
     }
 
     try {
@@ -224,15 +282,19 @@ export function ProfileEditor({
         // Structured per-field errors from ConfigEndpoints (ADR-017 D9a):
         //   { error, fields: [{ field, code, nearestValid? }, ...] }
         // Render each under its own input.
+        // The first error for a field wins; an entry naming a field the editor does not render
+        // (or no field) goes to the banner, alone or mixed with placeable ones.
         const next: Record<string, ProfileFieldError> = {}
+        let unplaceable = false
         for (const f of e.body.fields) {
-          if (f.field) next[f.field] = f
+          if (f.field && KNOWN_ERROR_FIELDS.has(f.field)) {
+            if (!(f.field in next)) next[f.field] = f
+          } else {
+            unplaceable = true
+          }
         }
-        if (Object.keys(next).length > 0) {
-          setFieldErrors(next)
-        } else {
-          setSaveError(e.body.error || e.message || 'Validering fejlede.')
-        }
+        setFieldErrors(next)
+        if (unplaceable) setSaveError(UNPLACEABLE_REFUSAL)
       } else if (e.status === 400 && e.body?.error === 'Invalid profile supersession') {
         // S22 / ADR-018 D7: backdate-before-predecessor rejection
         // (InvalidProfileSupersessionException). No `fields` payload — surface
@@ -353,6 +415,48 @@ export function ProfileEditor({
               />
             )
           })}
+        </div>
+      </Card>
+
+      <Card header={<div style={{ fontWeight: 600 }}>{CARD_HEADING}</div>}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {FIELDS_BEFORE_OFFICE_HOURS.map(member => isChoiceMember(member) ? (
+            <ChoiceGroup
+              key={member}
+              member={member}
+              value={state.settings[member]}
+              error={fieldErrors[pascalName(member)]}
+              disabled={saving}
+              onChange={(v) => updateSetting(member, v)}
+            />
+          ) : (
+            <CapInput
+              key={member}
+              member={member}
+              value={state.settings[member]}
+              error={fieldErrors[pascalName(member)]}
+              disabled={saving}
+              onChange={(v) => updateSetting(member, v)}
+            />
+          ))}
+
+          <OfficeHoursGroup
+            settings={state.settings}
+            warning={officeWarning}
+            fieldErrors={fieldErrors}
+            disabled={saving}
+            onChange={updateSetting}
+          />
+
+          <ChoiceGroup
+            member="paidAbsenceCreditBasis"
+            value={state.settings.paidAbsenceCreditBasis}
+            error={fieldErrors[pascalName('paidAbsenceCreditBasis')]}
+            disabled={saving}
+            onChange={(v) => updateSetting('paidAbsenceCreditBasis', v)}
+            analogyLabel={agreementCode === 'AC' || agreementCode.startsWith('AC_')}
+            officeHoursUnavailable={!hasWindow}
+          />
         </div>
       </Card>
 
@@ -494,7 +598,201 @@ function BoolOverrideRow({
   )
 }
 
+// ── The institution's own settings (profileSettingsCopy.ts holds every string). ──
+
+const noteStyle = { margin: '0.25rem 0 0', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }
+const errorStyle = { color: 'var(--color-error)', fontSize: '14px', lineHeight: 1.5 }
+const fieldsetStyle = { border: 'none', padding: 0, margin: 0, minWidth: 0 }
+const legendStyle = { fontWeight: 500, padding: 0, marginBottom: '0.25rem' }
+
+function joinIds(...ids: (string | false | undefined)[]): string | undefined {
+  const out = ids.filter(Boolean).join(' ')
+  return out === '' ? undefined : out
+}
+
+// FormField's own error span has no id, so an input cannot point at it; the new fields render
+// their message here instead.
+function SettingError({ id, message }: { id: string; message: string | undefined }) {
+  return message ? <span id={id} role="alert" style={errorStyle}>{message}</span> : null
+}
+
+interface ChoiceGroupProps {
+  member: ChoiceMember
+  value: string
+  error: ProfileFieldError | undefined
+  disabled: boolean
+  onChange: (value: string) => void
+  /** AC family only: the "default by analogy" label directly under the legend. */
+  analogyLabel?: boolean
+  /** Credit basis only: no weekday has both times, so "Kontortid" cannot be saved. */
+  officeHoursUnavailable?: boolean
+}
+
+function ChoiceGroup({
+  member, value, error, disabled, onChange, analogyLabel = false, officeHoursUnavailable = false,
+}: ChoiceGroupProps) {
+  const spec = CHOICE_SPECS[member]
+  const base = `profile-setting-${member}`
+  const message = fieldErrorMessage(error)
+  // No aria-invalid on a fieldset: a group's refusal is announced through its description.
+  return (
+    <fieldset
+      id={base}
+      style={fieldsetStyle}
+      aria-describedby={joinIds(
+        `${base}-note`, message && `${base}-error`, analogyLabel && `${base}-analogy`,
+        officeHoursUnavailable && `${base}-hint`,
+      )}
+    >
+      <legend style={legendStyle}>{spec.legend}</legend>
+      {analogyLabel && <p id={`${base}-analogy`} style={noteStyle}>{D8B_LABEL}</p>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+        {[{ value: '', label: spec.notSet }, ...spec.options].map(opt => (
+          <Radio
+            key={opt.value || 'none'}
+            id={`${base}-${opt.value || 'none'}`}
+            name={base}
+            value={opt.value}
+            label={opt.label}
+            checked={value === opt.value}
+            onChange={() => onChange(opt.value)}
+            disabled={disabled || (officeHoursUnavailable && opt.value === 'OFFICE_HOURS' && value !== 'OFFICE_HOURS')}
+          />
+        ))}
+      </div>
+      {officeHoursUnavailable && <p id={`${base}-hint`} style={noteStyle}>{KONTORTID_HINT}</p>}
+      <p id={`${base}-note`} style={noteStyle}>{D6_NOTE}</p>
+      <SettingError id={`${base}-error`} message={message} />
+    </fieldset>
+  )
+}
+
+interface CapInputProps {
+  member: CapMember
+  value: string
+  error: ProfileFieldError | undefined
+  disabled: boolean
+  onChange: (value: string) => void
+}
+
+function CapInput({ member, value, error, disabled, onChange }: CapInputProps) {
+  const base = `profile-setting-${member}`
+  const message = fieldErrorMessage(error)
+  return (
+    <FormField label={CAP_LABELS[member]} htmlFor={base}>
+      <Input
+        id={base}
+        type="number"
+        min="0"
+        step="any"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        aria-describedby={joinIds(`${base}-note`, message && `${base}-error`)}
+        error={Boolean(message)}
+      />
+      <p id={`${base}-note`} style={noteStyle}>{D6_NOTE}</p>
+      <SettingError id={`${base}-error`} message={message} />
+    </FormField>
+  )
+}
+
+interface OfficeHoursGroupProps {
+  settings: Record<SettingMember, string>
+  warning: string
+  fieldErrors: Record<string, ProfileFieldError>
+  disabled: boolean
+  onChange: (member: SettingMember, value: string) => void
+}
+
+function OfficeHoursGroup({ settings, warning, fieldErrors, disabled, onChange }: OfficeHoursGroupProps) {
+  const base = 'profile-setting-officeHours'
+  const time = (member: OfficeHoursMember, label: string) => {
+    const id = `profile-setting-${member}`
+    const message = fieldErrorMessage(fieldErrors[pascalName(member)])
+    return (
+      <div key={member} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+        <Label htmlFor={id}>{label}</Label>
+        <Input
+          id={id}
+          type="time"
+          value={settings[member]}
+          onChange={(e) => onChange(member, e.target.value)}
+          disabled={disabled}
+          aria-describedby={joinIds(`${base}-note`, message && `${id}-error`)}
+          error={Boolean(message)}
+        />
+        <SettingError id={`${id}-error`} message={message} />
+      </div>
+    )
+  }
+  return (
+    <fieldset id={base} style={fieldsetStyle} aria-describedby={joinIds(`${base}-note`, warning !== '' && `${base}-warning`)}>
+      <legend style={legendStyle}>{OFFICE_HOURS_LEGEND}</legend>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        {WEEKDAYS.map(d => (
+          <div key={d.key} style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            {time(`officeHours${d.key}Start`, `${d.name} fra`)}
+            {time(`officeHours${d.key}End`, `${d.name} til`)}
+          </div>
+        ))}
+      </div>
+      <p id={`${base}-note`} style={noteStyle}>{D6_NOTE}</p>
+      {/* Always mounted so a screen reader announces the change; a warning, never a refusal. */}
+      <p id={`${base}-warning`} aria-live="polite" style={noteStyle}>{warning}</p>
+    </fieldset>
+  )
+}
+
 // ── Helpers. ──
+
+function pascalName(member: string): string {
+  return member.charAt(0).toUpperCase() + member.slice(1)
+}
+
+function clockMinutes(text: string): number | null {
+  const m = /^(\d{2}):(\d{2})/.exec(text)
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null
+}
+
+/** Whole minutes over the weekdays with a complete window (start before end); null with none. */
+function officeHoursMinutes(settings: Record<SettingMember, string>): number | null {
+  let sum = 0
+  let any = false
+  for (const d of WEEKDAYS) {
+    const from = clockMinutes(settings[`officeHours${d.key}Start`])
+    const to = clockMinutes(settings[`officeHours${d.key}End`])
+    if (from !== null && to !== null && from < to) {
+      sum += to - from
+      any = true
+    }
+  }
+  return any ? sum : null
+}
+
+function settingWire(member: SettingMember, text: string): number | string | null {
+  const t = text.trim()
+  if (t === '') return null
+  if (isChoiceMember(member)) return t
+  if (CAP_MEMBERS.includes(member as CapMember)) {
+    const n = Number(t)
+    return Number.isFinite(n) ? n : null
+  }
+  // The server binds "HH:mm:ss"; "HH:mm" does not bind.
+  return /^\d{2}:\d{2}$/.test(t) ? `${t}:00` : t
+}
+
+function settingDraft(profile: LocalAgreementProfile | null, member: SettingMember): string {
+  const v = profile?.[member]
+  if (v === null || v === undefined) return ''
+  return typeof v === 'string' && !isChoiceMember(member) ? v.slice(0, 5) : String(v)
+}
+
+function settingsWireValues(settings: Record<SettingMember, string>): Pick<ProfileSaveRequest, SettingMember> {
+  const out: Record<string, number | string | null> = {}
+  for (const m of ALL_SETTING_MEMBERS) out[m] = settingWire(m, settings[m])
+  return out as Pick<ProfileSaveRequest, SettingMember>
+}
 
 function buildInitialState(profile: LocalAgreementProfile | null): EditorState {
   return {
@@ -507,6 +805,9 @@ function buildInitialState(profile: LocalAgreementProfile | null): EditorState {
     bools: {
       overtimeRequiresPreApproval: draftFromBool(profile?.overtimeRequiresPreApproval ?? null),
     },
+    settings: Object.fromEntries(
+      ALL_SETTING_MEMBERS.map(m => [m, settingDraft(profile, m)]),
+    ) as Record<SettingMember, string>,
   }
 }
 
@@ -578,8 +879,9 @@ function fieldErrorMessage(err: ProfileFieldError | undefined): string | undefin
   if (err.code === 'EFFECTIVE_FROM_NOT_TODAY_OR_PAST') {
     return 'Gaelder-fra skal vaere i dag eller tidligere — den nuvaerende tilstand.'
   }
+  if (err.code && CODE_MESSAGES[err.code]) return CODE_MESSAGES[err.code]
   if (err.message) return err.message
-  if (err.code) return err.code
+  if (err.code) return UNPLACEABLE_REFUSAL
   return 'Validering fejlede.'
 }
 
@@ -597,6 +899,9 @@ function computeChangedFieldNames(
     const next = pickBool(state.bools[spec.key])
     const prev = profile ? (profile[spec.key] ?? null) : null
     if (!nullableBoolEqual(prev, next)) out.push(spec.backendName)
+  }
+  for (const m of ALL_SETTING_MEMBERS) {
+    if (settingWire(m, state.settings[m]) !== settingWire(m, settingDraft(profile, m))) out.push(pascalName(m))
   }
   return out
 }

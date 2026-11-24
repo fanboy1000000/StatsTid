@@ -2320,7 +2320,7 @@ M-40 included [O for the 14 facts of the five classes run].
 - **TASK-14846:** the two carry-forward checkboxes are also disabled on one's own record, and the note uses the `info` variant.
   - The adjudicator also found AC-C13r's facts would pass falsely while the drawer loads, since every input is disabled then. Each case now first waits until `ep-email` is enabled.
 - **Other corrections:**
-  - comments name "every exclusive taker", never a count (TASK-14832 adds two in wave 6);
+  - comments name "every exclusive taker", never a count (TASK-14832 adds two in wave 6; *corrected by the wave-6 batch-A adjudication, ruling 11: it adds none, the profile route already takes the lock, the count stays 20*);
   - the recheck's hint signature drops its unused `(conn, tx)`;
   - QUAL-258 interacts as known: an unchanged retry passes the recheck and answers `payroll-export-conflict`, and a dated revisit note is added at the merge.
 - **Owner question (asked 2026-11-19):** should the replay promise keep its one known exception for wage-type codes? The options are (a) close it after S148, by storing each line's resolved code in the month's proof (the adjudicator's lean); (b) accept it as a known hole; or (c) let payroll record only finished months.
@@ -3736,3 +3736,33 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
     - (2) The unmapped code is fixed (the addendum).
     - (3) An empty `fields` array keeps the server's text.
 - **FU-1 dispatched** (`test-qa`) on `c4c2ef8f`.
+
+**The 14832 stack reviewed, cycle 2, and merged, 2026-11-24.**
+- **FU-1 returned** `fefaf96a` (report `S148-TASK-14832-stack-FU-1-report.md`): exact error lists, and a table-driven Unit theory of 81 rows over every member plus the suppression fact. Fable's four mutants were each red locally. Unit **1846**. The Docker twins were green locally (13).
+  - **The Orchestrator confirms FU-1's reading:** a lone time with seconds gives two errors on two different fields, which ruling 4 requires. Both lenses agree.
+- **Orchestrator comment-only commits:** `7a97bdb2` (R5) and `cd7b0801` (the cycle-2 NOTEs).
+- **Cycle 2** over `a9707e57..7a97bdb2`: 5α PASS (`S148-TASK-14832-stack-5alpha-c2.md`); Codex **APPROVED** (`S148-TASK-14832-stack-5a-codex-c2.raw.md`); Fable **APPROVED** (`S148-TASK-14832-stack-5a-reviewer-c2.md`). Every cycle-1 finding is closed.
+  - The remaining NOTEs are comment drift, fixed in `cd7b0801`.
+  - Fable N7 (a code named like a JavaScript built-in) is unproven and unreachable; it is accepted.
+- **Merged** `--no-ff` (this commit): TASK-14832 + -T, REGEN, TASK-14833, FU-2 (+ addendum), FU-1, and the remarks. **In the merge commit (R7, the batch-A adjudication's rulings 6, 7, 9 and 11; O-30):**
+  - SEC-061 marked FIXED, CI-pending;
+  - `init.sql:918-921`'s remark made true (the office-hours sum is a warning);
+  - `LocalAgreementProfile.cs:30-31`'s remark made true;
+  - the `SPRINT-148.md:2323` correction;
+  - the ROADMAP line for S149.
+- **What the owner gets, in plain words:**
+  - A local administrator can set the institution's own flex rules, office hours and paid-absence credit basis. They are saved, shown back, listed in the history and audited.
+  - Bad values are refused with a Danish message under the field.
+  - A save that changes one setting is never silently thrown away.
+  - Nothing reaches pay before S149.
+- **Told to the owner (O-17; told, not asked):**
+  - (1) Freezing these settings into a month's proof moves to S149, with their first reader.
+  - (2) The storage-limit refusal adds no ceiling.
+  - (3) Clock times are whole minutes, and API clients send `"HH:mm:ss"`.
+  - (4) The editor now covers the history panel.
+  - (5) A settings-only save puts paid months on HR's correction worklist, although nothing reads the settings yet.
+- **Reseed after pulling.** A database created before TASK-14815 lacks the eighteen columns, and every profile read on it now fails (Fable N4; "reseed, don't migrate").
+- **CI-W6 must show:**
+  - AC-C4a, -4b, -4e (with the clearing fact), -4f and -4g green, plus the vitest facts AC-C4c, -4h, -4i and AC-S0-8c;
+  - PIN-1;
+  - the 31-key pin and the pre-S22 migration fact green.

@@ -28,7 +28,8 @@ public sealed class LocalAgreementProfile
     public bool? OvertimeRequiresPreApproval { get; init; }
 
     // Flex-settlement, office-hours and credit-basis settings (ADR-043 D6; S148 C-4, C-8, C-9).
-    // NULL = not set. Their vocabularies and CHECKs live in init.sql; no repository reads them yet.
+    // NULL = not set. Their vocabularies and CHECKs live in init.sql. Since S148 (TASK-14832) the save
+    // validates them and the repository reads and writes them; no calculation reads them yet (S149).
     public string? FlexSettlementPeriod { get; init; }
     public string? FlexCapTestPeriod { get; init; }
     public decimal? FlexPlusCapHours { get; init; }

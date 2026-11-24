@@ -916,9 +916,10 @@ CREATE TABLE IF NOT EXISTS local_agreement_profiles (
     max_overtime_hours_per_period       NUMERIC(6,2),
     overtime_requires_pre_approval      BOOLEAN,
     -- Flex-settlement and office-hours settings (ADR-043 D6; S148 C-4, C-8, C-9). All nullable with
-    -- no DEFAULT: NULL = not set (ADR-017 D1). No upper ceiling on a cap (SEC-033). Cross-column
-    -- rules (office hours must sum to the norm, OFFICE_HOURS basis only where windows are set) are
-    -- the write's validation, not CHECKs. Values whose machinery arrives later are not in a CHECK.
+    -- no DEFAULT: NULL = not set (ADR-017 D1). No upper ceiling on a cap (SEC-033). The cross-column
+    -- rule "the OFFICE_HOURS basis needs at least one weekday window" is the write's validation, not a
+    -- CHECK; the office-hours sum is the editor's warning, never a refusal (ADR-043 D3). Values whose
+    -- machinery arrives later are not in a CHECK.
     flex_settlement_period              TEXT            CHECK (flex_settlement_period IN ('MONTH')),
     flex_cap_test_period                TEXT            CHECK (flex_cap_test_period IN ('MONTH')),
     flex_plus_cap_hours                 NUMERIC(6,2)    CHECK (flex_plus_cap_hours >= 0),

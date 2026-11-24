@@ -112,8 +112,9 @@ public static class ConfigEndpoints
         // Concurrency: requires `If-Match: "<version>"` for supersession or in-place edit OR
         // `If-None-Match: *` for first creation (ADR-018 D7, RFC 7232 quoted). Returns 412 on
         // stale state.
-        // Validation: ProfileAlignmentValidator runs against changed fields (ADR-017 D9a) →
-        // 400 with structured per-field errors on misalignment.
+        // Validation: ProfileAlignmentValidator checks every settable value (SEC-061; ADR-043 D2,
+        // D3, D6) and the changed fields' alignment (ADR-017 D9a) → 400 with structured per-field
+        // errors, before the transaction opens.
         // Transaction (ADR-018 D3): one PostgreSQL transaction at READ COMMITTED whose first
         // statement is the pay-inputs lock (S148 PIL); the profile UPDATE/INSERT via the repo's
         // in-transaction overload, the audit-row INSERT, the outbox enqueue and the worklist
@@ -181,6 +182,24 @@ public static class ConfigEndpoints
                 MaxFlexBalance = request.MaxFlexBalance,
                 MaxOvertimeHoursPerPeriod = request.MaxOvertimeHoursPerPeriod,
                 OvertimeRequiresPreApproval = request.OvertimeRequiresPreApproval,
+                FlexSettlementPeriod = request.FlexSettlementPeriod,
+                FlexCapTestPeriod = request.FlexCapTestPeriod,
+                FlexPlusCapHours = request.FlexPlusCapHours,
+                FlexMinusCapHours = request.FlexMinusCapHours,
+                FlexDailyCreditCapHours = request.FlexDailyCreditCapHours,
+                FlexAboveCapAction = request.FlexAboveCapAction,
+                FlexLeavingAction = request.FlexLeavingAction,
+                OfficeHoursMonStart = request.OfficeHoursMonStart,
+                OfficeHoursMonEnd = request.OfficeHoursMonEnd,
+                OfficeHoursTueStart = request.OfficeHoursTueStart,
+                OfficeHoursTueEnd = request.OfficeHoursTueEnd,
+                OfficeHoursWedStart = request.OfficeHoursWedStart,
+                OfficeHoursWedEnd = request.OfficeHoursWedEnd,
+                OfficeHoursThuStart = request.OfficeHoursThuStart,
+                OfficeHoursThuEnd = request.OfficeHoursThuEnd,
+                OfficeHoursFriStart = request.OfficeHoursFriStart,
+                OfficeHoursFriEnd = request.OfficeHoursFriEnd,
+                PaidAbsenceCreditBasis = request.PaidAbsenceCreditBasis,
                 CreatedBy = actor.ActorId ?? "system",
                 CreatedAt = DateTime.UtcNow,
                 Version = 1,
@@ -220,7 +239,7 @@ public static class ConfigEndpoints
             {
                 return Results.BadRequest(new
                 {
-                    error = "Profile alignment validation failed",
+                    error = "Profile validation failed",
                     fields = new[]
                     {
                         new
@@ -233,13 +252,13 @@ public static class ConfigEndpoints
                 });
             }
 
-            // 5. Per-field alignment validation (ADR-017 D9a).
+            // 5. Per-field value (SEC-061; ADR-043 D2, D3, D6) and alignment (ADR-017 D9a) validation.
             var validation = alignmentValidator.Validate(candidate, changedFieldsForValidator);
             if (!validation.IsValid)
             {
                 return Results.BadRequest(new
                 {
-                    error = "Profile alignment validation failed",
+                    error = "Profile validation failed",
                     fields = validation.Errors.Select(e => new
                     {
                         field = e.Field,
@@ -463,7 +482,7 @@ public static class ConfigEndpoints
             //
             //    ADR-018 D9 MODIFIED branch: the repository's UpdateInPlaceAsync preserves
             //    the predecessor's created_by / created_at across same-day edits (only the
-            //    4 overridable columns + version are mutated). Echo those preserved values
+            //    settable columns + version are mutated). Echo those preserved values
             //    here so the PUT response matches what a subsequent GET returns. INSERT
             //    paths (first-create + close-then-insert supersession) take candidate.* as
             //    the row's values — InsertProfileAsync binds them directly.
@@ -481,6 +500,24 @@ public static class ConfigEndpoints
                 MaxFlexBalance = candidate.MaxFlexBalance,
                 MaxOvertimeHoursPerPeriod = candidate.MaxOvertimeHoursPerPeriod,
                 OvertimeRequiresPreApproval = candidate.OvertimeRequiresPreApproval,
+                FlexSettlementPeriod = candidate.FlexSettlementPeriod,
+                FlexCapTestPeriod = candidate.FlexCapTestPeriod,
+                FlexPlusCapHours = candidate.FlexPlusCapHours,
+                FlexMinusCapHours = candidate.FlexMinusCapHours,
+                FlexDailyCreditCapHours = candidate.FlexDailyCreditCapHours,
+                FlexAboveCapAction = candidate.FlexAboveCapAction,
+                FlexLeavingAction = candidate.FlexLeavingAction,
+                OfficeHoursMonStart = candidate.OfficeHoursMonStart,
+                OfficeHoursMonEnd = candidate.OfficeHoursMonEnd,
+                OfficeHoursTueStart = candidate.OfficeHoursTueStart,
+                OfficeHoursTueEnd = candidate.OfficeHoursTueEnd,
+                OfficeHoursWedStart = candidate.OfficeHoursWedStart,
+                OfficeHoursWedEnd = candidate.OfficeHoursWedEnd,
+                OfficeHoursThuStart = candidate.OfficeHoursThuStart,
+                OfficeHoursThuEnd = candidate.OfficeHoursThuEnd,
+                OfficeHoursFriStart = candidate.OfficeHoursFriStart,
+                OfficeHoursFriEnd = candidate.OfficeHoursFriEnd,
+                PaidAbsenceCreditBasis = candidate.PaidAbsenceCreditBasis,
                 CreatedBy = isInPlaceEdit ? predecessor!.CreatedBy : candidate.CreatedBy,
                 CreatedAt = isInPlaceEdit ? predecessor!.CreatedAt : candidate.CreatedAt,
                 Version = persistedVersion,
@@ -611,11 +648,15 @@ public static class ConfigEndpoints
 
     /// <summary>
     /// Computes the per-field old/new pair dictionary between the predecessor profile (or null
-    /// for first creation) and the candidate profile. Only the four overridable columns are
-    /// inspected. Fields with identical values are excluded; identity is "both null OR equal
-    /// non-null values" — value equality uses default decimal/bool comparisons. Used as the
-    /// changed-fields input to <see cref="ProfileAlignmentValidator"/>, the audit-row
-    /// delta_jsonb payload, and the LocalAgreementProfileChanged event payload.
+    /// for first creation) and the candidate profile. Every settable column is inspected: the
+    /// four legacy overridable columns and the flex, office-hours and credit-basis settings
+    /// (ADR-043 D6), the same members, in the same order, as
+    /// <c>LocalAgreementProfileRepository.AllOverridableFieldsMatch</c> compares, so the audit
+    /// delta and the same-day no-op decision cannot disagree. Fields with identical values are
+    /// excluded; identity is "both null OR equal non-null values" — default decimal/bool/TimeOnly
+    /// equality, ordinal for strings. Used as the changed-fields input to
+    /// <see cref="ProfileAlignmentValidator"/>, the audit-row delta_jsonb payload, and the
+    /// LocalAgreementProfileChanged event payload.
     /// </summary>
     private static Dictionary<string, FieldChange> ComputeChangedFields(
         LocalAgreementProfile? predecessor, LocalAgreementProfile candidate)
@@ -626,6 +667,24 @@ public static class ConfigEndpoints
         AddIfChanged(changed, "MaxFlexBalance", predecessor?.MaxFlexBalance, candidate.MaxFlexBalance);
         AddIfChanged(changed, "MaxOvertimeHoursPerPeriod", predecessor?.MaxOvertimeHoursPerPeriod, candidate.MaxOvertimeHoursPerPeriod);
         AddIfChanged(changed, "OvertimeRequiresPreApproval", predecessor?.OvertimeRequiresPreApproval, candidate.OvertimeRequiresPreApproval);
+        AddIfChanged(changed, "FlexSettlementPeriod", predecessor?.FlexSettlementPeriod, candidate.FlexSettlementPeriod);
+        AddIfChanged(changed, "FlexCapTestPeriod", predecessor?.FlexCapTestPeriod, candidate.FlexCapTestPeriod);
+        AddIfChanged(changed, "FlexPlusCapHours", predecessor?.FlexPlusCapHours, candidate.FlexPlusCapHours);
+        AddIfChanged(changed, "FlexMinusCapHours", predecessor?.FlexMinusCapHours, candidate.FlexMinusCapHours);
+        AddIfChanged(changed, "FlexDailyCreditCapHours", predecessor?.FlexDailyCreditCapHours, candidate.FlexDailyCreditCapHours);
+        AddIfChanged(changed, "FlexAboveCapAction", predecessor?.FlexAboveCapAction, candidate.FlexAboveCapAction);
+        AddIfChanged(changed, "FlexLeavingAction", predecessor?.FlexLeavingAction, candidate.FlexLeavingAction);
+        AddIfChanged(changed, "OfficeHoursMonStart", predecessor?.OfficeHoursMonStart, candidate.OfficeHoursMonStart);
+        AddIfChanged(changed, "OfficeHoursMonEnd", predecessor?.OfficeHoursMonEnd, candidate.OfficeHoursMonEnd);
+        AddIfChanged(changed, "OfficeHoursTueStart", predecessor?.OfficeHoursTueStart, candidate.OfficeHoursTueStart);
+        AddIfChanged(changed, "OfficeHoursTueEnd", predecessor?.OfficeHoursTueEnd, candidate.OfficeHoursTueEnd);
+        AddIfChanged(changed, "OfficeHoursWedStart", predecessor?.OfficeHoursWedStart, candidate.OfficeHoursWedStart);
+        AddIfChanged(changed, "OfficeHoursWedEnd", predecessor?.OfficeHoursWedEnd, candidate.OfficeHoursWedEnd);
+        AddIfChanged(changed, "OfficeHoursThuStart", predecessor?.OfficeHoursThuStart, candidate.OfficeHoursThuStart);
+        AddIfChanged(changed, "OfficeHoursThuEnd", predecessor?.OfficeHoursThuEnd, candidate.OfficeHoursThuEnd);
+        AddIfChanged(changed, "OfficeHoursFriStart", predecessor?.OfficeHoursFriStart, candidate.OfficeHoursFriStart);
+        AddIfChanged(changed, "OfficeHoursFriEnd", predecessor?.OfficeHoursFriEnd, candidate.OfficeHoursFriEnd);
+        AddIfChanged(changed, "PaidAbsenceCreditBasis", predecessor?.PaidAbsenceCreditBasis, candidate.PaidAbsenceCreditBasis);
 
         return changed;
     }
@@ -641,10 +700,21 @@ public static class ConfigEndpoints
             JsonSerializer.SerializeToElement(newValue));
     }
 
+    /// <summary>The text-column sibling of the struct overload: ordinal equality, null equals null.</summary>
+    private static void AddIfChanged(
+        Dictionary<string, FieldChange> bag, string field, string? oldValue, string? newValue)
+    {
+        if (string.Equals(oldValue, newValue, StringComparison.Ordinal))
+            return;
+        bag[field] = new FieldChange(
+            JsonSerializer.SerializeToElement(oldValue),
+            JsonSerializer.SerializeToElement(newValue));
+    }
+
     /// <summary>
-    /// S119 / TASK-11900: the typed profile mapper — used at the THREE success sites (PUT 200,
-    /// GET 200, history rows). The record is an exact shape-copy of the pre-S119 anonymous
-    /// object (member names, order, casing, nullability — byte-identical wire JSON).
+    /// The typed profile mapper (PAT-012) — used at the THREE success sites (PUT 200, GET 200,
+    /// history rows) and for the 412's <c>currentState</c>. It copies every settable member of
+    /// the profile (see <see cref="LocalAgreementProfileResponse"/>).
     /// ADR-018 D7: <c>version</c> is surfaced on the body so the frontend can round-trip it
     /// as the next If-Match; the wire ETag header carries the same value quoted (RFC 7232).
     /// </summary>
@@ -660,6 +730,24 @@ public static class ConfigEndpoints
             MaxFlexBalance: profile.MaxFlexBalance,
             MaxOvertimeHoursPerPeriod: profile.MaxOvertimeHoursPerPeriod,
             OvertimeRequiresPreApproval: profile.OvertimeRequiresPreApproval,
+            FlexSettlementPeriod: profile.FlexSettlementPeriod,
+            FlexCapTestPeriod: profile.FlexCapTestPeriod,
+            FlexPlusCapHours: profile.FlexPlusCapHours,
+            FlexMinusCapHours: profile.FlexMinusCapHours,
+            FlexDailyCreditCapHours: profile.FlexDailyCreditCapHours,
+            FlexAboveCapAction: profile.FlexAboveCapAction,
+            FlexLeavingAction: profile.FlexLeavingAction,
+            OfficeHoursMonStart: profile.OfficeHoursMonStart,
+            OfficeHoursMonEnd: profile.OfficeHoursMonEnd,
+            OfficeHoursTueStart: profile.OfficeHoursTueStart,
+            OfficeHoursTueEnd: profile.OfficeHoursTueEnd,
+            OfficeHoursWedStart: profile.OfficeHoursWedStart,
+            OfficeHoursWedEnd: profile.OfficeHoursWedEnd,
+            OfficeHoursThuStart: profile.OfficeHoursThuStart,
+            OfficeHoursThuEnd: profile.OfficeHoursThuEnd,
+            OfficeHoursFriStart: profile.OfficeHoursFriStart,
+            OfficeHoursFriEnd: profile.OfficeHoursFriEnd,
+            PaidAbsenceCreditBasis: profile.PaidAbsenceCreditBasis,
             CreatedBy: profile.CreatedBy,
             CreatedAt: profile.CreatedAt,
             Version: profile.Version);
@@ -683,10 +771,13 @@ public static class ConfigEndpoints
     }
 
     /// <summary>
-    /// PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion} request body. The four
-    /// nullable fields map directly to the overridable columns of LocalAgreementProfile —
-    /// NULL means "inherit central." EffectiveFrom is required and must align per
-    /// LocalAgreementProfileAlignmentPolicies for any field whose value changed.
+    /// PUT /api/config/{orgId}/profile/{agreementCode}/{okVersion} request body. Each nullable
+    /// member maps directly to the settable column of LocalAgreementProfile with the same name:
+    /// NULL means "inherit central" for the four legacy overridable members and "not set" for the
+    /// flex, office-hours and credit-basis settings (ADR-043 D6). The save replaces the whole
+    /// profile, so an omitted member is stored as NULL. A clock time is <c>"HH:mm:ss"</c> on the
+    /// wire. EffectiveFrom is required and must align per LocalAgreementProfileAlignmentPolicies
+    /// for any field whose value changed; every value is checked by ProfileAlignmentValidator.
     /// </summary>
     private sealed class ProfileSaveRequest
     {
@@ -695,5 +786,23 @@ public static class ConfigEndpoints
         public decimal? MaxFlexBalance { get; init; }
         public decimal? MaxOvertimeHoursPerPeriod { get; init; }
         public bool? OvertimeRequiresPreApproval { get; init; }
+        public string? FlexSettlementPeriod { get; init; }
+        public string? FlexCapTestPeriod { get; init; }
+        public decimal? FlexPlusCapHours { get; init; }
+        public decimal? FlexMinusCapHours { get; init; }
+        public decimal? FlexDailyCreditCapHours { get; init; }
+        public string? FlexAboveCapAction { get; init; }
+        public string? FlexLeavingAction { get; init; }
+        public TimeOnly? OfficeHoursMonStart { get; init; }
+        public TimeOnly? OfficeHoursMonEnd { get; init; }
+        public TimeOnly? OfficeHoursTueStart { get; init; }
+        public TimeOnly? OfficeHoursTueEnd { get; init; }
+        public TimeOnly? OfficeHoursWedStart { get; init; }
+        public TimeOnly? OfficeHoursWedEnd { get; init; }
+        public TimeOnly? OfficeHoursThuStart { get; init; }
+        public TimeOnly? OfficeHoursThuEnd { get; init; }
+        public TimeOnly? OfficeHoursFriStart { get; init; }
+        public TimeOnly? OfficeHoursFriEnd { get; init; }
+        public string? PaidAbsenceCreditBasis { get; init; }
     }
 }

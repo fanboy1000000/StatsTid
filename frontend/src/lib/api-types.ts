@@ -6022,6 +6022,42 @@ export interface components {
             /** Format: double */
             maxOvertimeHoursPerPeriod: number | null;
             overtimeRequiresPreApproval: boolean | null;
+            /** @enum {string|null} */
+            flexSettlementPeriod: "MONTH" | null;
+            /** @enum {string|null} */
+            flexCapTestPeriod: "MONTH" | null;
+            /** Format: double */
+            flexPlusCapHours: number | null;
+            /** Format: double */
+            flexMinusCapHours: number | null;
+            /** Format: double */
+            flexDailyCreditCapHours: number | null;
+            /** @enum {string|null} */
+            flexAboveCapAction: "FORFEIT" | null;
+            /** @enum {string|null} */
+            flexLeavingAction: "FORFEIT_POSITIVE_RECORD_NEGATIVE" | null;
+            /** Format: time */
+            officeHoursMonStart: string | null;
+            /** Format: time */
+            officeHoursMonEnd: string | null;
+            /** Format: time */
+            officeHoursTueStart: string | null;
+            /** Format: time */
+            officeHoursTueEnd: string | null;
+            /** Format: time */
+            officeHoursWedStart: string | null;
+            /** Format: time */
+            officeHoursWedEnd: string | null;
+            /** Format: time */
+            officeHoursThuStart: string | null;
+            /** Format: time */
+            officeHoursThuEnd: string | null;
+            /** Format: time */
+            officeHoursFriStart: string | null;
+            /** Format: time */
+            officeHoursFriEnd: string | null;
+            /** @enum {string|null} */
+            paidAbsenceCreditBasis: "PARAGRAPH_7_NR_2" | "OFFICE_HOURS" | null;
             createdBy: string;
             /** Format: date-time */
             createdAt: string;
@@ -7179,6 +7215,37 @@ export interface components {
             /** Format: double */
             maxOvertimeHoursPerPeriod?: number | null;
             overtimeRequiresPreApproval?: boolean | null;
+            flexSettlementPeriod?: string | null;
+            flexCapTestPeriod?: string | null;
+            /** Format: double */
+            flexPlusCapHours?: number | null;
+            /** Format: double */
+            flexMinusCapHours?: number | null;
+            /** Format: double */
+            flexDailyCreditCapHours?: number | null;
+            flexAboveCapAction?: string | null;
+            flexLeavingAction?: string | null;
+            /** Format: time */
+            officeHoursMonStart?: string | null;
+            /** Format: time */
+            officeHoursMonEnd?: string | null;
+            /** Format: time */
+            officeHoursTueStart?: string | null;
+            /** Format: time */
+            officeHoursTueEnd?: string | null;
+            /** Format: time */
+            officeHoursWedStart?: string | null;
+            /** Format: time */
+            officeHoursWedEnd?: string | null;
+            /** Format: time */
+            officeHoursThuStart?: string | null;
+            /** Format: time */
+            officeHoursThuEnd?: string | null;
+            /** Format: time */
+            officeHoursFriStart?: string | null;
+            /** Format: time */
+            officeHoursFriEnd?: string | null;
+            paidAbsenceCreditBasis?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.DesignateLeaderRequest": {
             userId?: string;

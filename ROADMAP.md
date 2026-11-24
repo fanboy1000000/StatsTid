@@ -295,6 +295,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Tier-probe log noise** — every legitimate leader read logs a spurious "Access denied" WARNING. [S128 FU-A]
 
 ### Correctness / domain
+- **For S149 (stage 1), from S148's wave-6 batch-A adjudication, ruling 9:** the local profile's eighteen new settings (flex periods, caps and actions, office hours, the paid-absence credit basis) are saved, validated and audited since S148 but are **not yet frozen into a month's proof**: `AgreementRuleConfig` has no member for them. They are frozen with their first reader in S149, as R-21 rules for the HR facts. A manifest written before then reads them as "not set". Also for S149: a settings-only save puts paid months on HR's correction worklist although nothing reads the settings in S148 (the 14832 stack's Fable N5; told to the owner at O-17).
 - **✅ BUILT IN S146 — part-time staff see their own monthly norm (QUAL-198, TASK-14602, merged `b104c4d7`, CI-verified at CI-W1).** Both screens use `weekdays × DayNorm.ForWeekday(W, fraction at month end)`. Residual inputs divergence registered as QUAL-226 (for the S147 program).
 - **Backlog — needs its own refinement: a leaver's post-end-date night-shift hours are paid by no month
   (QUAL-199).** The post-midnight half of a last shift falls on a NOT_EMPLOYED day. It predates S145.

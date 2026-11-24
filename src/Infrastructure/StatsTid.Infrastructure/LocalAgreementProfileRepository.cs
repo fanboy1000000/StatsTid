@@ -229,9 +229,9 @@ public sealed class LocalAgreementProfileRepository
     /// <returns>The post-write profile id and version (and whether the same-day write was
     /// a no-op — <see cref="SaveProfileResult.IsNoOp"/>). For first-create + supersession the
     /// version is <c>1</c>; for UPDATE-in-place it is <c>predecessor.Version + 1</c> unless
-    /// the candidate's overridable fields all match the predecessor (S23 / TASK-2304 same-day
-    /// no-op short-circuit), in which case the predecessor's version is returned unchanged
-    /// and the caller skips audit + outbox emission.</returns>
+    /// the candidate's settable fields all match the predecessor (S23 / TASK-2304 same-day
+    /// no-op short-circuit; <see cref="AllOverridableFieldsMatch"/>), in which case the
+    /// predecessor's version is returned unchanged and the caller skips audit + outbox emission.</returns>
     /// <exception cref="OptimisticConcurrencyException">If the precondition encoded in
     /// <paramref name="expectedCurrentVersion"/> does not match the row currently holding the
     /// active slot.</exception>
@@ -339,11 +339,11 @@ public sealed class LocalAgreementProfileRepository
             // 3b. Same-day save (ADR-018 D9 MODIFIED branch).
             if (newProfile.EffectiveFrom == predecessor.EffectiveFrom)
             {
-                // 3b-noop. S23 / TASK-2304 — short-circuit when no overridable field changed.
+                // 3b-noop. S23 / TASK-2304 — short-circuit when no settable field changed.
                 //     Detection happens AFTER lock + ValidatePrecondition (Codex Step 0b
                 //     BLOCKER fix): a stale caller cannot reach this path because their
                 //     If-Match is rejected by ValidatePrecondition first. If we reach here
-                //     and all 4 overridable fields match the predecessor, do NOT bump
+                //     and every settable field matches the predecessor, do NOT bump
                 //     version, do NOT UPDATE the row. Return predecessor.Version unchanged
                 //     with IsNoOp = true; the PUT handler skips audit + outbox emission.
                 if (AllOverridableFieldsMatch(predecessor, newProfile))
@@ -410,22 +410,29 @@ public sealed class LocalAgreementProfileRepository
     }
 
     /// <summary>
-    /// Returns true when all 4 admin-overridable fields on <paramref name="predecessor"/>
-    /// equal the corresponding values on <paramref name="candidate"/>. Used by the S23
-    /// same-day no-op short-circuit to skip the UPDATE + audit + outbox emission when an
-    /// admin saves a profile with no field changes (typical "open the form, change nothing,
-    /// hit Save" admin flow).
+    /// Returns true when every settable field on <paramref name="predecessor"/> equals the
+    /// corresponding value on <paramref name="candidate"/>. Used by the S23 same-day no-op
+    /// short-circuit to skip the UPDATE + audit + outbox emission when an admin saves a profile
+    /// with no field changes (typical "open the form, change nothing, hit Save" admin flow).
+    /// A save that changes only one setting is never a no-op.
     ///
     /// <para>
-    /// The 4 fields are the entire whitelist of overridable columns on
-    /// <c>local_agreement_profiles</c> per ADR-017 D9a (the schema columns ARE the
-    /// whitelist; protected keys are absent from the schema by design):
-    /// <c>WeeklyNormHours</c>, <c>MaxFlexBalance</c>,
-    /// <c>MaxOvertimeHoursPerPeriod</c>, <c>OvertimeRequiresPreApproval</c>. C# nullable
-    /// equality (<c>==</c>) handles the (null, null) ⇒ true case correctly for both
-    /// <c>decimal?</c> and <c>bool?</c>. Identity (<c>profile_id</c>, <c>effective_from</c>,
-    /// <c>created_by</c>, <c>created_at</c>, <c>version</c>) and lifecycle (<c>effective_to</c>)
-    /// columns are immutable across in-place edits and therefore irrelevant to this check.
+    /// The settable fields are every column the save writes (<see cref="InsertProfileAsync"/>,
+    /// <see cref="UpdateInPlaceAsync"/>; the schema columns ARE the whitelist per ADR-017 D9a,
+    /// protected keys are absent from the schema by design), in the same order as the PUT
+    /// route's <c>ComputeChangedFields</c>, so the no-op decision and the audit delta cannot
+    /// disagree: the four legacy overridable fields <c>WeeklyNormHours</c>,
+    /// <c>MaxFlexBalance</c>, <c>MaxOvertimeHoursPerPeriod</c>,
+    /// <c>OvertimeRequiresPreApproval</c>; the flex settings <c>FlexSettlementPeriod</c>,
+    /// <c>FlexCapTestPeriod</c>, <c>FlexPlusCapHours</c>, <c>FlexMinusCapHours</c>,
+    /// <c>FlexDailyCreditCapHours</c>, <c>FlexAboveCapAction</c>, <c>FlexLeavingAction</c>;
+    /// the ten office-hours times <c>OfficeHours{Mon..Fri}{Start,End}</c>; and
+    /// <c>PaidAbsenceCreditBasis</c> (ADR-043 D6). C# nullable equality (<c>==</c>) handles the
+    /// (null, null) ⇒ true case for <c>decimal?</c> (by value: 37 equals 37.00),
+    /// <c>bool?</c> and <c>TimeOnly?</c>; strings compare ordinally. Identity
+    /// (<c>profile_id</c>, <c>effective_from</c>, <c>created_by</c>, <c>created_at</c>,
+    /// <c>version</c>) and lifecycle (<c>effective_to</c>) columns are immutable across in-place
+    /// edits and therefore irrelevant to this check.
     /// </para>
     /// </summary>
     private static bool AllOverridableFieldsMatch(
@@ -434,7 +441,25 @@ public sealed class LocalAgreementProfileRepository
         return predecessor.WeeklyNormHours == candidate.WeeklyNormHours
             && predecessor.MaxFlexBalance == candidate.MaxFlexBalance
             && predecessor.MaxOvertimeHoursPerPeriod == candidate.MaxOvertimeHoursPerPeriod
-            && predecessor.OvertimeRequiresPreApproval == candidate.OvertimeRequiresPreApproval;
+            && predecessor.OvertimeRequiresPreApproval == candidate.OvertimeRequiresPreApproval
+            && string.Equals(predecessor.FlexSettlementPeriod, candidate.FlexSettlementPeriod, StringComparison.Ordinal)
+            && string.Equals(predecessor.FlexCapTestPeriod, candidate.FlexCapTestPeriod, StringComparison.Ordinal)
+            && predecessor.FlexPlusCapHours == candidate.FlexPlusCapHours
+            && predecessor.FlexMinusCapHours == candidate.FlexMinusCapHours
+            && predecessor.FlexDailyCreditCapHours == candidate.FlexDailyCreditCapHours
+            && string.Equals(predecessor.FlexAboveCapAction, candidate.FlexAboveCapAction, StringComparison.Ordinal)
+            && string.Equals(predecessor.FlexLeavingAction, candidate.FlexLeavingAction, StringComparison.Ordinal)
+            && predecessor.OfficeHoursMonStart == candidate.OfficeHoursMonStart
+            && predecessor.OfficeHoursMonEnd == candidate.OfficeHoursMonEnd
+            && predecessor.OfficeHoursTueStart == candidate.OfficeHoursTueStart
+            && predecessor.OfficeHoursTueEnd == candidate.OfficeHoursTueEnd
+            && predecessor.OfficeHoursWedStart == candidate.OfficeHoursWedStart
+            && predecessor.OfficeHoursWedEnd == candidate.OfficeHoursWedEnd
+            && predecessor.OfficeHoursThuStart == candidate.OfficeHoursThuStart
+            && predecessor.OfficeHoursThuEnd == candidate.OfficeHoursThuEnd
+            && predecessor.OfficeHoursFriStart == candidate.OfficeHoursFriStart
+            && predecessor.OfficeHoursFriEnd == candidate.OfficeHoursFriEnd
+            && string.Equals(predecessor.PaidAbsenceCreditBasis, candidate.PaidAbsenceCreditBasis, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -540,12 +565,30 @@ public sealed class LocalAgreementProfileRepository
                 effective_from, effective_to,
                 weekly_norm_hours, max_flex_balance,
                 max_overtime_hours_per_period, overtime_requires_pre_approval,
+                flex_settlement_period, flex_cap_test_period,
+                flex_plus_cap_hours, flex_minus_cap_hours, flex_daily_credit_cap_hours,
+                flex_above_cap_action, flex_leaving_action,
+                office_hours_mon_start, office_hours_mon_end,
+                office_hours_tue_start, office_hours_tue_end,
+                office_hours_wed_start, office_hours_wed_end,
+                office_hours_thu_start, office_hours_thu_end,
+                office_hours_fri_start, office_hours_fri_end,
+                paid_absence_credit_basis,
                 created_by, created_at, version)
             VALUES (
                 @profileId, @orgId, @agreementCode, @okVersion,
                 @effectiveFrom, NULL,
                 @weeklyNormHours, @maxFlexBalance,
                 @maxOvertimeHoursPerPeriod, @overtimeRequiresPreApproval,
+                @flexSettlementPeriod, @flexCapTestPeriod,
+                @flexPlusCapHours, @flexMinusCapHours, @flexDailyCreditCapHours,
+                @flexAboveCapAction, @flexLeavingAction,
+                @officeHoursMonStart, @officeHoursMonEnd,
+                @officeHoursTueStart, @officeHoursTueEnd,
+                @officeHoursWedStart, @officeHoursWedEnd,
+                @officeHoursThuStart, @officeHoursThuEnd,
+                @officeHoursFriStart, @officeHoursFriEnd,
+                @paidAbsenceCreditBasis,
                 @createdBy, @createdAt, @version)
             """, conn, tx);
         insertCmd.Parameters.AddWithValue("profileId", newProfileId);
@@ -553,10 +596,7 @@ public sealed class LocalAgreementProfileRepository
         insertCmd.Parameters.AddWithValue("agreementCode", newProfile.AgreementCode);
         insertCmd.Parameters.AddWithValue("okVersion", newProfile.OkVersion);
         insertCmd.Parameters.AddWithValue("effectiveFrom", newProfile.EffectiveFrom);
-        insertCmd.Parameters.AddWithValue("weeklyNormHours", (object?)newProfile.WeeklyNormHours ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("maxFlexBalance", (object?)newProfile.MaxFlexBalance ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", (object?)newProfile.MaxOvertimeHoursPerPeriod ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("overtimeRequiresPreApproval", (object?)newProfile.OvertimeRequiresPreApproval ?? DBNull.Value);
+        AddSettableColumnParameters(insertCmd, newProfile);
         insertCmd.Parameters.AddWithValue("createdBy", newProfile.CreatedBy);
         // CreatedAt: prefer the model's value when supplied (caller may have stamped a
         // deterministic timestamp); otherwise stamp now. The DB default would also fire,
@@ -568,11 +608,11 @@ public sealed class LocalAgreementProfileRepository
     }
 
     /// <summary>
-    /// UPDATE-in-place path for same-day saves (ADR-018 D9 MODIFIED branch). Updates the
-    /// 4 overridable columns and bumps <c>version</c> by one; <c>effective_from</c>,
-    /// <c>effective_to</c>, <c>created_by</c>, <c>created_at</c> are immutable across
-    /// in-place edits. Returns the post-bump version (sourced from
-    /// <c>UPDATE ... RETURNING version</c>).
+    /// UPDATE-in-place path for same-day saves (ADR-018 D9 MODIFIED branch). Updates every
+    /// settable column (the ones <see cref="AllOverridableFieldsMatch"/> compares) and bumps
+    /// <c>version</c> by one; <c>effective_from</c>, <c>effective_to</c>, <c>created_by</c>,
+    /// <c>created_at</c> are immutable across in-place edits. Returns the post-bump version
+    /// (sourced from <c>UPDATE ... RETURNING version</c>).
     ///
     /// The <c>WHERE version = @expectedVersion</c> clause is defense-in-depth (ADR-018 D7):
     /// the load-bearing optimistic-concurrency check happens earlier in
@@ -593,15 +633,30 @@ public sealed class LocalAgreementProfileRepository
                 max_flex_balance = @maxFlexBalance,
                 max_overtime_hours_per_period = @maxOvertimeHoursPerPeriod,
                 overtime_requires_pre_approval = @overtimeRequiresPreApproval,
+                flex_settlement_period = @flexSettlementPeriod,
+                flex_cap_test_period = @flexCapTestPeriod,
+                flex_plus_cap_hours = @flexPlusCapHours,
+                flex_minus_cap_hours = @flexMinusCapHours,
+                flex_daily_credit_cap_hours = @flexDailyCreditCapHours,
+                flex_above_cap_action = @flexAboveCapAction,
+                flex_leaving_action = @flexLeavingAction,
+                office_hours_mon_start = @officeHoursMonStart,
+                office_hours_mon_end = @officeHoursMonEnd,
+                office_hours_tue_start = @officeHoursTueStart,
+                office_hours_tue_end = @officeHoursTueEnd,
+                office_hours_wed_start = @officeHoursWedStart,
+                office_hours_wed_end = @officeHoursWedEnd,
+                office_hours_thu_start = @officeHoursThuStart,
+                office_hours_thu_end = @officeHoursThuEnd,
+                office_hours_fri_start = @officeHoursFriStart,
+                office_hours_fri_end = @officeHoursFriEnd,
+                paid_absence_credit_basis = @paidAbsenceCreditBasis,
                 version = version + 1
             WHERE profile_id = @profileId
               AND version = @expectedVersion
             RETURNING version
             """, conn, tx);
-        updateCmd.Parameters.AddWithValue("weeklyNormHours", (object?)newProfile.WeeklyNormHours ?? DBNull.Value);
-        updateCmd.Parameters.AddWithValue("maxFlexBalance", (object?)newProfile.MaxFlexBalance ?? DBNull.Value);
-        updateCmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", (object?)newProfile.MaxOvertimeHoursPerPeriod ?? DBNull.Value);
-        updateCmd.Parameters.AddWithValue("overtimeRequiresPreApproval", (object?)newProfile.OvertimeRequiresPreApproval ?? DBNull.Value);
+        AddSettableColumnParameters(updateCmd, newProfile);
         updateCmd.Parameters.AddWithValue("profileId", profileId);
         updateCmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
         var newVersion = await updateCmd.ExecuteScalarAsync(ct);
@@ -616,6 +671,38 @@ public sealed class LocalAgreementProfileRepository
                 $"expected version {expectedVersion}; FOR UPDATE invariant violated.");
         }
         return (long)newVersion;
+    }
+
+    /// <summary>
+    /// Binds every settable column's parameter, NULL as <see cref="DBNull"/>, for both
+    /// <see cref="InsertProfileAsync"/> and <see cref="UpdateInPlaceAsync"/>, so the two writes
+    /// cannot store different column sets. The members and order are
+    /// <see cref="AllOverridableFieldsMatch"/>'s and <see cref="MapReader"/>'s.
+    /// </summary>
+    private static void AddSettableColumnParameters(NpgsqlCommand cmd, LocalAgreementProfile p)
+    {
+        cmd.Parameters.AddWithValue("weeklyNormHours", (object?)p.WeeklyNormHours ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("maxFlexBalance", (object?)p.MaxFlexBalance ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", (object?)p.MaxOvertimeHoursPerPeriod ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("overtimeRequiresPreApproval", (object?)p.OvertimeRequiresPreApproval ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("flexSettlementPeriod", (object?)p.FlexSettlementPeriod ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("flexCapTestPeriod", (object?)p.FlexCapTestPeriod ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("flexPlusCapHours", (object?)p.FlexPlusCapHours ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("flexMinusCapHours", (object?)p.FlexMinusCapHours ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("flexDailyCreditCapHours", (object?)p.FlexDailyCreditCapHours ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("flexAboveCapAction", (object?)p.FlexAboveCapAction ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("flexLeavingAction", (object?)p.FlexLeavingAction ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursMonStart", (object?)p.OfficeHoursMonStart ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursMonEnd", (object?)p.OfficeHoursMonEnd ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursTueStart", (object?)p.OfficeHoursTueStart ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursTueEnd", (object?)p.OfficeHoursTueEnd ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursWedStart", (object?)p.OfficeHoursWedStart ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursWedEnd", (object?)p.OfficeHoursWedEnd ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursThuStart", (object?)p.OfficeHoursThuStart ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursThuEnd", (object?)p.OfficeHoursThuEnd ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursFriStart", (object?)p.OfficeHoursFriStart ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("officeHoursFriEnd", (object?)p.OfficeHoursFriEnd ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("paidAbsenceCreditBasis", (object?)p.PaidAbsenceCreditBasis ?? DBNull.Value);
     }
 
     // S142 / TASK-14208 (owner ruling OQ-4): DeactivateAsync was DELETED here, not migrated.
@@ -655,10 +742,47 @@ public sealed class LocalAgreementProfileRepository
         OvertimeRequiresPreApproval = reader.IsDBNull(reader.GetOrdinal("overtime_requires_pre_approval"))
             ? null
             : reader.GetBoolean(reader.GetOrdinal("overtime_requires_pre_approval")),
+        FlexSettlementPeriod = GetNullableString(reader, "flex_settlement_period"),
+        FlexCapTestPeriod = GetNullableString(reader, "flex_cap_test_period"),
+        FlexPlusCapHours = GetNullableDecimal(reader, "flex_plus_cap_hours"),
+        FlexMinusCapHours = GetNullableDecimal(reader, "flex_minus_cap_hours"),
+        FlexDailyCreditCapHours = GetNullableDecimal(reader, "flex_daily_credit_cap_hours"),
+        FlexAboveCapAction = GetNullableString(reader, "flex_above_cap_action"),
+        FlexLeavingAction = GetNullableString(reader, "flex_leaving_action"),
+        OfficeHoursMonStart = GetNullableTime(reader, "office_hours_mon_start"),
+        OfficeHoursMonEnd = GetNullableTime(reader, "office_hours_mon_end"),
+        OfficeHoursTueStart = GetNullableTime(reader, "office_hours_tue_start"),
+        OfficeHoursTueEnd = GetNullableTime(reader, "office_hours_tue_end"),
+        OfficeHoursWedStart = GetNullableTime(reader, "office_hours_wed_start"),
+        OfficeHoursWedEnd = GetNullableTime(reader, "office_hours_wed_end"),
+        OfficeHoursThuStart = GetNullableTime(reader, "office_hours_thu_start"),
+        OfficeHoursThuEnd = GetNullableTime(reader, "office_hours_thu_end"),
+        OfficeHoursFriStart = GetNullableTime(reader, "office_hours_fri_start"),
+        OfficeHoursFriEnd = GetNullableTime(reader, "office_hours_fri_end"),
+        PaidAbsenceCreditBasis = GetNullableString(reader, "paid_absence_credit_basis"),
         CreatedBy = reader.GetString(reader.GetOrdinal("created_by")),
         CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
         Version = reader.GetInt64(reader.GetOrdinal("version"))
     };
+
+    private static string? GetNullableString(NpgsqlDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+    }
+
+    private static decimal? GetNullableDecimal(NpgsqlDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetDecimal(ordinal);
+    }
+
+    /// <summary>A PostgreSQL <c>time</c> column as <see cref="TimeOnly"/> (Npgsql's mapping).</summary>
+    private static TimeOnly? GetNullableTime(NpgsqlDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetFieldValue<TimeOnly>(ordinal);
+    }
 }
 
 /// <summary>
