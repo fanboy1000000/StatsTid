@@ -4296,3 +4296,20 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - the two test classes that hard-code `localhost:5432`.
 - **For the model-routing register:** the HR-facts stack took three cycles. The server half was approved at cycle 1 apart from one missing test; the long tail was the drawer section's late-answer handling again, as in the 14834 and 14838 stacks. Codex found the cycle-1 date blocker; Fable found the back-dating defect; the copy adjudication caught a ruling of the Orchestrator's that would have re-opened it.
 - **The next CI run must show:** AC-C11a … f (with `SameDateSave_UpdatesInPlace_Audited` and the consult's added negatives), the contract test `HrFacts_Get_SchemaMatchesRuntime`, AC-C11g in the frontend job, `check_endpoint_contracts.py` passing with the new key, `check_docs.py` passing with QUAL-BF-009/010, and PIN-1 unchanged.
+
+**HR-facts merge GATE, 2026-11-25 (on `319f8b68`): green.**
+- Backend: build 0 errors. Unit 1848, DemoSeed 170 and Regression non-Docker 147 passed.
+- The shortcut check found 22 lines, 0 bad; it now includes QUAL-BF-009 and QUAL-BF-010.
+- Frontend: `tsc`, lint, `typecheck:e2e` and the build are clean.
+- **The full vitest run, done alone, passed: 119 files, 1376 tests.**
+- The six HR-facts worktrees were pruned. FU-2's branch was carried by cherry-pick; its patch-id is identical to `460dc54f`.
+
+**Disk watch:** free space on C: fell to 4.7 GB, from about 9 GB, during this run.
+- The worktrees (49 MB), the session temp folders (about 0.6 GB) and the repository (863 MB) do not account for it; the cause was not found in the files this sprint writes.
+- Each new worktree is pruned as soon as it merges. The owner is told.
+
+**Wave-7 briefs at draft 2** (`3bf1f369`): all 24 rulings and the ten "final + 32" plan amendments are applied (`.claude/reviews/S148-wave7-briefs-applied-report.md`). The Orchestrator brought the plan's header, Status row and O-item range to "final + 32".
+
+**TASK-14851 dispatched** (`backend-infrastructure`, the QUAL-268 repair route) on `319f8b68`. It is built early on its own branch, as ruling 43 allows.
+
+**TASK-14850 dispatched** (`ux`, the drawer's transfer date block) on `319f8b68`, after the HR-facts stack's green GATE.
