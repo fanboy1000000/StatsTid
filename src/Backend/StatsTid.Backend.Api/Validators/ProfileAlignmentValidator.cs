@@ -141,8 +141,9 @@ public sealed class ProfileAlignmentValidator
     }
 
     /// <summary>
-    /// One weekday's office-hours window: each time a whole minute (PostgreSQL <c>TIME</c> would
-    /// otherwise round a finer value on store while the audit delta keeps the original); both
+    /// One weekday's office-hours window: each time a whole minute (the batch-A adjudication's ruling 4
+    /// chose whole minutes; PostgreSQL <c>TIME</c> itself rounds only below a microsecond, where the
+    /// audit delta would otherwise keep a value the row does not hold); both
     /// times or neither (the missing one is named); start before end, checked only when neither
     /// time has a minute error and named on the end. Returns true when both times are set, which
     /// is what the <c>OFFICE_HOURS</c> basis needs.

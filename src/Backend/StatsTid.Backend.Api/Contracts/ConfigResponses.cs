@@ -19,7 +19,7 @@ namespace StatsTid.Backend.Api.Contracts;
 //     the set lives only in the C# AbsenceTypeLabels dict);
 //   - agreementCode / okVersion — agreement data, open sets (the standing refusal).
 //
-// The profile-PUT non-2xx surface (400 alignment/supersession, 403, 412, 428) stays
+// The profile-PUT non-2xx surface (400 value/alignment/supersession, 403, 412, 428) stays
 // anonymous/untyped (the S118 error-body exclusion verbatim): the 412 body embeds
 // LocalAgreementProfileResponse's serialization erased to object? but is NEVER declared via
 // .Produces — the exclusion boundary holds at the spec level.
