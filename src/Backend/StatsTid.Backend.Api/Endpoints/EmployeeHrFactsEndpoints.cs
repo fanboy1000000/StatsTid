@@ -119,8 +119,8 @@ public static class EmployeeHrFactsEndpoints
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
             // (2) Nobody records their own HR facts (RES-003): the regime decides the person's own pay.
-            // Unconditional, every role, GlobalAdmin included; before every other check and the
-            // transaction, so nothing further is read, locked or written.
+            // Unconditional, every role, GlobalAdmin included; after the scope check (1) and before every
+            // other check and the transaction, so nothing further is read, locked or written.
             if (ApprovalSelfGuard.IsSelf(actor, employeeId))
             {
                 loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.EmployeeHrFactsEndpoints.SelfChange").LogWarning(
