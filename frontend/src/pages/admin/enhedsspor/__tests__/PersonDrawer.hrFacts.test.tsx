@@ -11,6 +11,7 @@
 //  (5) F  Red conditions: no date input.
 //  (6) F  Red conditions: no section inputs to be disabled.
 //  (7) F  Red conditions: no select and no date input to carry a refusal.
+//  (6b) F Red conditions: no section inputs to be enabled.
 //  (8) R  Regression pin: a non-HR actor sees no section and no HR-facts request is sent.
 // Every case first waits until `ep-email` is enabled (each input is disabled while the drawer loads).
 
@@ -263,7 +264,7 @@ describe('PersonDrawer — TASK-14837 the HR-facts section (AC-C11g)', () => {
     expect(optionTexts()).toEqual([])
   })
 
-  it('(4) F: save sends the exact request; a person with no row sends If-None-Match; Gem ændringer sends none', async () => {
+  it('(4) F: save sends the exact request (If-Match, the chosen values and date)', async () => {
     renderEdit()
     await waitForSection()
     fireEvent.change(screen.getByTestId('pd-hrf-regime'), { target: { value: 'EXEMPT' } })
@@ -331,7 +332,7 @@ describe('PersonDrawer — TASK-14837 the HR-facts section (AC-C11g)', () => {
     expect(hrCalls('PUT')).toHaveLength(0)
   })
 
-  it("(6b) R: on another person's record none is disabled by the lock", async () => {
+  it("(6b) F: on another person's record none is disabled by the lock", async () => {
     renderEdit()
     await waitForSection()
     for (const id of ['pd-hrf-regime', 'pd-hrf-flex-yes', 'pd-hrf-flex-no', 'pd-hrf-date']) {
