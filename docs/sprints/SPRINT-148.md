@@ -4148,3 +4148,30 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - The pattern matches the 14834 stack: the server side settled early and the long tail was frontend late-answer handling.
   - Codex led cycles 1 to 3; Fable found cycle 4's second gap, the table re-mount.
 - **The next CI run must show:** the frontend build with AC-C2v and AC-C2w (CI-W6).
+
+**TASK-14836 security consult** (`.claude/reviews/S148-TASK-14836-security-consult.md`, Sonnet, read-only): **RESIDUALS, nothing blocking.**
+- It confirms ruling 17's two answers: the drift guard sits at the eligibility PUT's tier with the stated lock order and no bypass, and an HR self read of the GET is acceptable.
+- **Residuals:**
+  - 3.1: SEC-068's class reaches `{employeeId}` (confirmed statically). A dated note goes on SEC-068 at this stack's merge.
+  - 3.2: the agreement is read before the transaction. Accepted; revisit before production, and check whether the agreement-code PUT takes the users-row lock.
+  - 3.3: a regime dated before the earliest agreement row is refused. **Ruled by the Orchestrator: fail-closed accepted, and a flex-only save on that date succeeds.**
+  - 3.4: eleven added negatives were sent to TASK-14836-T as contract.
+- **Limit of the consult:** it read the brief only to line 249.
+
+**TASK-14836-T returned** `8304b843` + `e882997c` on `e9618cb8` (report `.claude/reviews/S148-TASK-14836-T-report.md`).
+- **Facts:**
+  - AC-C11a … f, plus the consult's added rows 3, 4, 8 (GET), 9, 10, 12, 13, 15, 18, 19, 21 and 22.
+  - The contract test `S148HrFactsSpecRuntimeTests.HrFacts_Get_SchemaMatchesRuntime`, red until REGEN (O-31's method).
+  - The two Unit N facts, both red under the local **M-55** with the failure lines quoted.
+- **Gate:**
+  - Build 0 errors, CA2100 114.
+  - Unit 1848, DemoSeed 170 and Regression non-Docker 147 passed.
+  - C5 33/27: the 26 delete-census files are classified (b), not edited.
+- **Local evidence, not CI:** 35 cases of `EmployeeHrFactsTests` and `EmployeeHrFactsSeedTests` passed on a throwaway cluster (port 55461). The C5 files' Docker run was not completed.
+- **Brief contradiction, accepted:** consult row 4 is unreachable as written, because the policy refuses first. The reachable form was built: LocalHR@STY02 plus LocalLeader@STY01, acting on themselves.
+- **Incident: port 5432 was reached by accident, and the owner was told.**
+  - The agent's first C5 Docker run included `ManagerVikarEngineTests` and `ReportingLineRepositoryTests`. Both hard-code `Host=localhost;Port=5432;Database=statstid;Username=statstid` and ignore the redirected harness, so they pointed at the owner's `postgresql-x64-16` service.
+  - The run was killed with no result logged, so whether it connected is unknown. The Orchestrator did not probe the service; the owner was given a read-only check to run themselves.
+  - **Prevention:** every dispatch that allows a throwaway cluster now requires a `5432` grep of the tests to be run, excluding every class that names it. The three such classes are those two and `Tests.Smoke/PayrollCalcAuditSmokeTests.cs:53`.
+  - **Register candidate for the close:** the two Regression classes should use the shared harness, not a hard-coded connection string.
+- The throwaway cluster was stopped and its folder deleted.
