@@ -3964,3 +3964,26 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - The R5 items.
 - Checks: vitest 112 / 1285; 18 facts red on `f474897f`; tsc, lint, `typecheck:e2e` and build clean.
 - Cycle 2 is running: Codex and 5α, then Fable.
+
+**TASK-14838, cycle 2** (`f474897f..a10cd057`; saved verbatim):
+- **5α c2:** PASS (`S148-TASK-14838-5alpha-c2.md`).
+- **Codex c2:** CHANGES-REQUIRED (`S148-TASK-14838-5a-codex-c2.raw.md`). Its cycle-1 BLOCKER 2 (the key-wide bound) is closed.
+  - BLOCKER: a five-digit year passes the guard.
+  - WARNING: a late response can close or overwrite a newer action.
+- **Fable c2:** APPROVED-WITH-WARNINGS (`S148-TASK-14838-5a-reviewer-c2.md`). It confirms the bound matches the server.
+  - WARNING: after a `BEFORE_PREDECESSOR` answer, the screen forgets the floor and can loop.
+  - NOTE 1: a seeded anchor date shows as "1. januar 1".
+- **Ruled by the Orchestrator** (`S148-TASK-14838-5a-rulings-c2.md`). The lenses agree on every fact, and the ruling takes the stricter remedy.
+  - **FU-2 (`ux`):**
+    - strict date format;
+    - interaction generations, so a late response never touches a newer action;
+    - the server's floor is remembered;
+    - the hook names its key;
+    - two accessibility items;
+    - the anchor date is shown in ISO form.
+  - **NOTEs accepted:**
+    - handler-guard pins on disabled buttons;
+    - the live alert flashing while a year is typed, which goes to the manual NVDA/JAWS pass;
+    - disabling actions the list already knows the server refuses, a register candidate;
+    - a worded label for the anchor date, a register candidate.
+  - **Cycle 3** runs on FU-2's delta (2 of 5 cycles used).
