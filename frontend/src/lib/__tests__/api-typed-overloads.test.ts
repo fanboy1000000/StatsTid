@@ -398,6 +398,7 @@ describe('S112 typed derivation — real committed spec', () => {
     // users PUT having to admit inactive subjects (that would be a reactivation
     // side-door). +1 POST: the HR backdate-worklist resolve. The worklist GET is
     // a read and lands on the get union by the same admission rule.
+    // S148 / TASK-14836 — +1 PUT: the HR-facts save (overtime regime and flex membership), JSON 200.
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
@@ -411,6 +412,7 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/employees/{employeeId}/birth-date'
       | '/api/admin/employees/{employeeId}/employment-start-date'
       | '/api/admin/employees/{employeeId}/employment-end-date'
+      | '/api/admin/employees/{employeeId}/hr-facts'
       | '/api/overtime/pre-approval/{id}/approve'
       | '/api/overtime/pre-approval/{id}/reject'
       | '/api/vacation-transfer-agreements/{employeeId}'

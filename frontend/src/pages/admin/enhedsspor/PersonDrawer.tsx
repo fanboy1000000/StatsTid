@@ -35,6 +35,7 @@ import { fetchEmployeeProfile } from '../editPerson/employeeProfileApi'
 import { StamdataSection } from '../editPerson/StamdataSection'
 import { ProfileSection } from '../editPerson/ProfileSection'
 import { EntitlementSection } from '../editPerson/EntitlementSection'
+import { HrFactsSection } from '../editPerson/HrFactsSection'
 import { LifecycleSections, type LifecycleContext } from '../editPerson/LifecycleSections'
 import { ScheduledChangeNotice } from '../editPerson/ScheduledChangeNotice'
 import { EffectiveDatePicker, relateToScheduled, type ScheduleRelation } from '../editPerson/EffectiveDatePicker'
@@ -881,6 +882,8 @@ export function PersonDrawer({
                 disabled={busy}
                 selfLockNoteId={selfLockNoteId}
               />
+
+              <HrFactsSection employeeId={user.userId} today={today} disabled={busy} selfLockNoteId={selfLockNoteId} />
             </>
           )}
 
