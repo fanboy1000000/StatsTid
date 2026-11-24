@@ -3913,3 +3913,21 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - Its re-pin of `configTypedWire.test.ts`, the hooks' own test that the signature change broke, is accepted as a declared deviation.
 
 **Found, not fixed, for the 5a lenses:** on the override page, row-action errors show only inside the create form. That is older than this task.
+- **FU-2 returned** `8844a6ee` (report `S148-TASK-14834-stack-FU-2-report.md`). It adds:
+  - a 40-case access theory: ten actors on all four routes, each refused exactly, with nothing written;
+  - the wrong-address reinstate (404) and the list-leak fact;
+  - the WITHDRAWN audit before-image and both date refusals' `nearestValid`;
+  - FU-1's three edges.
+
+  The soft-delete window is staged deterministically: a side connection holds the lock while the delete commits.
+  - **Local, not CI evidence:** 65 of 65 green. With FU-1 scratch-reverted, exactly the six new R2(d) arms are red.
+  - Gate: build 0 errors; Unit 1846, DemoSeed 170, Regression non-Docker 147.
+  - **Correction, accepted:** consult row 9's "No scopes assigned" is unreachable here. The route policy refuses first, with an empty-body 403, and that is pinned.
+- **FU-3 dispatched** (`ux`) on `8844a6ee`.
+- **TASK-14838 reviewed, cycle 1:**
+  - **5α PASS** (`S148-TASK-14838-5alpha.md`).
+  - **Codex CHANGES-REQUIRED** (`S148-TASK-14838-5a-codex-c1.raw.md`).
+    - BLOCKER: a typed date outside `min`/`max` is still sent.
+    - BLOCKER: the override page's lower limit uses the row's own date, not the latest date across every row of the key; the database allows several inactive rows per key.
+    - WARNINGs: a failed version read is treated as "no predecessor"; row-action errors are invisible.
+  - The Fable lens is running.
