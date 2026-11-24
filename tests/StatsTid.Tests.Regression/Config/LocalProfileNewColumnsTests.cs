@@ -13,9 +13,10 @@ using static StatsTid.Tests.Regression.Organisation.TransferWriteTests;
 namespace StatsTid.Tests.Regression.Config;
 
 /// <summary>
-/// A Backend host with the clock fixed at Thursday 5 March 2026 over one container, shared by the two profile
-/// test classes of S148 / TASK-14832-T. Every fact uses its own agreement code, so sharing is safe. The class
-/// is serial with every other class (<c>xunit.runner.json</c>: one collection at a time).
+/// A Backend host with the clock fixed at Thursday 5 March 2026 over one container. Each of the two profile
+/// test classes of S148 / TASK-14832-T has its own fixture (<c>IClassFixture</c>), so its own container; within a
+/// class every fact uses its own agreement code. The class is serial with every other class
+/// (<c>xunit.runner.json</c>: one collection at a time).
 /// </summary>
 public sealed class LocalProfileHostFixture : IAsyncLifetime
 {
@@ -83,7 +84,7 @@ public sealed class LocalProfileNewColumnsTests : IClassFixture<LocalProfileHost
 
     public LocalProfileNewColumnsTests(LocalProfileHostFixture fx) => _fx = fx;
 
-    /// <summary>The 22 settable members in the product's order: (model member, column, kind).</summary>
+    /// <summary>The 22 settable members in the product's order: (model member, column).</summary>
     private static readonly (string Member, string Column)[] Settable =
     {
         ("WeeklyNormHours", "weekly_norm_hours"),

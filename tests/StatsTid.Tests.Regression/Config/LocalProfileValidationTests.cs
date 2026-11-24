@@ -57,7 +57,7 @@ public sealed class LocalProfileValidationTests : IClassFixture<LocalProfileHost
     /// <c>maxOvertimeHoursPerPeriod</c> 0 (the row holds 0), and every member null (a body of <c>effectiveFrom</c>
     /// only; the row's 22 settable columns all NULL).
     /// <para><b>Product code between the readings:</b> the PUT.</para>
-    /// <para><b>Red conditions (F).</b> Today <c>weeklyNormHours: 0</c> answers 200 and is stored, so its 400
+    /// <para><b>Red conditions (F).</b> Before TASK-14832 <c>weeklyNormHours: 0</c> answers 200 and is stored, so its 400
     /// assertion fails; the accepted cases pass today and stay as the discriminating half.</para>
     /// </summary>
     [Theory]
@@ -148,8 +148,8 @@ public sealed class LocalProfileValidationTests : IClassFixture<LocalProfileHost
     private Task<long> AuditCountAsync() =>
         ScalarLongAsync(_fx.Cs, "SELECT COUNT(*) FROM local_agreement_profile_audit");
 
-    /// <summary>The first create answers 400 <c>Profile validation failed</c> with the one (field, code) pair in
-    /// <c>fields</c>, and nothing is stored.</summary>
+    /// <summary>The first create answers 400 <c>Profile validation failed</c> with exactly the one (field, code) pair in
+    /// <c>fields</c> and a null <c>nearestValid</c>, and nothing is stored.</summary>
     private async Task AssertRefusedAsync(string code, string json, string field, string errorCode)
     {
         var auditBefore = await AuditCountAsync();
@@ -160,10 +160,13 @@ public sealed class LocalProfileValidationTests : IClassFixture<LocalProfileHost
         Assert.True(rsp.StatusCode == HttpStatusCode.BadRequest, $"{code}: expected 400, got {(int)rsp.StatusCode}: {text}");
         using var doc = JsonDocument.Parse(text);
         Assert.Equal("Profile validation failed", doc.RootElement.GetProperty("error").GetString());
-        var pairs = doc.RootElement.GetProperty("fields").EnumerateArray()
+        // The complete list: exactly this one error, and its nearestValid is null (a value error carries no dates).
+        var entries = doc.RootElement.GetProperty("fields").EnumerateArray().ToList();
+        var pairs = entries
             .Select(f => (Field: f.GetProperty("field").GetString(), Code: f.GetProperty("code").GetString()))
             .ToList();
-        Assert.Contains((field, errorCode), pairs);
+        Assert.Equal(new[] { ((string?)field, (string?)errorCode) }, pairs);
+        Assert.All(entries, f => Assert.Equal(JsonValueKind.Null, f.GetProperty("nearestValid").ValueKind));
 
         Assert.Equal(0L, await ScalarLongAsync(_fx.Cs, ProfileRowsSql, ("c", code)));
         Assert.Equal(auditBefore, await AuditCountAsync());
