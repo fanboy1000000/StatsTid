@@ -3313,6 +3313,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/employees/{employeeId}/hr-facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    asOf?: string;
+                };
+                header?: never;
+                path: {
+                    employeeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmployeeHrFactsResponse"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    employeeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.EmployeeHrFactsEndpoints.SaveHrFactsRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmployeeHrFactsUpdatedResponse"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/employees/{employeeId}/employment-start-date": {
         parameters: {
             query?: never;
@@ -5896,6 +5960,34 @@ export interface components {
             /** Format: double */
             onCallDutyRate: number;
         };
+        "StatsTid.Backend.Api.Contracts.EmployeeHrFactsResponse": {
+            employeeId: string;
+            /** Format: date */
+            asOf: string;
+            agreementCode: string | null;
+            allowedOvertimeRegimes: string[];
+            /** @enum {string|null} */
+            overtimeRegime: "OVERTIME" | "EXEMPT" | "CONTRACTUAL" | "DISCRETIONARY" | "NONE" | null;
+            onFlexScheme: boolean | null;
+            /** Format: date */
+            effectiveFrom: string | null;
+            /** Format: int64 */
+            liveVersion: number | null;
+            /** Format: date */
+            liveEffectiveFrom: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.EmployeeHrFactsUpdatedResponse": {
+            employeeId: string;
+            /** Format: uuid */
+            factsId: string;
+            /** Format: date */
+            effectiveFrom: string;
+            /** @enum {string|null} */
+            overtimeRegime: "OVERTIME" | "EXEMPT" | "CONTRACTUAL" | "DISCRETIONARY" | "NONE" | null;
+            onFlexScheme: boolean | null;
+            /** Format: int64 */
+            version: number;
+        };
         "StatsTid.Backend.Api.Contracts.EmployeePeriodItem": {
             /** Format: uuid */
             periodId: string;
@@ -7454,6 +7546,12 @@ export interface components {
         };
         "StatsTid.Backend.Api.Endpoints.DesignateLeaderRequest": {
             userId?: string;
+        };
+        "StatsTid.Backend.Api.Endpoints.EmployeeHrFactsEndpoints.SaveHrFactsRequest": {
+            /** Format: date */
+            effectiveFrom?: string | null;
+            overtimeRegime?: string | null;
+            onFlexScheme?: boolean | null;
         };
         "StatsTid.Backend.Api.Endpoints.EmployeeProfileEndpoints.UpdateEmployeeProfileRequest": {
             /** Format: date */

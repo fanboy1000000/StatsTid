@@ -102,6 +102,9 @@ REGISTRY: dict[str, list[str]] = {
     #   seed-heavy Approval/S106RosterUnitTagTests, which the liveness scan can't see + which stays
     #   as the behavioral suite).
     "/api/admin/reporting-lines/tree/{}/medarbejdere": ["GetRoster_IsEnvelope_RowsCarryUnitTagFieldSet"],
+    # GET /api/admin/employees/{}/hr-facts -> EmployeeHrFactsResponse (S148 TASK-14836). The edit drawer's
+    #   HR-facts section (TASK-14837) reads it inline (PAT-010); pinned by Contracts/S148HrFactsSpecRuntimeTests.cs.
+    "/api/admin/employees/{}/hr-facts": ["HrFacts_Get_SchemaMatchesRuntime"],
 }
 
 # ---------------------------------------------------------------------------

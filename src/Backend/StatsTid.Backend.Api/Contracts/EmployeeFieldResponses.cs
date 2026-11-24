@@ -39,7 +39,7 @@ public sealed record EmploymentEndDateResponse(
 
 /// <summary>The PUT /api/admin/employees/{employeeId}/entitlement-eligibility/{entitlementType}
 /// 200 body — the post-write eligibility state. <paramref name="EffectiveFrom"/> is
-/// server-stamped to today UTC (ADR-023 D8); <paramref name="Version"/> also rides the ETag
+/// server-stamped to the Copenhagen business day (ADR-023 D8; PAT-028); <paramref name="Version"/> also rides the ETag
 /// header for the next If-Match.</summary>
 public sealed record EntitlementEligibilityUpdatedResponse(
     string EmployeeId,

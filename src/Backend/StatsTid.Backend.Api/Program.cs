@@ -145,6 +145,8 @@ builder.Services.AddSingleton<EntitlementConfigRepository>();
 builder.Services.AddSingleton<EmployeeProfileRepository>();
 builder.Services.AddSingleton<UserAgreementCodeRepository>();
 builder.Services.AddSingleton<UserOrganisationRepository>(); // S148 C-13 — the dated organisation's writer (user create, user edit)
+builder.Services.AddSingleton<EmployeeHrFactsRepository>(); // S148 C-11 — the dated HR facts (overtime regime, flex membership)
+builder.Services.AddSingleton<EmployeeHrFactsResolver>();   // S148 C-11 — the HR facts as of a day
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
 // S146 / TASK-14602 (QUAL-198) — the team overview's one-query read of every roster employee's
 // part-time fraction at month end. Registered under its INTERFACE so a test host can swap in one

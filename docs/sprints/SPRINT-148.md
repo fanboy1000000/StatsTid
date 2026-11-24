@@ -4264,3 +4264,35 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - the demo rows carry no audit history until edited;
   - S149's first customs reader moves PIN-1 at its planned re-pin.
 - **"final + 32" amendments:** a planner is applying them with the rulings.
+
+**The HR-facts stack reviewed, cycle 3, and merged, 2026-11-24.**
+- **FU-3** `35f552f2` (`ux`): the save continuation follows its generation; the select shows what the form holds in every load state; the flex focus target; the (e3) arm; a date change clears "gemt". 4 of 35 tests were red on `83496e8a`.
+- **Cycle 3: both lenses approve.** Fable c3 APPROVED (six NOTEs); Codex c3 APPROVED-WITH-WARNINGS (two NOTEs, no WARNING); 5α c3 PASS. Cycles used: 3 of 5.
+- **Merged** `--no-ff` (this commit). It carries TASK-14836 + -T, REGEN, TASK-14837, FU-1 to FU-3, the security consult and the Orchestrator's comment commit.
+- **In the merge commit:**
+  - O-20: `EmployeeHrFactsChanged.cs`'s "Nothing emits it yet" sentence and the catalog row's "define-only" note are made true.
+  - The stale "today UTC" remark in `Contracts/EmployeeFieldResponses.cs` is corrected.
+  - The two `shortcut(pending)` lines are registered: **QUAL-BF-009** (the date limits, ruling 16) and **QUAL-BF-010** (every seeded person on flex, R-17).
+  - O-31: `tools/check_endpoint_contracts.py` registers `/api/admin/employees/{}/hr-facts` with `HrFacts_Get_SchemaMatchesRuntime`.
+  - HRP-025 and HRP-026 are marked built.
+  - SEC-062 notes the HR-facts PUT is built with the guard (23 call sites).
+  - SEC-068 is widened to `{employeeId}` segments (consult § 3.1).
+  - O-32: the ROADMAP line for S1-9 and the first HR-facts reader (`FROM_TIME` without office hours; future-dated facts; back-dated saves overwriting later periods, C2-R2).
+  - Two test labels are corrected: (i4) is F; the (c-flex) header.
+- **What the owner gets, in plain words.** HR records, per person and from a chosen date, the overtime regime and whether the person is on the flex scheme.
+  - The edit drawer offers only the values the person's agreement allows on that date, and shows a missing regime as "Mangler – ikke registreret".
+  - Nobody can edit their own facts. HR of another institution, and anyone acting on a departed person, are refused. A save that lands after the person moved institution is refused.
+  - Every change is audited. Nothing reaches pay before S149.
+- **Told to the owner (O-17; told, not asked):**
+  - (1) Every person `init.sql` seeds starts on the flex scheme until HR records an exception (R-17, QUAL-BF-010).
+  - (2) HR facts cannot be future-dated or corrected before the current record until the first reader arrives (ruling 16, QUAL-BF-009).
+  - (3) Every seeded AC person starts with the regime missing.
+- **Carried to the close (register candidates):**
+  - the unmatched `form` attribute on the HR date input does not conform (behaviour defined; Low);
+  - no retry control behind "Prøv igen" (Low);
+  - "gemt" stays while HR edits the regime or the flex choice (Fable c3 NOTE 4);
+  - the loading arm of the placeholder has no test (Fable c3 NOTE 1);
+  - not reachable through the drawer today: a person change without a remount keeps the previous person's recorded block, and a flex refusal focuses "Ja" (Fable c3 NOTEs 2 and 6);
+  - the two test classes that hard-code `localhost:5432`.
+- **For the model-routing register:** the HR-facts stack took three cycles. The server half was approved at cycle 1 apart from one missing test; the long tail was the drawer section's late-answer handling again, as in the 14834 and 14838 stacks. Codex found the cycle-1 date blocker; Fable found the back-dating defect; the copy adjudication caught a ruling of the Orchestrator's that would have re-opened it.
+- **The next CI run must show:** AC-C11a … f (with `SameDateSave_UpdatesInPlace_Audited` and the consult's added negatives), the contract test `HrFacts_Get_SchemaMatchesRuntime`, AC-C11g in the frontend job, `check_endpoint_contracts.py` passing with the new key, `check_docs.py` passing with QUAL-BF-009/010, and PIN-1 unchanged.
