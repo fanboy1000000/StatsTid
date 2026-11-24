@@ -480,6 +480,9 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/agreement-configs/{configId}/entitlements'
       | '/api/projects/{orgId}'
       | '/api/config/{orgId}/absence-types/visibility'
+      | '/api/config/{orgId}/customary-days'
+      | '/api/config/{orgId}/customary-days/{customId}/withdraw'
+      | '/api/config/{orgId}/customary-days/{customId}/reinstate'
       | '/api/skema/{employeeId}/save'
       | '/api/overtime/{employeeId}/compensate'
     >()
