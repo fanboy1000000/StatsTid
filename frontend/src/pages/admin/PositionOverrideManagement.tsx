@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from 'react'
 import {
   usePositionOverrides,
   isPositionOverrideMutationError,
@@ -83,76 +83,102 @@ export function PositionOverrideManagement() {
   const today = useCalendarToday()
   const [rowDate, setRowDate] = useState<string | null>(null)
   const [pending, setPending] = useState<{ id: string; kind: 'deactivate' | 'activate' } | null>(null)
-  const [dateRefusal, setDateRefusal] = useState<{ scope: string; refusal: DateRefusal } | null>(null)
-  // The error of a row action (edit, switch), shown above the table; create keeps `formError`.
+  // The refusal on screen, for the create form or for the row step.
+  const [dateRefusal, setDateRefusal] = useState<{ kind: 'create' | 'row'; refusal: DateRefusal } | null>(null)
+  const clearRefusal = (kind: 'create' | 'row') =>
+    setDateRefusal((r) => (r && r.kind === kind ? null : r))
+  // The error of a row action (edit, switch), shown above the table; a create's error is `formError`,
+  // inside the create form.
   const [rowError, setRowError] = useState<string | null>(null)
   const [switching, setSwitching] = useState(false)
-  // The date the server last named as the earliest it accepts (a BEFORE_PREDECESSOR answer), kept per
-  // scope (the create form's typed key, or an override id); it raises the list's bound, never lowers it.
-  const [floor, setFloor] = useState<{ scope: string; date: string } | null>(null)
-  const floorOf = (scope: string) => (floor && floor.scope === scope ? floor.date : null)
-  // The current interaction: bumped whenever the user opens, cancels or edits a form, so the answer
-  // to an earlier submission can tell whether it still belongs to what is on screen.
-  const interaction = useRef(0)
-  const changed = () => { interaction.current += 1 }
+  // The date the server last named as the earliest it accepts (a BEFORE_PREDECESSOR answer); it raises
+  // the list's bound, never lowers it. One slot for the create form (by its typed key) and one for the
+  // row step (by override id); each is cleared only when its own interaction ends.
+  const [createFloor, setCreateFloor] = useState<{ scope: string; date: string } | null>(null)
+  const [rowFloor, setRowFloor] = useState<{ id: string; date: string } | null>(null)
+  // Each interaction (the create form, the row step) has its own generation, bumped only when it opens,
+  // cancels or closes. An answer applies when its interaction's generation is unchanged and the date it
+  // submitted is still that interaction's date; typing in other fields or acting in the other form
+  // does not make it stale.
+  const createGen = useRef(0)
+  const rowGen = useRef(0)
+  const createDateNow = useRef('')
+  const rowDateNow = useRef('')
+  type Submission = { kind: 'create' | 'row'; gen: number; date: string }
+  const stillCurrent = (s: Submission) =>
+    s.kind === 'create'
+      ? s.gen === createGen.current && s.date === createDateNow.current
+      : s.gen === rowGen.current && s.date === rowDateNow.current
   const createDateInput = useRef<HTMLInputElement>(null)
   const rowDateInput = useRef<HTMLInputElement>(null)
 
   const createDate = form.appliesFrom ?? today
   const createScope = `create|${form.agreementCode}|${form.okVersion}|${form.positionCode}`
-  const createBound = laterDate(newestKeyDate(data, form), floorOf(createScope))
+  const createBound = laterDate(
+    newestKeyDate(data, form),
+    createFloor && createFloor.scope === createScope ? createFloor.date : null,
+  )
   const createBoundRefusal = dateBoundRefusal(createDate, today, createBound)
   // "Unknown" is not "none": while the list is loading or failed the key's lower limit is unknown.
   const createBlocked = loading || error !== null || !isCalendarDate(createDate) || createBoundRefusal !== null
 
   const rowItem = data.find((r) => r.overrideId === (editingId ?? pending?.id))
   const rowDateValue = rowDate ?? today
-  const rowBound = rowItem ? laterDate(newestKeyDate(data, rowItem), floorOf(rowItem.overrideId)) : null
+  const rowBound = rowItem
+    ? laterDate(newestKeyDate(data, rowItem), rowFloor && rowFloor.id === rowItem.overrideId ? rowFloor.date : null)
+    : null
   const rowBoundRefusal = rowItem ? dateBoundRefusal(rowDateValue, today, rowBound) : null
   const rowBlocked = !isCalendarDate(rowDateValue) || rowBoundRefusal !== null
+  useEffect(() => {
+    createDateNow.current = createDate
+    rowDateNow.current = rowDateValue
+  })
 
   const handleChange = (field: keyof CreateForm) => (e: ChangeEvent<HTMLInputElement>) => {
-    changed()
     setForm((f) => ({ ...f, [field]: e.target.value }))
   }
 
   const changeRowDate = (date: string) => {
-    changed()
     setRowDate(date)
-    setDateRefusal(null)
+    clearRefusal('row')
   }
 
-  // `scope` is the create form's key scope or the override id; `bound` is the date's lower limit.
-  // `mine` is the interaction the submission belonged to: an answer for an interaction that has since
-  // been cancelled, replaced or edited is ignored (the list was already refreshed by the write).
-  const handleMutationError = (err: unknown, scope: string, bound: string | null, mine: number) => {
-    if (mine !== interaction.current) return
+  // `key` is the create form's key scope or the override id (the floor's slot); `bound` is the date's
+  // lower limit. An answer for an interaction that was cancelled or replaced since, or for a date the
+  // user has changed since, is ignored; a failed write does not refresh the list, so nothing is lost.
+  const handleMutationError = (err: unknown, mine: Submission, key: string, bound: string | null) => {
+    if (!stillCurrent(mine)) return
     if (isPositionOverrideMutationError(err) && err.status === 412) {
       setStaleConflict({ expected: err.body?.expectedVersion, actual: err.body?.actualVersion })
       return
     }
     const named = isPositionOverrideMutationError(err) ? predecessorFloor(err) : null
-    if (named) setFloor({ scope, date: named })
+    if (named) {
+      if (mine.kind === 'create') setCreateFloor({ scope: key, date: named })
+      else setRowFloor({ id: key, date: named })
+      // The list is read again so the newest dates it shows catch up with the server's floor.
+      void refetch()
+    }
     const refusal = isPositionOverrideMutationError(err)
       ? dateRefusalFrom(err, today, laterDate(bound, named))
       : null
     if (refusal) {
-      setDateRefusal({ scope, refusal })
+      setDateRefusal({ kind: mine.kind, refusal })
     } else {
       const message = err instanceof Error ? err.message : String(err)
-      if (scope === 'create') setFormError(message)
+      if (mine.kind === 'create') setFormError(message)
       else setRowError(message)
     }
   }
 
   // The refusal of a scope: the one the screen knows (a date out of bounds) first, else the server's.
   const renderDateRefusal = (
-    scope: string,
+    kind: 'create' | 'row',
     known: DateRefusal | null,
     setDate: (date: string) => void,
     input: RefObject<HTMLInputElement | null>,
   ) => {
-    const shown = known ?? (dateRefusal && dateRefusal.scope === scope ? dateRefusal.refusal : null)
+    const shown = known ?? (dateRefusal && dateRefusal.kind === kind ? dateRefusal.refusal : null)
     return shown ? (
       <div className={styles.alert} role="alert">
         {shown.text}
@@ -161,7 +187,7 @@ export function PositionOverrideManagement() {
             key={b.date}
             type="button"
             className={styles.actionBtn}
-            onClick={() => { setDate(b.date); setDateRefusal(null); input.current?.focus() }}
+            onClick={() => { setDate(b.date); clearRefusal(kind); input.current?.focus() }}
           >
             {b.label}
           </button>
@@ -182,10 +208,10 @@ export function PositionOverrideManagement() {
       return
     }
     if (createBlocked) return
-    const mine = interaction.current
+    const mine: Submission = { kind: 'create', gen: createGen.current, date: createDate }
     setSubmitting(true)
     setFormError(null)
-    setDateRefusal(null)
+    clearRefusal('create')
     try {
       await create({
         appliesFrom: createDate,
@@ -197,24 +223,39 @@ export function PositionOverrideManagement() {
         weeklyNormHours: parseOptionalNumber(form.weeklyNormHours),
         description: form.description || null,
       })
-      if (mine === interaction.current) {
-        setForm(emptyForm)
+      if (stillCurrent(mine)) {
+        resetCreate()
         setShowCreate(false)
       }
     } catch (err) {
-      handleMutationError(err, createScope, createBound, mine)
+      handleMutationError(err, mine, createScope, createBound)
     } finally {
       setSubmitting(false)
     }
   }
 
-  const startEdit = (item: WithEtag<PositionOverrideConfig>) => {
-    changed()
-    setPending(null)
-    setDateRefusal(null)
+  // The create form's interaction ends (cancelled, or closed by a successful create): its error,
+  // refusal and floor go with it.
+  const resetCreate = () => {
+    createGen.current += 1
+    setFormError(null)
+    clearRefusal('create')
+    setCreateFloor(null)
+    setForm(emptyForm)
+  }
+
+  // The row step's interaction ends: its refusal, error and floor go with it.
+  const resetRowStep = () => {
+    rowGen.current += 1
+    clearRefusal('row')
     setRowError(null)
+    setRowFloor(null)
+  }
+
+  const startEdit = (item: WithEtag<PositionOverrideConfig>) => {
+    resetRowStep()
+    setPending(null)
     setRowDate(null)
-    setFloor(null)
     setEditingId(item.overrideId)
     setEditForm({
       maxFlexBalance: item.maxFlexBalance?.toString() ?? '',
@@ -225,11 +266,9 @@ export function PositionOverrideManagement() {
   }
 
   const cancelEdit = () => {
-    changed()
+    resetRowStep()
     setEditingId(null)
     setEditForm({})
-    setDateRefusal(null)
-    setRowError(null)
   }
 
   // A switch on or off asks for its date first (no longer one click): it can change the weekly norm
@@ -237,22 +276,19 @@ export function PositionOverrideManagement() {
   const startSwitch = (item: WithEtag<PositionOverrideConfig>, kind: 'deactivate' | 'activate') => {
     cancelEdit()
     setRowDate(null)
-    setFloor(null)
     setPending({ id: item.overrideId, kind })
   }
 
   const cancelSwitch = () => {
-    changed()
+    resetRowStep()
     setPending(null)
-    setDateRefusal(null)
-    setRowError(null)
   }
 
   const saveEdit = async (item: WithEtag<PositionOverrideConfig>) => {
     if (rowBlocked) return
-    const mine = interaction.current
+    const mine: Submission = { kind: 'row', gen: rowGen.current, date: rowDateValue }
     setSubmitting(true)
-    setDateRefusal(null)
+    clearRefusal('row')
     setRowError(null)
     try {
       await update(item.overrideId, item.etag, {
@@ -265,12 +301,9 @@ export function PositionOverrideManagement() {
         weeklyNormHours: parseOptionalNumber(editForm.weeklyNormHours ?? ''),
         description: editForm.description || null,
       })
-      if (mine === interaction.current) {
-        setEditingId(null)
-        setEditForm({})
-      }
+      if (stillCurrent(mine)) cancelEdit()
     } catch (err) {
-      handleMutationError(err, item.overrideId, rowBound, mine)
+      handleMutationError(err, mine, item.overrideId, rowBound)
     } finally {
       setSubmitting(false)
     }
@@ -278,22 +311,21 @@ export function PositionOverrideManagement() {
 
   const confirmSwitch = async (item: WithEtag<PositionOverrideConfig>, kind: 'deactivate' | 'activate') => {
     if (rowBlocked || switching) return
-    const mine = interaction.current
+    const mine: Submission = { kind: 'row', gen: rowGen.current, date: rowDateValue }
     setSwitching(true)
-    setDateRefusal(null)
+    clearRefusal('row')
     setRowError(null)
     try {
       await (kind === 'deactivate' ? deactivate : activate)(item.overrideId, item.etag, rowDateValue)
-      if (mine === interaction.current) setPending(null)
+      if (stillCurrent(mine)) cancelSwitch()
     } catch (err) {
-      handleMutationError(err, item.overrideId, rowBound, mine)
+      handleMutationError(err, mine, item.overrideId, rowBound)
     } finally {
       setSwitching(false)
     }
   }
 
   const handleEditChange = (field: string) => (e: ChangeEvent<HTMLInputElement>) => {
-    changed()
     setEditForm((f) => ({ ...f, [field]: e.target.value }))
   }
 
@@ -305,11 +337,8 @@ export function PositionOverrideManagement() {
           <button
             className={styles.createBtn}
             onClick={() => {
-              changed()
+              resetCreate()
               setShowCreate(!showCreate)
-              setFormError(null)
-              setDateRefusal(null)
-              setForm(emptyForm)
             }}
           >
             {showCreate ? 'Annuller' : 'Opret ny'}
@@ -449,15 +478,15 @@ export function PositionOverrideManagement() {
                   value={createDate}
                   max={today}
                   min={createBound ?? undefined}
-                  onChange={(e) => { handleChange('appliesFrom')(e); setDateRefusal(null) }}
+                  onChange={(e) => { handleChange('appliesFrom')(e); clearRefusal('create') }}
                 />
               </div>
             </div>
 
             {renderDateRefusal(
-              createScope,
+              'create',
               createBoundRefusal,
-              (date) => { changed(); setForm((f) => ({ ...f, appliesFrom: date })) },
+              (date) => setForm((f) => ({ ...f, appliesFrom: date })),
               createDateInput,
             )}
             {formError && <div className={styles.alert}>{formError}</div>}
@@ -466,7 +495,7 @@ export function PositionOverrideManagement() {
               <button
                 type="button"
                 className={styles.cancelBtn}
-                onClick={() => { changed(); setShowCreate(false) }}
+                onClick={() => { resetCreate(); setShowCreate(false) }}
               >
                 Annuller
               </button>
@@ -485,7 +514,7 @@ export function PositionOverrideManagement() {
       )}
 
       {rowError && <div className={styles.alert} role="alert">{rowError}</div>}
-      {rowItem && renderDateRefusal(rowItem.overrideId, rowBoundRefusal, changeRowDate, rowDateInput)}
+      {rowItem && renderDateRefusal('row', rowBoundRefusal, changeRowDate, rowDateInput)}
 
       {!loading && data.length > 0 && (
         <table className={styles.table}>

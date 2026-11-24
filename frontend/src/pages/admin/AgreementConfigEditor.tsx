@@ -174,11 +174,12 @@ export function AgreementConfigEditor() {
     config?.okVersion ?? '',
   )
   // The date the server last named as the earliest it accepts (a BEFORE_PREDECESSOR answer): it
-  // raises the version read's bound until the dialog is closed, never lowers it.
+  // raises the version read's bound, never lowers it; the next opening of the publish dialog clears it.
   const [floor, setFloor] = useState<string | null>(null)
   const publishBound = laterDate(newestVersion.date, floor)
-  // The current dialog interaction: bumped whenever the dialog opens, closes or its date changes, so
-  // the answer to an earlier publish can tell whether it still belongs to what is on screen.
+  // The current dialog interaction: bumped whenever the dialog opens or closes (its date cannot change
+  // while a publish is pending), so the answer to an earlier publish can tell whether it still belongs
+  // to what is on screen.
   const interaction = useRef(0)
   const changed = () => { interaction.current += 1 }
   const closeDialog = () => { changed(); setConfirmDialog(null) }
@@ -207,10 +208,11 @@ export function AgreementConfigEditor() {
   // version, turning a display race into a failed or misdirected write.
   const latestConfigRequestId = useRef(0)
 
-  const fetchConfig = useCallback(async () => {
+  // `quiet`: read again without replacing the page with the spinner, so an open dialog is not remounted.
+  const fetchConfig = useCallback(async (quiet = false) => {
     if (isNew || !configId) return
     const requestId = ++latestConfigRequestId.current
-    setLoading(true)
+    if (!quiet) setLoading(true)
     setError(null)
     // S25 / TASK-2506: capture the by-id ETag header for the next If-Match
     // (header-preferred, body.version fallback for cross-origin deployments).
@@ -237,6 +239,12 @@ export function AgreementConfigEditor() {
   }, [configId, isNew])
 
   useEffect(() => { fetchConfig() }, [fetchConfig])
+
+  // A dialog never stays open on a config that is no longer a draft (a publish that finished after the
+  // dialog was closed, or one from another tab).
+  useEffect(() => {
+    if (config && config.status !== 'DRAFT') setConfirmDialog(null)
+  }, [config])
 
   const setField = <K extends keyof ConfigForm>(key: K, value: ConfigForm[K]) => {
     setForm((f) => ({ ...f, [key]: value }))
@@ -309,10 +317,10 @@ export function AgreementConfigEditor() {
     setDateRefusal(null)
     try {
       await publishConfig(configId, etag, effectivePublishDate)
-      // An answer for a dialog that was closed, reopened or edited since changes nothing on screen
-      // except the config, which is read again (it is now published).
+      // An answer for a dialog that was closed since changes nothing on screen except the config, which
+      // is read again without the page spinner (it is now published; the effect above closes any dialog).
       if (mine === interaction.current) navigate('/global/overenskomster')
-      else await fetchConfig()
+      else await fetchConfig(true)
     } catch (err) {
       if (mine !== interaction.current) return
       // A refused date keeps the dialog open with the dates the server would accept; every other
@@ -689,7 +697,7 @@ export function AgreementConfigEditor() {
           configId={configId}
           entitlements={entitlements}
           readOnly={entitlementsReadOnly}
-          onRefresh={fetchConfig}
+          onRefresh={() => fetchConfig()}
         />
       )}
 
@@ -721,6 +729,7 @@ export function AgreementConfigEditor() {
                   value={effectivePublishDate}
                   max={today}
                   min={publishBound ?? undefined}
+                  disabled={saving}
                   onChange={(e) => { changed(); setPublishDate(e.target.value); setDateRefusal(null) }}
                   aria-describedby={newestVersion.status === 'loaded' ? 'ac-publish-date-help' : undefined}
                 />
@@ -747,6 +756,7 @@ export function AgreementConfigEditor() {
                         key={b.date}
                         type="button"
                         className={styles.secondaryBtn}
+                        disabled={saving}
                         onClick={() => {
                           changed()
                           setPublishDate(b.date)

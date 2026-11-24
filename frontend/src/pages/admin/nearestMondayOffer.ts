@@ -69,8 +69,9 @@ export function newestKeyDate(
 
 /**
  * True for exactly `yyyy-MM-dd` (four-digit year) naming a real calendar day. A date input also
- * yields longer years ("12026-11-11"), which string comparison would rank after today and before
- * every bound alike; anything else is "not a usable date", the same as an empty field.
+ * yields longer years ("12026-11-11"), which string comparison ranks before today ("1" sorts before
+ * "2"), so the "not after today" check would pass it; anything else is "not a usable date", the
+ * same as an empty field.
  */
 export function isCalendarDate(date: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false
