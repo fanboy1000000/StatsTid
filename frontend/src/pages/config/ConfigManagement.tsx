@@ -33,6 +33,7 @@ import {
   Table,
 } from '../../components/ui'
 import { ProfileEditor } from '../../components/config/ProfileEditor'
+import { CustomaryDaysEditor } from '../../components/config/CustomaryDaysEditor'
 import { historySettingLines } from '../../components/config/profileSettingsCopy'
 import styles from './ConfigManagement.module.css'
 
@@ -324,6 +325,17 @@ export function ConfigManagement() {
       ) : (
         <div className={styles.emptyState}>
           Vaelg organisation, overenskomst og OK-version for at se historik.
+        </div>
+      ),
+    },
+    {
+      value: 'customs',
+      label: 'Kutymefridage',
+      content: selectedOrgId ? (
+        <CustomaryDaysEditor orgId={selectedOrgId} agreementOptions={AGREEMENT_OPTIONS} />
+      ) : (
+        <div className={styles.emptyState}>
+          Vælg en organisation for at se kutymefridage.
         </div>
       ),
     },

@@ -1757,6 +1757,152 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config/{orgId}/customary-days": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    orgId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.CustomaryDayResponse"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    orgId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.CreateCustomaryDayRequest"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.CustomaryDayResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/config/{orgId}/customary-days/{customId}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    orgId: string;
+                    customId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.WithdrawCustomaryDayRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.CustomaryDayResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/config/{orgId}/customary-days/{customId}/reinstate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    orgId: string;
+                    customId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.ReinstateCustomaryDayRequest"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.CustomaryDayResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/skema/{employeeId}/month": {
         parameters: {
             query?: never;
@@ -5657,6 +5803,39 @@ export interface components {
             type?: string;
             name?: string;
         };
+        "StatsTid.Backend.Api.Contracts.CustomaryDayResponse": {
+            /** Format: uuid */
+            customId: string;
+            orgId: string;
+            agreementCode: string | null;
+            /** Format: int32 */
+            recurringMonth: number | null;
+            /** Format: int32 */
+            recurringDay: number | null;
+            /** Format: date */
+            singleDate: string | null;
+            /** @enum {string} */
+            kind: "PAID_DAY_OFF" | "CLOSURE_DAY";
+            /** @enum {string} */
+            part: "WHOLE_DAY" | "FROM_TIME" | "HOURS";
+            /** Format: time */
+            partFromTime: string | null;
+            /** Format: double */
+            partHours: number | null;
+            /** @enum {string|null} */
+            paidMode: "GIVEN_TO_ALL" | "ON_REQUEST" | null;
+            /** Format: date */
+            validFrom: string;
+            /** Format: date */
+            validTo: string | null;
+            /** Format: int64 */
+            version: number;
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         "StatsTid.Backend.Api.Contracts.DelegatedEmployeeItem": {
             employeeId: string;
             displayName: string | null;
@@ -7246,6 +7425,32 @@ export interface components {
             /** Format: time */
             officeHoursFriEnd?: string | null;
             paidAbsenceCreditBasis?: string | null;
+        };
+        "StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.CreateCustomaryDayRequest": {
+            agreementCode?: string | null;
+            /** Format: int32 */
+            recurringMonth?: number | null;
+            /** Format: int32 */
+            recurringDay?: number | null;
+            /** Format: date */
+            singleDate?: string | null;
+            kind?: string | null;
+            part?: string | null;
+            /** Format: time */
+            partFromTime?: string | null;
+            /** Format: double */
+            partHours?: number | null;
+            paidMode?: string | null;
+            /** Format: date */
+            validFrom?: string | null;
+        };
+        "StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.ReinstateCustomaryDayRequest": {
+            /** Format: date */
+            validFrom?: string | null;
+        };
+        "StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.WithdrawCustomaryDayRequest": {
+            /** Format: date */
+            validTo?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.DesignateLeaderRequest": {
             userId?: string;
