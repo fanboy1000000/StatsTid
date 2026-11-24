@@ -29,8 +29,8 @@ namespace StatsTid.Tests.Regression.Config;
 /// <para>
 /// <b>Fixture.</b> One Backend host with the clock fixed at Tuesday 10 November 2026 (PAT-008), shared by
 /// every case of this class (<see cref="IClassFixture{TFixture}"/>), so the (actor, route) theory does not
-/// start a container per case. Every case here refuses, so sharing is safe; the two cases that DO write
-/// legitimately use rows of their own. The seeded rows are written by SQL: per institution one OPEN row
+/// start a container per case. Every case here refuses, so sharing is safe; the one case that DOES write
+/// legitimately (the wrong-address reinstate, which first withdraws a row of its own) uses rows of its own. The seeded rows are written by SQL: per institution one OPEN row
 /// (the withdraw target) and one WITHDRAWN row (the reinstate target), so a missing check would visibly
 /// succeed (a withdraw that stops the row, a reinstate that inserts a row). STYDEL is soft-deleted after
 /// its rows are seeded. Docker is unavailable on the authoring machine: CI-pending.
@@ -75,15 +75,17 @@ public sealed class CustomaryDaysAccessTests : IClassFixture<CustomaryDaysAccess
     /// <b>F (CI), AC-C10b (R2 (a)).</b> Each (actor, route) pair is refused with the exact status and body
     /// above, and a before-and-after snapshot of every organisation touched (rows, audit rows, events, and
     /// the seeded rows' version and end date) is unchanged. On STY99 (unknown) the withdraw and reinstate
-    /// carry a random id: the answer is 403, not 404, so the organisation check precedes the row lookup. On
+    /// carry a random id: the answer is 403, not 404. On the GET that pins the scope validator's own refusal; on the
+    /// three writes the same 403 also comes from the organisation lock (FU-1: it takes only an active row), so the
+    /// write arms pin "refused either way", not which of the two refused. On
     /// STY01 and STYDEL they carry the seeded open (withdraw) and withdrawn (reinstate) rows.
     /// <para><b>Product code between the readings:</b> the route policy and the organisation scope check at
     /// the LocalAdmin floor, which run before any lookup or lock.</para>
     /// <para><b>Red conditions (F).</b> A check without the per-scope floor admits the mixed-role actor (its
     /// LocalLeader scope covers STY01) and the write answers 200/201, so <c>Assert.Equal(403, …)</c> fails. A
     /// route with no organisation check (or one after the row lookup) lets the other-organisation actor
-    /// through, or answers 404 on STY99. A check that did not refuse a soft-deleted organisation lets the
-    /// STYDEL pairs through.</para>
+    /// through, or answers 404 on STY99. A soft-deleted organisation is refused by the scope check and, on the
+    /// writes, also by the lock; the STYDEL GET arms pin the scope check alone.</para>
     /// </summary>
     [Theory]
     [MemberData(nameof(Arms))]
