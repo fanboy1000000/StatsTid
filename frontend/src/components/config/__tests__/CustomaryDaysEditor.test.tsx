@@ -1,8 +1,9 @@
 // AC-C10e (TASK-14835). Kind F for every fact.
 // Each fact renders the configuration page, opens the "Kutymefridage" tab and drives the editor
-// through it. Red conditions (shared): before the change the page has no "Kutymefridage" tab, so
-// each fact's first step (finding and opening that tab) fails. RED is also taken with the tab entry
-// removed from the page's tabs array; the per-fact conditions below name the assertion that then fails.
+// through it (except the direct `dateAllowed` fact, which renders nothing). Red conditions (shared):
+// before the change the page has no "Kutymefridage" tab, so each rendered fact's first step (finding
+// and opening that tab) fails. RED is also taken with the tab entry removed from the page's tabs
+// array; the per-fact conditions below name the assertion that then fails.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -50,6 +51,8 @@ let postReply: Reply | null
 let postQueue: Reply[]
 // A POST waits for this promise (when set) before it answers, so a test can hold a write in flight.
 let postGate: Promise<void> | null
+// Each list read (GET) of STY01 takes the next gate from here, if any, and waits for it.
+let getGates: Promise<void>[]
 
 function reply(status: number, body: unknown) {
   return {
@@ -65,6 +68,7 @@ beforeEach(() => {
   postReply = null
   postQueue = []
   postGate = null
+  getGates = []
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
@@ -72,7 +76,11 @@ beforeEach(() => {
     if (url === '/api/admin/organizations') {
       return reply(200, [{ orgId: 'STY01', orgName: 'Styrelsen' }, { orgId: 'STY02', orgName: 'Ministeriet' }])
     }
-    if (url === '/api/config/STY01/customary-days' && method === 'GET') return reply(200, rows)
+    if (url === '/api/config/STY01/customary-days' && method === 'GET') {
+      const gate = getGates.shift()
+      if (gate) await gate
+      return reply(200, rows)
+    }
     if (url === '/api/config/STY02/customary-days' && method === 'GET') return reply(200, rows2)
     if (url.includes('/customary-days') && method === 'POST') {
       const next = postQueue.shift() ?? postReply
@@ -538,7 +546,9 @@ describe('Kutymefridage editor: isolation, unsent dates, duplicates, accessibili
 })
 
 // FU-4 (ruling C2-R1 of the 14834 stack): a save still pending while the administrator keeps working.
-// Red conditions are named per fact, taken against the editor as FU-3 left it.
+// Red conditions are named per fact, taken against the editor as FU-3 left it, except the facts
+// added by FU-5 (the refreshed earliest date, year 0), by FU-4's editor, and the FU-6 fact (two
+// overlapping re-reads), by FU-5's.
 describe('Kutymefridage editor: edits made while a save is pending', { timeout: 30000 }, () => {
   const release = () => {
     let open!: () => void
@@ -699,6 +709,48 @@ describe('Kutymefridage editor: edits made while a save is pending', { timeout: 
     expect(await screen.findByText('Dagen er ikke afsluttet. Genindlæs siden.')).toBeInTheDocument()
     expect(within(rowsNow()[0]).getByLabelText('Genindføres fra')).toHaveAttribute('min', '2026-12-01')
     await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    expect(posts()).toHaveLength(2)
+  })
+
+  // Red: the older re-read, discarded because a newer one started, still releases the lock, so B's
+  // "Genindfør" is enabled and a click sends a POST while the newest list has not arrived.
+  it('keeps the lock until the newest of two overlapping re-reads settles', async () => {
+    rows = [a, b]
+    const u = user()
+    await openTab(u)
+    await screen.findAllByText('Hvert år den 5. juni')
+    const rowsNow = () => screen.getAllByText('Hvert år den 5. juni').map(el => el.closest('tr') as HTMLElement)
+    const listReads = () => calls.filter(c => c.method === 'GET' && c.url === '/api/config/STY01/customary-days').length
+    await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    setDate(within(rowsNow()[0]).getByLabelText('Genindføres fra'), '2026-11-20')
+    const savedA = release()
+    await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    await waitFor(() => expect(posts()).toHaveLength(1))
+    await u.click(within(rowsNow()[1]).getByRole('button', { name: 'Genindfør' }))
+    setDate(within(rowsNow()[1]).getByLabelText('Genindføres fra'), '2026-11-20')
+
+    // A succeeds: re-read R1 starts and is held. An unrelated create succeeds: R2 starts and is held.
+    rows = [{ ...a, validTo: null }, b]
+    let r1!: () => void
+    let r2!: () => void
+    getGates = [new Promise<void>(r => { r1 = r }), new Promise<void>(r => { r2 = r })]
+    const readsBefore = listReads()
+    savedA()
+    await waitFor(() => expect(listReads()).toBe(readsBefore + 1))
+    await fillWorkedExample(u)
+    await choose(u, 'Gælder for', 'HK')
+    await u.click(screen.getByRole('button', { name: 'Tilføj' }))
+    await waitFor(() => expect(listReads()).toBe(readsBefore + 2))
+
+    r1()
+    await new Promise<void>(r => setTimeout(r, 50))
+    const stillOpen = within(rowsNow()[1]).getByRole('button', { name: 'Genindfør' })
+    expect(stillOpen).toBeDisabled()
+    await u.click(stillOpen)
+    expect(posts()).toHaveLength(2)
+
+    r2()
+    await waitFor(() => expect(screen.queryByLabelText('Genindføres fra')).not.toBeInTheDocument())
     expect(posts()).toHaveLength(2)
   })
 

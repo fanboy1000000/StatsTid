@@ -325,6 +325,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
   const liveInline = useRef<Inline | null>(null)
   const inFlight = useRef(false)
   const sessions = useRef(0)
+  const releaseBusy = useRef(false)
   liveInline.current = inline
   useEffect(() => {
     liveOrg.current = orgId
@@ -336,6 +337,9 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
     const result = await apiClient.get('/api/config/{orgId}/customary-days', { params: { path: { orgId } } })
     if (request !== latest.current) return
     if (result.ok) { setRows(result.data); setLoad('ok'); setInline(cur => reconcile(cur, result.data)) } else setLoad('failed')
+    // The inline lock is released only here, by the newest read once it has settled (the list is
+    // reconciled or hidden), never by a read that a later one superseded.
+    if (releaseBusy.current) { releaseBusy.current = false; setBusy(false) }
   }, [orgId])
 
   useEffect(() => {
@@ -389,9 +393,10 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
     if (liveOrg.current !== orgId) return
     const same = liveInline.current?.session === session && liveInline.current.rev === rev
     if (result.ok && !same) {
-      // Busy stays on until the list is re-read, so the form on screen cannot act on the old list.
+      // Busy stays on until the newest list read settles (refresh releases it), so the form on
+      // screen cannot act on the old list.
+      releaseBusy.current = true
       await refresh()
-      if (liveOrg.current === orgId) setBusy(false)
       return
     }
     setBusy(false)
