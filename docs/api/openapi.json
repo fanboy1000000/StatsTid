@@ -7964,11 +7964,29 @@
           "createdBy",
           "effectiveFrom",
           "effectiveTo",
+          "flexAboveCapAction",
+          "flexCapTestPeriod",
+          "flexDailyCreditCapHours",
+          "flexLeavingAction",
+          "flexMinusCapHours",
+          "flexPlusCapHours",
+          "flexSettlementPeriod",
           "maxFlexBalance",
           "maxOvertimeHoursPerPeriod",
+          "officeHoursFriEnd",
+          "officeHoursFriStart",
+          "officeHoursMonEnd",
+          "officeHoursMonStart",
+          "officeHoursThuEnd",
+          "officeHoursThuStart",
+          "officeHoursTueEnd",
+          "officeHoursTueStart",
+          "officeHoursWedEnd",
+          "officeHoursWedStart",
           "okVersion",
           "orgId",
           "overtimeRequiresPreApproval",
+          "paidAbsenceCreditBasis",
           "profileId",
           "version",
           "weeklyNormHours"
@@ -8014,6 +8032,107 @@
           },
           "overtimeRequiresPreApproval": {
             "type": "boolean",
+            "nullable": true
+          },
+          "flexSettlementPeriod": {
+            "enum": [
+              "MONTH"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "flexCapTestPeriod": {
+            "enum": [
+              "MONTH"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "flexPlusCapHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexMinusCapHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexDailyCreditCapHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexAboveCapAction": {
+            "enum": [
+              "FORFEIT"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "flexLeavingAction": {
+            "enum": [
+              "FORFEIT_POSITIVE_RECORD_NEGATIVE"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "officeHoursMonStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursMonEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursTueStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursTueEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursWedStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursWedEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursThuStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursThuEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursFriStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursFriEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "paidAbsenceCreditBasis": {
+            "enum": [
+              "PARAGRAPH_7_NR_2",
+              "OFFICE_HOURS"
+            ],
+            "type": "string",
             "nullable": true
           },
           "createdBy": {
@@ -12083,6 +12202,91 @@
           },
           "overtimeRequiresPreApproval": {
             "type": "boolean",
+            "nullable": true
+          },
+          "flexSettlementPeriod": {
+            "type": "string",
+            "nullable": true
+          },
+          "flexCapTestPeriod": {
+            "type": "string",
+            "nullable": true
+          },
+          "flexPlusCapHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexMinusCapHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexDailyCreditCapHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "flexAboveCapAction": {
+            "type": "string",
+            "nullable": true
+          },
+          "flexLeavingAction": {
+            "type": "string",
+            "nullable": true
+          },
+          "officeHoursMonStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursMonEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursTueStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursTueEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursWedStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursWedEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursThuStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursThuEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursFriStart": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "officeHoursFriEnd": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "paidAbsenceCreditBasis": {
+            "type": "string",
             "nullable": true
           }
         },
