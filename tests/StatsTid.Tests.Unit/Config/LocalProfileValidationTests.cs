@@ -20,8 +20,9 @@ namespace StatsTid.Tests.Unit.Config;
 /// </para>
 ///
 /// <para>
-/// Every profile is dated Monday 2 March 2026 and the changed-fields map is empty, so only the value rules can
-/// refuse. <b>Kind F (Unit), all three theories.</b> Red conditions: before TASK-14832 <c>Validate</c> checks the
+/// Every profile in the theories is dated Monday 2 March 2026 and the changed-fields map is empty, so only the
+/// value rules can refuse (the suppression fact is the exception: Wednesday 4 March with a non-empty map).
+/// <b>Kind F (Unit), every theory and the fact.</b> Red conditions: before TASK-14832 <c>Validate</c> checks the
 /// Monday alignment of changed fields only, so it returns <c>IsValid</c> true for every refused case and
 /// <c>Assert.False(result.IsValid)</c> fails.
 /// </para>
@@ -163,7 +164,7 @@ public sealed class LocalProfileValidationTests
     /// </summary>
     public static IEnumerable<object[]> ValueRuleRows()
     {
-        // Numeric members: (member, sign code, column limit).
+        // Numeric members: (member, sign code, column limit, one over the limit).
         var numerics = new (string Member, string SignCode, string Limit, string OverLimit)[]
         {
             ("WeeklyNormHours", "MUST_BE_POSITIVE", "999.99", "1000.00"),
@@ -276,8 +277,8 @@ public sealed class LocalProfileValidationTests
     /// <summary>
     /// <b>F (Unit).</b> The alignment-suppression rule (ADR-017 D9a with ruling 4): a profile dated Wednesday 4
     /// March 2026 whose <c>WeeklyNormHours</c> is also in a non-empty changed-fields map answers the value code
-    /// only, never also <c>NOT_MONDAY_ALIGNED</c> (the editor keys errors by field, so a second error would hide
-    /// the first). A valid value on the same date is still refused for the date, which keeps the rule narrow.
+    /// only, never also <c>NOT_MONDAY_ALIGNED</c> (the server's contract is at most one error per field, ruling 4;
+    /// the editor shows the first it receives). A valid value on the same date is still refused for the date, which keeps the rule narrow.
     /// <para><b>Red conditions (F).</b> Without the suppression the first case lists two errors for
     /// <c>WeeklyNormHours</c>.</para>
     /// </summary>

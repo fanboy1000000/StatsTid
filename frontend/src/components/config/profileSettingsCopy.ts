@@ -27,7 +27,8 @@ export function formatHours(n: number): string {
   return String(Math.round(n * 100) / 100).replace('.', ',')
 }
 
-/** A 400 entry that names a field the editor does not show: nothing to place it under. */
+/** Shown in the banner for a 400 entry naming a field the editor does not show, and under a known
+ * control for a code the editor has no text for (never the raw code). */
 export const UNPLACEABLE_REFUSAL = 'Værdien kunne ikke gemmes.'
 
 export const CODE_MESSAGES: Record<string, string> = {
