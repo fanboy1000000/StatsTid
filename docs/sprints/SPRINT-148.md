@@ -3594,3 +3594,34 @@ M-40 included [O for the 14 facts of the five classes run].
   - (1) "ruling 24's form" in ruling 22 means wave-5C ruling 24.
   - The other readings stand as drafted.
 - **Batch A dispatch waits for CI-M5** (the ledger's "CI-W5, CI-M5 green").
+
+**CI-M5 judged, 2026-11-24: every mutation is killed, and the one unlisted red is attributed.** Run 45362153082, draft PR #68, headSha `7377dcf2` (the builder's `645178f1` on `aadd2b10`, plus the evidence `ci.yml` commit). Read from the trx files by name.
+- **What a mutation run proves, in plain words.** Each mutation deliberately breaks one rule wave 5 built. The run passes if the tests guarding that rule go red, which proves the tests would catch a real regression.
+- **Counts:**
+  - Unit: 1745 passed, 1 failed of 1746.
+  - DemoSeed: 170 of 170.
+  - Regression: 2783 passed, 12 failed of 2795.
+  - Smoke, E2E, frontend, gitleaks and lizard: green.
+  - The docs job is red only on the design-sync gate, because this branch predates the owner's advisory ruling. `check_docs.py`'s hard checks all pass.
+- **The frozen list: 12 of 12 red at their assertions**, each with the builder's local reading:
+  - **M-13:** `FrozenInputsRefusalTests.ReplayWithNoConfigLookup_Succeeds_ByteIdenticalToForward` (Unit) throws `InvalidOperationException`, the replay asking for a config lookup. `FrozenConfigReplayTests.PublishChangedConfig_ReplayReproducesOriginal` echoes `|32` instead of `|37`.
+  - **M-9:**
+    - `PublishedOnlyInForceTests.ArchivedDraft_NeverInForce_NeverPredecessor`: the May read returns the draft's id;
+    - `PublishedOnlyInForcePayrollTests.May2026PaysPublishedVersion_NotTheDraft`: 135.40 instead of 155.40.
+  - **M-12:**
+    - `ScreenMonthNormTests.FractionChange16March2026_Shows81Point40`: 118.40 instead of 81.40;
+    - `DatedRecordTimelineParityTests.EveryDay_OnEqualsTheResolver_OverlapAndThreeGapKinds`: the timeline's record carries `Fraction = 1.000`, the resolver's none.
+  - **M-15:**
+    - `SameDayTieBreakTests`: three facts, the config read's id, the override 110 instead of 130, and the in-force id;
+    - `SameDayTieBreakPayrollTests.TwoPublishesDatedMonday16March2026_…`: 162.80 instead of 150.80.
+  - **M-49:** `PayInputsLockCensusTests.LocalProfileWrite_PredecessorSuperseded…` (two facts) answer 200 and 400 instead of 412.
+- **One unlisted red, triaged against each mutation: M-12's.** `TeamOverviewAggregateTests.TeamOverview_ProfileReadFails_FallsBackToFullTime_No500` expects 162.80 and gets 132.00.
+  - **What the fact does:** it injects a failing `IPartTimeFractionBatchReader`, so Teamoversigt must fall back to full time.
+  - **Why M-12 turns it red:** M-12 makes the screen norm take each day's fraction from the timeline's record (`dayRecord?.Fraction ?? fraction`). The employee's 0.811 therefore bypasses the injected failure and its full-time fallback: 162.80 × 0.811 ≈ 132.00.
+  - **No other mutation touches the screen norm's fraction.** M-9 and M-15 touch the config reads, M-13 replay, and M-49 the profile guards. The same fact is green at CI-W5 on the same base.
+  - So it is an extra kill of M-12, not a defect. Per NR-P25 ("everything the mutations break") it joins M-12's list.
+  - The builder's local census could not have reached it: its Docker subset did not include the Approval classes, which the builder declared as a partial census.
+- **No masking:** each pay fact fails with its own mutation's figure. M-9 gives 135.40 and M-15 gives 162.80, as locally.
+- **Status change:** wave 5's mutation rows are CI-verified (M-9, M-12, M-13, M-15, M-49). QUAL-260's M-49 note is marked CI-verified.
+- **PR #68 is closed unmerged**, `ci/s148-m5` is deleted, and the CI-M5 worktree is pruned.
+- **Wave 5 is closed on CI.** CI-W5 and CI-M5 are both green, so wave 6 may be dispatched. **Batch A** (TASK-14832 → -T → REGEN → 14833) is next. Batches B and C are being drafted.
