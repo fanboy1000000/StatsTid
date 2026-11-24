@@ -4194,3 +4194,37 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 **Codex 5a cycle 1 over the backend half** (`1cc0cb1d..b22e2ef7`) is running. Fable and 5α run over the stack's union once TASK-14837 returns.
 
 **Wave-7 briefs:** a planner is drafting TASK-14839 and -T at draft 1. A Fable adjudication follows.
+
+**TASK-14837 returned** `9c2a9ed7` (gen:api) + `fe38c5dd` + `59bee5dd` on `b22e2ef7` (report `.claude/reviews/S148-TASK-14837-report.md`).
+- **What it adds:** a new drawer section, "Overarbejde, merarbejde og flex". The options follow the chosen date, "Mangler" is shown and can be saved, the seeded anchor is never shown, and the section is self-locked on one's own record.
+- **Tests:** 12 vitest facts (AC-C11g). 11 were red with the mount removed; fact 8 is R. The typed-PUT pin in `api-typed-overloads.test.ts` follows the REGEN.
+- **Two copy gaps were reported, not filled.**
+- **The full vitest run, done alone, on `59bee5dd`: 109 files, 1286 tests passed.**
+
+**The HR-facts stack, cycle 1:**
+
+| Lens | Range | Verdict | Main points |
+|---|---|---|---|
+| Codex, server half | `1cc0cb1d..b22e2ef7` | APPROVED-WITH-WARNINGS | W: the update-in-place branch is untested; two comment NOTEs |
+| Codex, drawer section | `b22e2ef7..59bee5dd` | **CHANGES-REQUIRED** | B1: an out-of-range typed date can be sent, and it blocks the drawer's own save by native validation. B2: stale or pending option reads and late answers. W3: display/state mismatch. W4: a failed conflict re-read is announced as a success |
+| Fable, the union | `1cc0cb1d..59bee5dd` | APPROVED-WITH-WARNINGS | W1 the same as Codex's W. W2: back-dating can clear a validly recorded regime for someone whose agreement changed. W3 and W4 as Codex. Six NOTEs |
+| 5α c1 | | PASS | Every Danish string is in the ruled table |
+
+- **Rulings c1** (`.claude/reviews/S148-TASK-14836-stack-5a-rulings-c1.md`), by the Orchestrator without an adjudicator on the findings: no fact is disputed, and B1 and W2 were verified in the code. The stricter remedy each time.
+  - **C1-R1, FU-1 (`ux`):** the section validates its dates and never makes the drawer's form natively invalid; options belong to the form's date; late answers are invalidated on every date change, reload and identity change; a recorded regime is judged at the form's date; the select always shows what the form holds; the conflict re-read is honest; focus moves to the first invalid field; tests that discriminate.
+  - **C1-R2, FU-2 (`test-qa`):** the update-in-place fact and three comments.
+  - **C1-R3, the Orchestrator:** one comment line and the merge paperwork.
+  - **C1-R4:** Gap 1 is accepted (Save disabled; the existing sentence shows).
+- **Two new Danish strings go to the adjudicator** before FU-1: the placeholder, and the sentence for an empty allowed set under a known agreement.
+- **FU-2 dispatched.** Cycles used: 1 of 5.
+
+**Wave-7 briefs drafted** (TASK-14839, 476 lines; TASK-14839-T, 251 lines; draft 1). Planner report: `.claude/reviews/S148-wave7-briefs-planner-report.md`.
+- **No DemoSeed reset path exists,** so no § 1b delete is needed.
+- **Ten brief contradictions on 14839 and six on -T need rulings.** Among them:
+  - the committed `99-demo-seed.sql` is not in the task's files;
+  - the profile date `0001-01-01`;
+  - the customs' set;
+  - HR facts as literal rows from a pure mapping;
+  - event-less SQL;
+  - a deterministic `custom_id`.
+- **The Fable adjudication follows.**
