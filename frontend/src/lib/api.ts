@@ -315,7 +315,19 @@ export type StructuredOptionsForOp<Op> = (PathParamsOf<Op> extends undefined
   ? { params?: undefined }
   : { params: { path: PathParamsOf<Op> } }) &
   (QueryParamsOf<Op> extends undefined ? { query?: undefined } : { query?: QueryParamsOf<Op> }) &
-  (RequestBodyOf<Op> extends undefined ? { body?: undefined } : { body: RequestBodyOf<Op> })
+  (RequestBodyOf<Op> extends undefined
+    ? OptionalBodyOf<Op> extends undefined
+      ? { body?: undefined }
+      : { body?: OptionalBodyOf<Op> }
+    : { body: RequestBodyOf<Op> })
+
+type OptionalBodyOf<Op> = Op extends { requestBody?: infer R }
+  ? [NonNullable<R>] extends [never]
+    ? undefined
+    : NonNullable<R> extends { content: { 'application/json': infer B } }
+      ? B
+      : undefined
+  : undefined
 
 // The real-spec bindings (fully evaluated literal-key unions).
 type PostPath = TypedPathIn<paths, 'post'>
