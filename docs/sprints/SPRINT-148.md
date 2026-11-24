@@ -4085,3 +4085,40 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **FU-4 dispatched** (`ux`) on `be76a295`.
 
 **TASK-14836 dispatched** (`backend-infrastructure`, HR facts) on `1cc0cb1d`. It is told about the NUL-byte class of FU-1 and that SEC-068 is not its job. **The security consult runs as soon as it returns, in parallel with TASK-14836-T**, so the consult's negative tests can reach the -T pass. That is the lesson of the TASK-14834 miss.
+
+**TASK-14838 cycle 5, partial (2026-11-24).**
+- FU-4 returned `3c01c849` (report `S148-TASK-14838-FU-4-report.md`). Four facts were red on `be76a295`. The switch fact failed with an unconditional `cancelSwitch()`.
+- **Full vitest, run alone, on `3c01c849`: 1311 tests passed.**
+- 5α c5: PASS.
+- **Fable c5: APPROVED**, with five NOTEs and no WARNING. Two NOTEs are FU-4 side effects:
+  - a create form reopened during a slow create stays key-locked until the old answer arrives;
+  - Opret is not held back during a quiet re-read.
+- **Register candidates for the close, from the other three NOTEs:**
+  - (1) **A lost update on the position-override page (pre-existing, Fable c5 NOTE 5).** A list re-read under an open row edit refreshes the row's ETag. A conflicting edit by another admin is then overwritten without the 412 banner. The fix is to capture the ETag when the edit opens. This is a QUAL candidate, with ADR-019 (optimistic concurrency) at stake.
+  - (2) After a failed list re-read, Opret stays disabled with no retry control, and the banner has no `role="alert"` (pre-existing).
+  - (3) Two comments are slightly untrue: `PositionOverrideManagement.tsx:152` and the hook's `hasRows` comment.
+- **Codex c5 hit its usage limit** (resets 21:49). The run is held for a rerun at 21:51; the limited run's log is kept as `S148-TASK-14838-5a-codex-c5-limited.log`. **No merge on a single lens.**
+
+**TASK-14836 returned** `4d271329` + `e9618cb8` (comment only) on `1cc0cb1d` (report `.claude/reviews/S148-TASK-14836-report.md`).
+- **What HR gets:** the overtime regime and flex membership, dated per person and readable as of any day.
+  - The GET offers only the values the agreement allows.
+  - It is refused for one's own record (403), another organisation, a departed person, and a person moved mid-save (409, SEC-062's guard).
+  - Dates are today or earlier, never before the current row (ruling 16, `shortcut(pending)`).
+  - A save with equal values writes nothing.
+  - Nothing reaches pay.
+- **The seed:** the 19 `init.sql` users by explicit list. 11 are OVERTIME (9 HK, 2 PROSA) and 8 are NULL (AC Standard). All are on flex (R-17, `shortcut(pending)`).
+- **Gate:**
+  - Build 0 errors; CA2100 114 distinct (unchanged).
+  - Unit 1846, DemoSeed 170 and Regression non-Docker 147 passed.
+  - PayInputsLock count 20, unchanged.
+- **Local evidence** on a throwaway cluster (port 55439): the seed, the re-apply and the worked example.
+- **Accepted by the Orchestrator (the brief left these open):**
+  - (1) A 400 can carry both the date error and the regime error. The agreement check is skipped when the date is refused.
+  - (2) `AllowedValues` makes the response `overtimeRegime` a five-value enum (PAT-012).
+  - (3) The GET reads the open row before the day's facts (ETag ordering).
+- **For TASK-14837:** a person created in the product has an agreement row only from its creation day, so a regime dated earlier is refused `NOT_ALLOWED_FOR_AGREEMENT`. The drawer must explain it.
+- **For the reviews:** the agreement is read before the transaction. The resolver masks a disallowed stored value as "not recorded".
+- **Found, not fixed:**
+  - SEC-068's class reaches `{employeeId}` segments too (`OrgScopeValidator.cs:169`). The row is widened at this stack's merge.
+  - A stale comment at `Contracts/EmployeeFieldResponses.cs:41-42` ("today UTC"; the Copenhagen business day since S142).
+- **The security consult and TASK-14836-T were dispatched together** on `e9618cb8`. The consult's negatives go to -T as they arrive.
