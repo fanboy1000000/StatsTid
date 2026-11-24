@@ -493,6 +493,8 @@ export function PersonDrawer({
   const dateBlockedReason: string | null =
     !isNew && zoneError !== null
       ? zoneError
+      : orgChanged && today !== null && effectiveFrom > today
+        ? 'En flytning til en anden organisation kan kun gælde fra i dag eller en tidligere dato. Vælg dags dato eller en tidligere dato.'
       : profileRelation === 'beyond' && agreementRelation === 'beyond'
         ? 'Denne dato ligger efter både den planlagte ændring af deltid/stilling og den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
         : profileRelation === 'beyond'
@@ -756,10 +758,11 @@ export function PersonDrawer({
             />
           )}
 
-          {/* S141 / TASK-14111 — the effective-date picker. Governs BOTH
+          {/* S141 / TASK-14111 — the effective-date picker. Governs the
               dated writes this drawer performs (the agreement-code field
-              just above, and the profile fields further down) — one HR
-              decision for the whole save. Edit mode only: a brand-new
+              just above, the profile fields further down, and a move to
+              another organisation, TASK-14820) — one HR decision for the
+              whole save. Edit mode only: a brand-new
               person has no "existing value" for a scheduled change to
               apply against. */}
           {!isNew && (
@@ -767,6 +770,7 @@ export function PersonDrawer({
               value={effectiveFrom}
               onChange={setEffectiveFrom}
               today={today}
+              max={orgChanged && today !== null ? today : undefined}
               disabled={busy || isSelf}
               blockedReason={dateBlockedReason}
               coversScheduledNote={coversScheduledNote}

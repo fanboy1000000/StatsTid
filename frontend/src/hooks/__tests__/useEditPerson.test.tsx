@@ -439,3 +439,61 @@ describe('useEditPerson.saveEdit — S141 / TASK-14111 the effective-date picker
     })
   })
 })
+
+// S148 / TASK-14850 — AC-C13u. F (vitest), a two-row table. Red conditions: on the base the
+// catch reports `e.message`, which is the raw response body, so both toBe assertions fail.
+describe('useEditPerson.saveEdit — S148 / TASK-14850 transferRefusals_shownInDanish', () => {
+  it.each([
+    [
+      'BEFORE_CURRENT_ORGANISATION',
+      '2026-06-15',
+      'Flytningen kan tidligst gælde fra 15. juni 2026, hvor medarbejderen kom til sin nuværende organisation.',
+    ],
+    [
+      'EFFECTIVE_FROM_NOT_TODAY_OR_PAST',
+      '2026-11-10',
+      'En flytning til en anden organisation kan ikke dateres frem i tiden.',
+    ],
+  ])('a 400 with %s is reported in Danish, never the English error', async (code, nearest, expected) => {
+    setupRouter({
+      '/api/admin/users/EMP1': {
+        ok: () =>
+          res(false, 400, {
+            error: 'Transfer date validation failed',
+            fields: [{ field: 'EffectiveFrom', code, nearestValid: [nearest] }],
+          }),
+      },
+    })
+
+    const result = await run(dirtyInput(), makeLive())
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe(expected)
+  })
+})
+
+// S148 / TASK-14850 FU-1 (C1-R1 a) — a recognised transfer code never shows the raw body: with no
+// date to name, the house's ruled refusal text is shown. Red conditions: on 8471e464 the catch falls
+// through to `e.message`, the raw response body.
+describe('useEditPerson.saveEdit — S148 / TASK-14850 FU-1 BEFORE_CURRENT_ORGANISATION without a date', () => {
+  it.each([
+    ['nearestValid missing', undefined],
+    ['nearestValid empty', []],
+  ])('%s shows "Værdien kunne ikke gemmes." and never the raw body', async (_label, nearestValid) => {
+    setupRouter({
+      '/api/admin/users/EMP1': {
+        ok: () =>
+          res(false, 400, {
+            error: 'Transfer date validation failed',
+            fields: [{ field: 'EffectiveFrom', code: 'BEFORE_CURRENT_ORGANISATION', nearestValid }],
+          }),
+      },
+    })
+
+    const result = await run(dirtyInput(), makeLive())
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('Værdien kunne ikke gemmes.')
+    expect(result.error).not.toContain('Transfer date validation failed')
+  })
+})

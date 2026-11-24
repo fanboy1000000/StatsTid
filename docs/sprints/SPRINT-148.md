@@ -4339,3 +4339,26 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
     - an emptied date field;
     - every other users-PUT 400 shows the raw response body (pre-existing).
 - **FU-1 dispatched.** Cycles used: 1 of 5.
+
+**TASK-14850 reviewed, cycle 2, and merged, 2026-11-25.**
+- **FU-1** `b2185654` (`ux`):
+  - a dateless `BEFORE_CURRENT_ORGANISATION` shows the house's ruled "Værdien kunne ikke gemmes.";
+  - the three date-field texts are pinned;
+  - the merged `aria-describedby` gets a fact;
+  - `role="alert"` on the block;
+  - five comments are made true.
+- **Cycle 2: both lenses APPROVED.** Codex c2 APPROVED (one comment NOTE); Fable c2 APPROVED (four NOTEs); 5α c2 PASS. Cycles used: 2 of 5.
+- **Merged** `--no-ff` (this commit). In the merge commit, the c2 NOTEs:
+  - the catch comment names every path;
+  - the `blockedReason` doc names its three causes;
+  - the new picker test moves to `editPerson/__tests__/`.
+- **What the owner gets, in plain words.** While HR moves a person to another organisation, the edit drawer offers no date after today and says why in Danish.
+  - If the server still refuses a move, HR reads a Danish sentence naming the earliest allowed date, never raw server text.
+  - The date field's label and help text now say what the date governs: the organisation as well as the agreement code and part-time or position.
+  - One's own record stays locked.
+- **O-33 (2), the interim ends:** saving an organisation change with a future date showed the raw response body (TASK-14820 Step 5a cycle-1 adjudication, ruling 7.4). That interim ends at this merge. The ruled Danish refusal shows instead, and the drawer no longer offers such a date.
+- **Carried to the close (register candidates):**
+  - an emptied date field is not blocked (pre-existing; find the server's answer to an empty `effectiveFrom`);
+  - every other 400 on the users PUT shows the raw response body (pre-existing, usability);
+  - a malformed `nearestValid` would print "Invalid Date" (unproven, pre-existing).
+- **The next CI run must show:** the frontend build with AC-C13j and AC-C13u (CI-W6).

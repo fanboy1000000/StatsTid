@@ -39,6 +39,8 @@ import {
   type StamdataFields,
 } from '../pages/admin/editPerson/types'
 import { useCalendarToday } from '../contexts/CalendarContext'
+import { formatEffectiveDateLong } from '../pages/admin/editPerson/EffectiveDatePicker'
+import { UNPLACEABLE_REFUSAL } from '../components/config/profileSettingsCopy'
 
 // S34 TASK-3409 (ADR-023 D8) introduced this call as `todayIsoUtc()`, matching the backend's
 // then-UTC `same-day-only-edit` reference. S142 / TASK-14209 renamed it `todayIso()` and pointed it
@@ -245,7 +247,31 @@ export function useEditPerson() {
             actual: e.body?.actualVersion,
           }
         }
-        const msg = e instanceof Error ? e.message : String(e)
+        // The server is the authority on the transfer's date (C-13). Its two date refusals
+        // arrive as a 400 with a `fields` entry on EffectiveFrom, `EFFECTIVE_FROM_NOT_TODAY_OR_PAST`
+        // or `BEFORE_CURRENT_ORGANISATION`; both are shown in Danish, except that
+        // `BEFORE_CURRENT_ORGANISATION` without a `nearestValid` date shows the house's
+        // `UNPLACEABLE_REFUSAL` (no date to name). Anything else keeps the error's message (`api.ts`):
+        // the raw response body when there is one, else `HTTP <status>` or the fetch error's text.
+        const transferField =
+          e.status === 400
+            ? e.body?.fields?.find(
+                (f) =>
+                  f.field === 'EffectiveFrom' &&
+                  (f.code === 'EFFECTIVE_FROM_NOT_TODAY_OR_PAST' || f.code === 'BEFORE_CURRENT_ORGANISATION'),
+              )
+            : undefined
+        const nearest = transferField?.nearestValid?.[0]
+        const msg =
+          transferField?.code === 'EFFECTIVE_FROM_NOT_TODAY_OR_PAST'
+            ? 'En flytning til en anden organisation kan ikke dateres frem i tiden.'
+            : transferField?.code === 'BEFORE_CURRENT_ORGANISATION'
+              ? nearest
+                ? `Flytningen kan tidligst gælde fra ${formatEffectiveDateLong(nearest)}, hvor medarbejderen kom til sin nuværende organisation.`
+                : UNPLACEABLE_REFUSAL
+              : e instanceof Error
+                ? e.message
+                : String(e)
         if (firstError === null) firstError = msg
         mark('stamdata', 'failed', msg)
         // A 412 stale on the primary row means every later If-Match is also
