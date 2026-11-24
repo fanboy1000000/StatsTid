@@ -48,9 +48,10 @@ namespace StatsTid.Infrastructure.Temporal;
 ///     (refinement Assumption 5; the 422 alternative is one line to switch).</description></item>
 ///   <item><term>T — <see cref="TemporalWriteCase.InsertTrailing"/></term>
 ///     <description>Rows exist, none covers <c>from</c>, and no row starts after it (the state a
-///     soft-delete leaves) → INSERT <c>[from, ∞)</c>, which becomes the new open row. T is a
-///     REPOSITORY-level case for the re-create callers; the profile PUT keeps its "no open row →
-///     404" pre-check so an EDIT can never resurrect a deliberately retired profile.</description></item>
+///     soft-delete leaves) → INSERT <c>[from, ∞)</c>, which becomes the new open row. The profile
+///     PUT reaches T through its explicit re-create (<c>If-None-Match: *</c>; QUAL-268, owner ruling
+///     2026-11-24); its edit (<c>If-Match</c>) answers 404 when no row covers today, so an EDIT can
+///     never resurrect a deliberately retired profile.</description></item>
 ///   <item><term><see cref="TemporalWriteCase.RejectedFutureDated"/></term>
 ///     <description><b>RETIRED in S141 / TASK-14102 — this case is no longer produced.</b> The enum
 ///     member survives (see its own doc) but <see cref="Decide(TimelineSnapshot, DateOnly, DateOnly)"/>
@@ -404,7 +405,7 @@ public enum TemporalWriteKind
     InsertedBeforeFirst,
     /// <summary>G — a history row inserted into an interior gap.</summary>
     InsertedInGap,
-    /// <summary>T — a new open row inserted after a trailing gap (repository-level re-create).</summary>
+    /// <summary>T — a new open row inserted after a trailing gap (a re-create after a close).</summary>
     InsertedTrailing,
     /// <summary>The request equalled the covering row field-for-field: nothing was written.</summary>
     NoOp,

@@ -258,6 +258,74 @@ public sealed class EmployeeProfileRepository
     }
 
     /// <summary>
+    /// What the profile GET's 404 body says when no row covers today (QUAL-268, owner ruling
+    /// 2026-11-24): whether the profile PUT's re-create (<c>If-None-Match: *</c>) is possible, from
+    /// which date, and what the last real profile held, so a screen offers only what the server
+    /// accepts.
+    ///
+    /// <para>
+    /// <c>CanCreate</c>: no non-zero-length row starts after <paramref name="today"/> (a scheduled
+    /// profile heals the gap on its date; the PUT refuses a re-create then). <c>UncoveredSince</c>:
+    /// the latest end of a non-zero-length row that has ended by today, the earliest date a re-create
+    /// may take. <c>ScheduledFrom</c>: the earliest scheduled row's start. <c>LastPartTimeFraction</c>
+    /// and <c>LastPosition</c>: the values of the row that ended at <c>UncoveredSince</c>. Both dates
+    /// use the HR "cannot register" list's own predicates
+    /// (<c>HrFollowUpApprovalReadRepository</c>), so the drawer and the list agree. A zero-length
+    /// row <c>[f, f)</c>, the trace a close leaves of a cancelled scheduled change, counts for none
+    /// of them. Profile dates only, never an employment date (ADR-040 D7).
+    /// </para>
+    ///
+    /// <para>
+    /// Self-managed connection, read-only, outside any lock: an advisory read for a screen; the PUT
+    /// re-checks every fact under its own locks.
+    /// </para>
+    /// </summary>
+    public async Task<(bool CanCreate, DateOnly? UncoveredSince, DateOnly? ScheduledFrom,
+        decimal? LastPartTimeFraction, string? LastPosition)> GetRecreateOptionsAsync(
+        string employeeId, DateOnly today, CancellationToken ct = default)
+    {
+        const string sql =
+            """
+            SELECT sched.next_from,
+                   last_real.effective_to,
+                   last_real.part_time_fraction,
+                   last_real.position
+            FROM (
+                SELECT MIN(ep.effective_from) AS next_from
+                FROM employee_profiles ep
+                WHERE ep.employee_id = @employeeId
+                  AND ep.effective_from > @today
+                  AND ep.effective_to IS DISTINCT FROM ep.effective_from
+            ) sched
+            LEFT JOIN (
+                SELECT ep.effective_to, ep.part_time_fraction, ep.position
+                FROM employee_profiles ep
+                WHERE ep.employee_id = @employeeId
+                  AND ep.effective_to IS NOT NULL
+                  AND ep.effective_to <= @today
+                  AND ep.effective_to <> ep.effective_from
+                ORDER BY ep.effective_to DESC
+                LIMIT 1
+            ) last_real ON TRUE
+            """;
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("today", today);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        // An aggregate over the person's rows: always exactly one result row.
+        await reader.ReadAsync(ct);
+        var scheduledFrom = reader.IsDBNull(0) ? (DateOnly?)null : reader.GetFieldValue<DateOnly>(0);
+        return (
+            CanCreate: scheduledFrom is null,
+            UncoveredSince: reader.IsDBNull(1) ? null : reader.GetFieldValue<DateOnly>(1),
+            ScheduledFrom: scheduledFrom,
+            LastPartTimeFraction: reader.IsDBNull(2) ? null : reader.GetDecimal(2),
+            LastPosition: reader.IsDBNull(3) ? null : reader.GetString(3));
+    }
+
+    /// <summary>
     /// S137 / TASK-13704 — history read consumed by the S137 payroll planner (TASK-13702):
     /// the <c>effective_from</c> dates of this employee's profile rows STRICTLY INSIDE the
     /// range <c>(afterExclusive, toInclusive]</c>, ascending. Each date is a day on which a
@@ -763,11 +831,11 @@ public sealed class EmployeeProfileRepository
     /// </para>
     ///
     /// <para>
-    /// <b>Why T is repository-only.</b> A soft-delete leaves closed rows and no open row; a later
-    /// write dated after the last close re-creates the open row (case T). The profile PUT keeps its
-    /// "no open row → 404" pre-check (the S33 Step-0b BLOCKER-3 ruling: PUT is an EDIT surface and
-    /// never creates a net-new row), so an edit can never resurrect a deliberately retired profile;
-    /// T serves the re-create callers at the repository level.
+    /// <b>Who reaches T.</b> A soft-delete leaves closed rows and no open row; a later write dated
+    /// after the last close re-creates the open row (case T). The profile PUT reaches it only through
+    /// its explicit re-create (<c>If-None-Match: *</c>, a null <paramref name="expectedVersion"/>;
+    /// QUAL-268, owner ruling 2026-11-24). Its edit (<c>If-Match</c>) keeps the "no row covers today
+    /// → 404" pre-check, so an edit can never resurrect a deliberately retired profile.
     /// </para>
     ///
     /// <para>
