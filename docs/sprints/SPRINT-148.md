@@ -3648,3 +3648,23 @@ M-40 included [O for the 14 facts of the five classes run].
   - PIN-1/2/3 unchanged.
 - **GATE green on master `dafd68c0`** (TASK-14849 merged): build 0 errors; Unit 1746, DemoSeed 170, Regression non-Docker 147; shortcuts 20, 0 bad.
 - **Wave 6 dispatch begins:** TASK-14832 (`backend-infrastructure`, brief draft 2), on the commit after this line.
+
+**Owner ruling 2026-11-24 (QUAL-268): "Build repair route now".** The question was put in plain words, with three options:
+1. a repair route in S148 (recommended);
+2. an "undo the close" action only;
+3. register only.
+
+The owner chose (1). When no profile covers today, the profile edit creates a new profile from a date HR chooses. It goes through the same validation, pay-inputs lock, audit row and event as any profile change. The drawer offers "create profile" instead of a dead 404. It closes S141's open trade-off at `EmployeeProfileEndpoints.cs:450-456`, which was left "to a ruling". It is a new task trio after wave 6 batch A: backend, then `test-qa`, then `ux`. The ids are reserved at briefing. A planner drafts the briefs, and the adjudicator rules on them before dispatch. HRP-015's resolution step comes with it.
+
+**Wave 6 batches B and C, planner draft 1** (`.claude/reviews/S148-wave6BC-briefs-planner-report.md`): seven briefs (TASK-14834, -T, 14835, 14836, -T, 14837, 14838).
+- **The main forks for the adjudicator:**
+  - TASK-14838's size (L; the planner leans to splitting it into 14838a, the central editors, and 14838b, the drawer);
+  - the Danish copy of three `ux` briefs;
+  - the customs and HR-facts value rules;
+  - AC-C11c's kind (a proposed local mutation M-55);
+  - the security consult (the HR-facts write gains SEC-062's organisation-drift guard; the customs GET's floor);
+  - the override page hiding four GlobalAdmin-only buttons from a LocalAdmin (SEC-032).
+- **Code facts it found:**
+  - routes are mapped in `ApiEndpoints.MapAll`, not `Program.cs`;
+  - the absence-visibility write moved to `ConfigEndpoints.cs:584-607` and writes no audit row;
+  - `init.sql`'s HR-facts seed belongs to 14836.
