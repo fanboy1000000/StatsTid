@@ -3725,3 +3725,14 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - **R6:** four NOTEs accepted. The clock spelling in OpenAPI is later polish. The owner is told at O-17 that a settings-only save puts paid months on HR's worklist.
   - **R7:** the merge paperwork. **R8:** cycle 2 on the delta.
 - **FU-2 dispatched** (`ux`) on `a9707e57`.
+- **FU-2 returned** `f1623ae0` + `c4c2ef8f` (reports `S148-TASK-14832-stack-FU-2-report.md` and `-addendum.md`). Three changes to how the editor shows a refused save:
+  - an unplaceable refusal goes to the banner `Værdien kunne ikke gemmes.`;
+  - the first error per field wins;
+  - an unmapped code on a known field shows that text under its control, never the raw code.
+
+  The nine-code facts now assert placement, id, `aria-describedby` and `aria-invalid`. Every new fact was red against the previous file, then green. tsc and lint are clean; full vitest gives 106 files / **1244**.
+  - **The Orchestrator ruled on FU-2's calls:**
+    - (1) The legacy `WeeklyNormHours` row keeps its id-less error span, per the batch-A adjudication § 3. Its case asserts placement and `aria-invalid` only, with a comment saying so.
+    - (2) The unmapped code is fixed (the addendum).
+    - (3) An empty `fields` array keeps the server's text.
+- **FU-1 dispatched** (`test-qa`) on `c4c2ef8f`.
