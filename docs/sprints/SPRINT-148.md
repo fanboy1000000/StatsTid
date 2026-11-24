@@ -3587,3 +3587,10 @@ M-40 included [O for the 14 facts of the five classes run].
 - **The census of the agreement-code and organisation backfill seeders** found no writer that ends their open row without a successor (`(unproven)`, by reading).
 - **No test relied on the old backfill.**
 - **TASK-14849-T dispatched** on `caddb7c6`. It is also authorized, comment only, to make three test comments true that TASK-14849's census named.
+- **Batch A's rulings applied** (planner, `.claude/reviews/S148-wave6A-briefs-applied-report.md`): the three briefs are at draft 2, adjudicated, and the plan is at **"final + 29"** (151 AC ids; AC-C4g, -4h and -4i added; 40 plan-added ids; mutation ids unchanged at 51). Ruling 4's table and ruling 22's Danish copy were checked byte for byte against the adjudication.
+- **The Orchestrator ratifies the planner's held readings:**
+  - (3) one import line at the top of `ConfigManagement.tsx` for the copy file, beside ruling 19's `:165-205`;
+  - (2) ruling 15's values placed on `FlexPlusCapHours`, `FlexSettlementPeriod` and Monday's window;
+  - (1) "ruling 24's form" in ruling 22 means wave-5C ruling 24.
+  - The other readings stand as drafted.
+- **Batch A dispatch waits for CI-M5** (the ledger's "CI-W5, CI-M5 green").
