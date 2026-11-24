@@ -15,8 +15,7 @@ namespace StatsTid.Tests.Regression.Infrastructure;
 /// (<c>DatedRecordTimeline</c>) instead of asking the resolver once per day. It is a second reader of the same rule (QUAL-registered,
 /// M), so this fact keeps the two from drifting: over one employee's March 2026 it compares the two for every day from Friday 27
 /// February to Thursday 2 April. The record has overlaps (where two organisation rows or two agreement-code rows cover a day, the
-/// latest start wins, so Tuesday 10 March reads the later agreement-code row and Friday 20 March the later organisation row; overlapping
-/// profile rows are not tested, see below) and each of the three gap kinds: no profile (before 1 March and from 26
+/// latest start wins, so Tuesday 10 March reads the later agreement-code row, Thursday 12 March the later profile row and Friday 20 March the later organisation row) and each of the three gap kinds: no profile (before 1 March and from 26
 /// March), a profile without its organisation row (5-7 March), and a profile without its agreement-code row (16-17 March).
 /// </para>
 ///
@@ -26,9 +25,9 @@ namespace StatsTid.Tests.Regression.Infrastructure;
 /// the agreement code, position and organisation are equal; resolver <c>null</c> (no profile row covers the day) corresponds to a null
 /// record naming <c>employment_profile</c>; the resolver's exception (a profile covers, the organisation or the agreement-code row does
 /// not) corresponds to a null record naming <c>organisation</c> or <c>agreement_code</c>.
-/// <b>Overlapping profile rows are deliberately absent:</b> a first run showed the two readers differ there (the timeline takes the
-/// latest start; the resolver's profile query has no ORDER BY and returned the earlier row). Non-overlap of profile rows is a writer
-/// invariant, so this is reported, not pinned. Docker-gated: CI-verified, never locally green.
+/// Overlapping profile rows are included: the resolver's profile query takes the latest start (QUAL-263), as the timeline does, so the
+/// two agree there. The outcome mapping does not compare the part-time fraction, so the overlapping row's fraction (0.500) is
+/// present but not checked here. Docker-gated: CI-verified, never locally green.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -42,13 +41,15 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
     /// <summary>
     /// <b>Kind N (CI).</b> T12. For each day from 2026-02-27 to 2026-04-02, <c>DatedRecordTimeline.On</c> equals the resolver's outcome
     /// under the mapping above; and the fixture really holds what it claims (explicit expectations, derived from "the latest start wins"
-    /// and the row dates, not read back): 3 March reads (HK, POS-A, T12ORGA); 10 March (overlap) reads (PROSA, POS-B, T12ORGB); 20 March
+    /// and the row dates, not read back): 3 March reads (HK, POS-A, T12ORGA); 10 March (overlap) reads (PROSA, POS-B, T12ORGB); 12 March (profile overlap: POS-B and POS-C both
+    /// cover it) reads (HK, POS-C, T12ORGB); 20 March
     /// (overlap) reads (AC, POS-B, T12ORGC); 6 March misses the organisation, 16 March the agreement code, 27 February and 26 March the
     /// profile.
     ///
     /// <para>
-    /// <b>Red conditions</b> (Docker-gated; CI-pending; N: no divergence is known on the cases this fixture holds; overlapping profile rows do diverge, registered as QUAL-263). Any day on which the two readers differ, for example a
-    /// reader that took the earliest start where rows overlap, ignored an end date, or answered a record where the organisation row is
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; N: the fixture includes overlapping profile rows, the divergence QUAL-263 pinned). Any day on which the two readers differ, for example a
+    /// resolver whose profile read takes the earliest start, or has no order, where profile rows overlap (12 and 13 March), a
+    /// reader that took the earliest start where other rows overlap, ignored an end date, or answered a record where the organisation row is
     /// missing, appears in the mismatch list and fails the first assertion; the explicit-expectation assertions fail if the fixture ever
     /// stops containing an overlap or one of the gap kinds.
     /// </para>
@@ -102,6 +103,7 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
 
         Assert.Equal((new DatedRecord("HK", "POS-A", OrgA), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 3)));
         Assert.Equal((new DatedRecord("PROSA", "POS-B", OrgB), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 10)));
+        Assert.Equal((new DatedRecord("HK", "POS-C", OrgB), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 12)));
         Assert.Equal((new DatedRecord("AC", "POS-B", OrgC), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 20)));
         Assert.Equal(((DatedRecord?)null, (string?)"organisation"), timeline.On(Employee, new DateOnly(2026, 3, 6)));
         Assert.Equal(((DatedRecord?)null, (string?)"agreement_code"), timeline.On(Employee, new DateOnly(2026, 3, 16)));
@@ -109,7 +111,7 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
         Assert.Equal(((DatedRecord?)null, (string?)"employment_profile"), timeline.On(Employee, new DateOnly(2026, 3, 26)));
     }
 
-    /// <summary>The employee with the overlap and the three gap kinds (the dates are on the class remark).</summary>
+    /// <summary>The employee with the overlaps and the three gap kinds (the dates are on the class remark).</summary>
     private async Task SeedRecordAsync()
     {
         foreach (var org in new[] { OrgA, OrgB, OrgC })
@@ -127,11 +129,12 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
         await ExecAsync("DELETE FROM user_organisations WHERE user_id = @e", ("e", Employee));
         await ExecAsync("DELETE FROM user_agreement_codes WHERE user_id = @e", ("e", Employee));
 
-        // Profile rows: POS-A from 1 March to 10 March (exclusive), POS-B from 10 March to 26 March. They do not overlap: the resolver's
-        // profile read has no tie-break for overlapping profile rows (it reads the first row the database returns), so no parity is
-        // defined there; the overlaps below are on the two tables whose tie-break the resolver states (latest start wins).
+        // Profile rows: POS-A from 1 March to 10 March (exclusive), POS-B from 10 March to 26 March, POS-C 12-14 March (exclusive)
+        // inside POS-B, so 12 and 13 March are covered by two rows and the latest start (POS-C) wins (QUAL-263). Its fraction differs
+        // from 1.000 so the rows are not interchangeable; the outcome mapping does not compare it.
         await InsertProfileAsync("POS-A", "2026-03-01", "2026-03-10");
         await InsertProfileAsync("POS-B", "2026-03-10", "2026-03-26");
+        await InsertProfileAsync("POS-C", "2026-03-12", "2026-03-14", 0.500m);
 
         // Organisation rows: A to 5 March (exclusive), B from 8 March (open), C 20-21 March (overlapping B).
         await InsertOrganisationAsync(OrgA, "2026-01-01", "2026-03-05");
@@ -144,12 +147,12 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
         await InsertAgreementCodeAsync("AC", "2026-03-18", null);
     }
 
-    private Task InsertProfileAsync(string position, string from, string? to) =>
+    private Task InsertProfileAsync(string position, string from, string? to, decimal fraction = 1.000m) =>
         ExecAsync(
             """
             INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to, employment_category)
-            VALUES (@e, 1.000, @position, @from::date, @to::date, (SELECT u.employment_category FROM users u WHERE u.user_id = @e))
-            """, ("e", Employee), ("position", position), ("from", from), ("to", (object?)to ?? DBNull.Value));
+            VALUES (@e, @fraction, @position, @from::date, @to::date, (SELECT u.employment_category FROM users u WHERE u.user_id = @e))
+            """, ("e", Employee), ("position", position), ("fraction", fraction), ("from", from), ("to", (object?)to ?? DBNull.Value));
 
     private Task InsertOrganisationAsync(string org, string from, string? to) =>
         ExecAsync(
