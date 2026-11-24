@@ -1057,10 +1057,10 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         // The rule-engine hop is stubbed to a valid 200 (see CreateComplianceRuleStubbedClient):
         // this REMOVES the incidental-5xx source so the resolver-null guard is the ONLY thing that
         // can make the response non-200. Booting the stubbed host re-runs the startup seeder — but
-        // emp001 already has a LIVE profile from the primary host's boot, so the seeder's
-        // "users lacking a live row" query skips it. We soft-delete AFTER this boot, so no seeder
-        // re-backfills the row we are about to remove (the seeder treats a soft-deleted row —
-        // effective_to NOT NULL — as "missing a live row" and would otherwise re-insert one).
+        // emp001 already has a profile row from the primary host's boot, so the seeder's
+        // "users with no profile row at all" query skips it. We soft-delete AFTER this boot; and a
+        // later seeder run would not re-backfill the row we are about to remove either: it counts
+        // a closed row (effective_to NOT NULL) as a profile row, a record gap HR repairs (QUAL-267).
         var client = CreateComplianceRuleStubbedClient();
 
         // Soft-delete emp001's live profile (seeded version = 1).

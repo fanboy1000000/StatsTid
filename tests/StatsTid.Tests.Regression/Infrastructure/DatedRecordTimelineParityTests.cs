@@ -15,7 +15,7 @@ namespace StatsTid.Tests.Regression.Infrastructure;
 /// (<c>DatedRecordTimeline</c>) instead of asking the resolver once per day. It is a second reader of the same rule (QUAL-registered,
 /// M), so this fact keeps the two from drifting: over one employee's March 2026 it compares the two for every day from Friday 27
 /// February to Thursday 2 April. The record has overlaps (where two organisation rows or two agreement-code rows cover a day, the
-/// latest start wins, so Tuesday 10 March reads the later agreement-code row, Thursday 12 March the later profile row and Friday 20 March the later organisation row) and each of the three gap kinds: no profile (before 1 March and from 26
+/// latest start wins, so Tuesday 10 March reads the later agreement-code row, Thursday 12 March the later profile row, Friday 20 March the later organisation row, and Sunday 22 and Monday 23 March the later profile row, which also ends later) and each of the three gap kinds: no profile (before 1 March and from 26
 /// March), a profile without its organisation row (5-7 March), and a profile without its agreement-code row (16-17 March).
 /// </para>
 ///
@@ -25,7 +25,7 @@ namespace StatsTid.Tests.Regression.Infrastructure;
 /// the agreement code, position and organisation are equal; resolver <c>null</c> (no profile row covers the day) corresponds to a null
 /// record naming <c>employment_profile</c>; the resolver's exception (a profile covers, the organisation or the agreement-code row does
 /// not) corresponds to a null record naming <c>organisation</c> or <c>agreement_code</c>.
-/// Overlapping profile rows are included: the resolver's profile query takes the latest start (QUAL-263), as the timeline does, so the
+/// Overlapping profile rows are included (one nested inside the other, one partly overlapping and ending later): the resolver's profile query takes the latest start (QUAL-263), as the timeline does, so the
 /// two agree there. The outcome mapping does not compare the part-time fraction, so the overlapping row's fraction (0.500) is
 /// present but not checked here. Docker-gated, so CI is the verifier.
 /// </para>
@@ -42,14 +42,14 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
     /// <b>Kind N (CI).</b> T12. For each day from 2026-02-27 to 2026-04-02, <c>DatedRecordTimeline.On</c> equals the resolver's outcome
     /// under the mapping above; and the fixture really holds what it claims (explicit expectations, derived from "the latest start wins"
     /// and the row dates, not read back): 3 March reads (HK, POS-A, T12ORGA); 10 March (overlap) reads (PROSA, POS-B, T12ORGB); 12 March (profile overlap: POS-B and POS-C both
-    /// cover it) reads (HK, POS-C, T12ORGB); 20 March
+    /// cover it) reads (HK, POS-C, T12ORGB); 22 March (partial profile overlap: POS-B, which ends 24 March, and POS-D, which starts 22 March and ends 26 March, both cover it; the organisation row C has ended, so B) reads (AC, POS-D, T12ORGB); 25 March (POS-D alone) reads the same; 20 March
     /// (overlap) reads (AC, POS-B, T12ORGC); 6 March misses the organisation, 16 March the agreement code, 27 February and 26 March the
     /// profile.
     ///
     /// <para>
-    /// <b>Red conditions</b> (Docker-gated; CI-pending; N: the fixture includes overlapping profile rows, the divergence QUAL-263 pinned). Any day on which the two readers differ, for example a
+    /// <b>Red conditions</b> (Docker-gated; CI-pending; N: the fixture includes overlapping profile rows, the divergence QUAL-263 pinned, in two shapes: POS-C nested inside POS-B and ends earlier, POS-D starts later AND ends later than POS-B). Any day on which the two readers differ, for example a
     /// resolver whose profile read takes the earliest start where profile rows overlap (12 and 13 March; red by rule), or has no order there
-    /// (red only while the database returns POS-B first, which it does on this fixture because POS-C is inserted last; not guaranteed), a
+    /// (red only while the database returns POS-B first, which it does on this fixture because POS-C is inserted last; not guaranteed), a resolver ordered by end date, ascending (22 and 23 March; the nested POS-C row ends earlier, so 12 and 13 March stay right) or descending (12 and 13 March; POS-C ends before POS-B), a resolver where the most recently inserted row wins (22 and 23 March: POS-D is inserted before POS-B), a
     /// reader that took the earliest start where other rows overlap, ignored an end date, or answered a record where the organisation row is
     /// missing, appears in the mismatch list and fails the first assertion; the explicit-expectation assertions fail if the fixture ever
     /// stops containing an overlap or one of the gap kinds.
@@ -106,6 +106,10 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
         Assert.Equal((new DatedRecord("PROSA", "POS-B", OrgB), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 10)));
         Assert.Equal((new DatedRecord("HK", "POS-C", OrgB), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 12)));
         Assert.Equal((new DatedRecord("AC", "POS-B", OrgC), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 20)));
+        Assert.Equal((new DatedRecord("AC", "POS-B", OrgC), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 21)));
+        Assert.Equal((new DatedRecord("AC", "POS-D", OrgB), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 22)));
+        Assert.Equal((new DatedRecord("AC", "POS-D", OrgB), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 23)));
+        Assert.Equal((new DatedRecord("AC", "POS-D", OrgB), (string?)null), timeline.On(Employee, new DateOnly(2026, 3, 25)));
         Assert.Equal(((DatedRecord?)null, (string?)"organisation"), timeline.On(Employee, new DateOnly(2026, 3, 6)));
         Assert.Equal(((DatedRecord?)null, (string?)"agreement_code"), timeline.On(Employee, new DateOnly(2026, 3, 16)));
         Assert.Equal(((DatedRecord?)null, (string?)"employment_profile"), timeline.On(Employee, new DateOnly(2026, 2, 27)));
@@ -130,12 +134,17 @@ public sealed class DatedRecordTimelineParityTests : DatedConfigDockerFixture
         await ExecAsync("DELETE FROM user_organisations WHERE user_id = @e", ("e", Employee));
         await ExecAsync("DELETE FROM user_agreement_codes WHERE user_id = @e", ("e", Employee));
 
-        // Profile rows: POS-A from 1 March to 10 March (exclusive), POS-B from 10 March to 26 March, POS-C 12-14 March (exclusive)
-        // inside POS-B, so 12 and 13 March are covered by two rows and the latest start (POS-C) wins (QUAL-263). Its fraction differs
-        // from 1.000 so the rows are not interchangeable; the outcome mapping does not compare it.
-        // POS-C is inserted after POS-B on purpose: a resolver with no ORDER BY then reads POS-B first and the fact is red. Do not reorder.
+        // Profile rows: POS-A from 1 March to 10 March (exclusive), POS-B from 10 March to 24 March, POS-C 12-14 March (exclusive)
+        // inside POS-B, so 12 and 13 March are covered by two rows and the latest start (POS-C) wins (QUAL-263); POS-D from 22 March
+        // to 26 March (exclusive) overlaps the end of POS-B, so 22 and 23 March are covered by two rows and the latest start (POS-D)
+        // wins although POS-D also ENDS later (24 and 25 March are POS-D alone). The profile gap from 26 March stays. The fractions of
+        // POS-C and POS-D differ from 1.000 so the rows are not interchangeable; the outcome mapping does not compare them.
+        // The insert order is deliberate, for two different readers: POS-C follows POS-B, so a resolver with no ORDER BY reads POS-B
+        // first and is red on 12 and 13 March; POS-D PRECEDES POS-B, so a "most recently inserted wins" reader reads POS-B and is
+        // red on 22 and 23 March, where POS-D (the later start) is the right answer. Do not reorder.
         await InsertProfileAsync("POS-A", "2026-03-01", "2026-03-10");
-        await InsertProfileAsync("POS-B", "2026-03-10", "2026-03-26");
+        await InsertProfileAsync("POS-D", "2026-03-22", "2026-03-26", 0.750m);
+        await InsertProfileAsync("POS-B", "2026-03-10", "2026-03-24");
         await InsertProfileAsync("POS-C", "2026-03-12", "2026-03-14", 0.500m);
 
         // Organisation rows: A to 5 March (exclusive), B from 8 March (open), C 20-21 March (overlapping B).

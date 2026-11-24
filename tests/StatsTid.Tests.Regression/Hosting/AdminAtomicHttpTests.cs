@@ -147,7 +147,8 @@ public sealed class AdminAtomicHttpTests : IAsyncLifetime
     /// stream-keyed outbox/event witnesses. Primary org = the init.sql-seeded ORGANISATION STY01.
     /// The live employee_profiles + user_agreement_codes rows MUST be seeded alongside: the host's
     /// startup backfill seeders (S31 EmployeeProfileSeeder, S34 UserAgreementCodeBackfillSeeder)
-    /// each enqueue an outbox event for any user missing a live row — under
+    /// each enqueue an outbox event for any user missing a row (the profile seeder: no profile row at
+    /// all; the agreement-code seeder: no open row) — under
     /// <c>WithThrowingOutbox()</c> that throw escapes during HOST STARTUP, before the test's
     /// request ever fires (first surfaced in CI run 32841900233; this suite never ran under
     /// Docker locally). Seeding the rows keeps both backfills no-op so the forced throw fires
