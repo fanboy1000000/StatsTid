@@ -4003,3 +4003,27 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
     - the button stays busy until the refresh returns.
   - **Accepted:** a late success after a retyped date is not announced. Register candidate.
   - **Cycle 4** is a light review of FU-5's delta (3 of 5 cycles used).
+
+**The 14834 stack, cycle 4 (light, FU-5 `58cad448`):**
+- **What FU-5 fixed.** A late refusal now updates the form on screen without disturbing it, and the year-0 hole is closed. Its full vitest run was reaped while another agent's run overlapped. The agent rightly did not restart it, so the run is owed at the GATE.
+- **The reviews:**
+  - 5α c4: PASS.
+  - Codex c4: APPROVED-WITH-WARNINGS. One WARNING: two overlapping list re-reads can unlock the button a moment early.
+  - Fable c4: APPROVED. It calls the same edge harmless (its NOTE 2).
+- **Rulings** (`S148-TASK-14834-stack-5a-rulings-c4.md`):
+  - **FU-6:** only the newest re-read releases the lock, with one fact and two comment fixes.
+  - **Recorded:** `confirm()`'s re-check is defence in depth and is not pinned.
+  - **Cycle 5 is the last.** Anything needing another fix-up goes to the owner.
+
+**TASK-14838 FU-2 returned** `bf994ddf` (report `S148-TASK-14838-FU-2-report.md`):
+- **What it fixed:**
+  - strict date format;
+  - interaction counters for late answers;
+  - the server's floor is remembered;
+  - the hook is keyed;
+  - two accessibility items;
+  - the anchor date is shown in ISO form.
+- **Checks:** 12 facts red on `a10cd057`.
+- **Its full vitest never completed.** One run was cut off by a pipe; the rerun was reaped. On the way it found and fixed one regression.
+- **The Orchestrator** stopped the two orphaned vitest processes and is running the full suite alone.
+- **Cycle 3** is running: Codex and 5α, then Fable.
