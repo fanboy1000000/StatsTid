@@ -3493,3 +3493,42 @@ M-40 included [O for the 14 facts of the five classes run].
   - `.design-sync/config.json`'s hand-written `Checkbox` props gained `describedBy?: string` (`f4414767`), so a future sync uploads the right shape.
   - A Node mirror of the script's `--check` and `--update`, `.claude/reviews/S148-session-helpers/design-sync-fingerprint.js`, reproduces the 41 unchanged hashes exactly. It is for a machine without Python, after a real sync only.
 - **The fingerprint is not refreshed:** no sync happened, so the next CI run will show the advisory warning for `Checkbox.tsx` and `config.json`.
+
+**CI-W5 judged, 2026-11-24: green on every test job; the one red job (`docs-consistency`) was the design-sync drift gate, now advisory by the owner's ruling.** Run 45280970629, draft PR #67, headSha `aadd2b10` confirmed. Results were read from the trx files by name.
+- **Counts:**
+  - Unit 1746 of 1746; DemoSeed 170 of 170; **Regression 2795 of 2795**, the Docker-gated facts included.
+  - Smoke 10 of 10; E2E green; frontend-build green with vitest 102 files and 1217 tests. That settles the vitest re-run owed since the low-memory reap.
+  - gitleaks and lizard green.
+- **The plan's CI-W5 row:**
+  - every AC-C1*, the pay halves of AC-C2a, -c and -m, AC-C2p (3), AC-C3*, AC-PIL-a … g and **AC-PIL-i** (its CI parts (6)–(9) seen green for the first time), AC-C13a and AC-C13k (2): all green in the Regression run;
+  - **AC-C13r**'s vitest facts green.
+- **The pins:**
+  - **PIN-1:** `DemoPayLinesPinTests`, December 2025 and June 2026, both green; no golden moved.
+  - **PIN-2:** `ConfigSeedParityTests.EveryCompiledAgreementOkPosition_DatabaseConfigEqualsCompiled`, green.
+  - **PIN-3:** the payroll suite is green with no re-pin in wave 5.
+- **The smoke suite's new and changed probes:**
+  - `Backend_OvertimeGovernanceHop_ComposedStack` (200): the first composed bind of that payload, after T5;
+  - `Orchestrator_WeeklyCalculationPath_ComposedStack` (the four results; T4's JSON numbers);
+  - `Backend_RuleEngineHop_AbsenceAndCompliance_ComposedStack` (compliance 200 with its shape);
+  - `Orchestrator_RuleEvaluationPath_ComposedStack`;
+  - all green.
+  - **The composed-hop debt for `check-overtime-governance` is closed** in `docs/WORKFLOW.md` (O-17).
+- **N-3's disposition: refuted (O-17).** The Teamoversigt 300-person March median was 1,024 ms before T14b (CI-W5a) and is **958 ms after** (CI-W5). By NR-P3's criterion (more than twice the before figure, or above 2 seconds) it is not slow, so there is no F-row. For the record: 30 people 113 ms, year overview 386 ms, Skema month read 113 ms, Skema save 47 ms.
+- **The four lock figures (recorded, not judged; CI):**
+  - (1) a 1,200-row publish answered 2,046 ms after the release, and the five waiting exports 2,137–2,157 ms;
+  - (2) an export queued behind an HR save answered 51 ms or less after the release;
+  - (3) SEC-066, five saves on a pool of 4: one completed and four answered 500 after 15–30 s, with one revaluation event landed;
+  - (4) re-staged, three exports on a pool of 4, all three seen waiting: **all three failed** with `NpgsqlException` at about 15 s after the release, writing nothing. (Locally one completed.) This is SEC-066's payroll variant as registered: a stall at about half the pool.
+- **The watch lists are all met:**
+  - `ScreenNoRecordDayNormTests`, `ScreenNoRecordRosterOrderTests`, `RuleEngineAuthForwardingTests` and `DatedRecordTimelineParityTests`;
+  - `PayrollHostWeeklyTests` and `SplitMonthHostTests` (the mid-week refusals);
+  - `FrozenConfigReplayTests` (5) and `ManifestProjectionRebuildPlanInputsTests`;
+  - the race class (11), the census (20), the two recording-time 503 facts, and `ProfileCloseFirst_Export409`.
+- **Status change:** wave 5's Docker facts move from "CI-pending" to "CI-verified" (run 45280970629). QUAL-265 is marked CI-verified. Their mutations wait for CI-M5.
+- **The docs job** was red only on the design-sync gate (`Checkbox.tsx` drifted). It is advisory since the owner's ruling of 2026-11-24 (`5bfb6b33`), and `check_docs.py`'s hard checks all passed.
+- **PR #67 is closed unmerged**, and `ci/s148-w5` is deleted.
+- **CI-M5 next:** the builder's branch (`645178f1` on `aadd2b10`, report `.claude/reviews/S148-CI-M4-builder-report.md`'s successor `S148-CI-M5-builder-report.md`) plus the three-line evidence `ci.yml` commit (rule 3).
+  - **The builder's three questions, ruled by the Orchestrator:**
+    - **M-9's pay half also mutates `GetPublishedAppliesFromDatesAsync`.** Payroll's boundary read must see the draft too, or the pay half cannot discriminate. Ratified as M-9's form, consistent with the row's "select by status alone".
+    - **M-12's extra red** (`DatedRecordTimelineParityTests`, from the fraction field the mutation adds) stays on the frozen list, under NR-P25's "everything the mutations break".
+    - **The partial local census is accepted.** An unlisted red at CI-M5 is triaged against each mutation before anything else.
