@@ -46,9 +46,14 @@ public sealed class CustomaryDayRepository
     }
 
     /// <summary>True when at least one <c>agreement_configs</c> row carries exactly this code
-    /// (compared by the column's equality, case-sensitive); the scope a custom may be narrowed to.</summary>
+    /// (compared by the column's equality, case-sensitive); the scope a custom may be narrowed to.
+    /// A code containing NUL is false without a query: PostgreSQL text cannot hold NUL and refuses
+    /// such a parameter (22021), so no row carries it.</summary>
     public async Task<bool> AgreementCodeExistsAsync(string agreementCode, CancellationToken ct = default)
     {
+        if (agreementCode.Contains('\0'))
+            return false;
+
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
@@ -58,21 +63,26 @@ public sealed class CustomaryDayRepository
     }
 
     /// <summary>
-    /// Locks the organisation's own row <c>FOR NO KEY UPDATE</c>, the first statement of every
-    /// customs write: two writers of one organisation's customs queue here, so the overlap check that
-    /// follows (READ COMMITTED) sees what the earlier writer committed. <c>NO KEY UPDATE</c> does not
-    /// conflict with the <c>FOR KEY SHARE</c> a foreign-key check takes, so inserts elsewhere that
-    /// reference the organisation do not wait on it. The scope check has already found the
-    /// organisation, and organisations are only ever soft-deleted, so the row is there; the foreign
-    /// key refuses a custom on a missing organisation in any case.
+    /// Locks the organisation's own row <c>FOR NO KEY UPDATE</c> while it is active, the first
+    /// statement of every customs write; false when there is no active row to lock, and the caller
+    /// then refuses the write. Two writers of one organisation's customs queue here, so the overlap
+    /// check that follows (READ COMMITTED) sees what the earlier writer committed. <c>NO KEY UPDATE</c>
+    /// does not conflict with the <c>FOR KEY SHARE</c> a foreign-key check takes, so inserts elsewhere
+    /// that reference the organisation do not wait on it.
+    /// <para>The scope check found the organisation active, but outside this transaction. The
+    /// soft-delete locks the same row <c>FOR UPDATE</c> (<c>OrganizationRepository.LockActiveByIdAsync</c>),
+    /// which conflicts with this lock: a delete that commits first is seen here, because READ
+    /// COMMITTED re-checks <c>is_active</c> on the row it waited for, and a delete that comes second
+    /// waits for this write's commit. So no customs write commits on an organisation already
+    /// soft-deleted.</para>
     /// </summary>
-    public async Task LockOrganisationAsync(
+    public async Task<bool> LockOrganisationAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string orgId, CancellationToken ct = default)
     {
         await using var cmd = new NpgsqlCommand(
-            "SELECT 1 FROM organizations WHERE org_id = @orgId FOR NO KEY UPDATE", conn, tx);
+            "SELECT 1 FROM organizations WHERE org_id = @orgId AND is_active = TRUE FOR NO KEY UPDATE", conn, tx);
         cmd.Parameters.AddWithValue("orgId", orgId);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteScalarAsync(ct) is not null;
     }
 
     /// <summary>Locks one custom <c>FOR UPDATE</c>, only when it belongs to <paramref name="orgId"/>;

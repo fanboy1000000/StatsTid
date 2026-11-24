@@ -20,10 +20,11 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// <para><b>Access.</b> Every route is <c>LocalAdminOrAbove</c> and checks the organisation in the
 /// address through the LocalAdmin floor first (FAIL-001: a non-admin scope covering the organisation
 /// never admits; docs/SECURITY.md). A row is reachable only through its own organisation's address:
-/// any other answers 404.</para>
+/// any other answers 404. A write whose organisation is soft-deleted after that check is refused at
+/// its organisation lock with the check's own 403 "Organization not found".</para>
 ///
 /// <para><b>Each write is one transaction</b> (ADR-018 D3, ADR-026 D2), READ COMMITTED: the
-/// organisation's row locked <c>FOR NO KEY UPDATE</c> first, then (withdraw, reinstate) the custom's
+/// organisation's active row locked <c>FOR NO KEY UPDATE</c> first, then (withdraw, reinstate) the custom's
 /// row <c>FOR UPDATE</c>; the checks decided under those locks; the <c>customary_days</c> row, its
 /// <c>customary_days_audit</c> row, the <c>CustomaryDayChanged</c> outbox event on the stream
 /// <c>customary-days-{orgId}</c> and the audit-projection row; commit. Any failure keeps none of
@@ -114,7 +115,11 @@ public static class CustomaryDayEndpoints
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
             try
             {
-                await customsRepo.LockOrganisationAsync(conn, tx, orgId, ct);
+                if (!await customsRepo.LockOrganisationAsync(conn, tx, orgId, ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return OrganisationNotFound();
+                }
 
                 var conflictingCustomId = await customsRepo.FindOverlapAsync(conn, tx, candidate, ct);
                 if (conflictingCustomId is not null)
@@ -165,7 +170,11 @@ public static class CustomaryDayEndpoints
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
             try
             {
-                await customsRepo.LockOrganisationAsync(conn, tx, orgId, ct);
+                if (!await customsRepo.LockOrganisationAsync(conn, tx, orgId, ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return OrganisationNotFound();
+                }
 
                 var current = await customsRepo.LockByIdAsync(conn, tx, orgId, customId, ct);
                 if (current is null)
@@ -181,8 +190,14 @@ public static class CustomaryDayEndpoints
                 if (validTo <= current.ValidFrom)
                 {
                     await tx.RollbackAsync(ct);
+                    // No day follows DateOnly.MaxValue, so a row starting on it gets no nearestValid.
+                    // Create and reinstate refuse that start (DATE_OUT_OF_RANGE), so only a row written
+                    // outside these routes reaches this.
+                    IReadOnlyList<DateOnly>? nearestValid = current.ValidFrom == DateOnly.MaxValue
+                        ? null
+                        : [current.ValidFrom.AddDays(1)];
                     return ValidationFailed([new FieldValidationError(
-                        nameof(request.ValidTo), "VALID_TO_NOT_AFTER_VALID_FROM", [current.ValidFrom.AddDays(1)])]);
+                        nameof(request.ValidTo), "VALID_TO_NOT_AFTER_VALID_FROM", nearestValid)]);
                 }
 
                 // The row is locked, open and the organisation's, so the update finds it.
@@ -226,13 +241,20 @@ public static class CustomaryDayEndpoints
 
             if (request.ValidFrom is not { } validFrom)
                 return ValidationFailed([new FieldValidationError(nameof(request.ValidFrom), "REQUIRED", null)]);
+            // The create's rule (ValidateCreate): a start on the last day of the date type is unstoppable.
+            if (validFrom == DateOnly.MaxValue)
+                return ValidationFailed([new FieldValidationError(nameof(request.ValidFrom), "DATE_OUT_OF_RANGE", null)]);
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
             try
             {
-                await customsRepo.LockOrganisationAsync(conn, tx, orgId, ct);
+                if (!await customsRepo.LockOrganisationAsync(conn, tx, orgId, ct))
+                {
+                    await tx.RollbackAsync(ct);
+                    return OrganisationNotFound();
+                }
 
                 var withdrawn = await customsRepo.LockByIdAsync(conn, tx, orgId, customId, ct);
                 if (withdrawn is null)
@@ -356,10 +378,10 @@ public static class CustomaryDayEndpoints
     /// <summary>
     /// The create's value check, pure: every field with a violation, at most one error per field
     /// (its first failure), named by the request member. The rules that depend on <c>Part</c> or
-    /// <c>Kind</c> are skipped when that field is itself refused. Not refused: a past or future date,
-    /// 29 February in a recurring custom (a real day in leap years), and <c>FROM_TIME</c> where no
-    /// office hours are set (office hours live on the profile per agreement and OK version; the
-    /// stage-1 reader combines the two).
+    /// <c>Kind</c> are skipped when that field is itself refused. Not refused: a past or future date
+    /// (except a start on 9999-12-31, below), 29 February in a recurring custom (a real day in leap
+    /// years), and <c>FROM_TIME</c> where no office hours are set (office hours live on the profile
+    /// per agreement and OK version; the stage-1 reader combines the two).
     /// </summary>
     private static List<FieldValidationError> ValidateCreate(CreateCustomaryDayRequest r, bool agreementCodeKnown)
     {
@@ -393,6 +415,11 @@ public static class CustomaryDayEndpoints
 
         if (r.ValidFrom is null)
             Refuse(nameof(r.ValidFrom), "REQUIRED");
+        // A start on DateOnly.MaxValue (9999-12-31), the last day the date type holds, has no later
+        // end date, so the table's CHECK (valid_to > valid_from) would leave the row in force for ever.
+        // The type's limit, not a domain ceiling (SEC-033, owner ruling OQ-2).
+        else if (r.ValidFrom == DateOnly.MaxValue)
+            Refuse(nameof(r.ValidFrom), "DATE_OUT_OF_RANGE");
 
         // The day: exactly one form, a single date or a month with a day.
         var monthGiven = r.RecurringMonth is not null;
@@ -459,6 +486,12 @@ public static class CustomaryDayEndpoints
         Results.Json(new { error = "Customary day overlaps an existing one", conflictingCustomId }, statusCode: 409);
 
     private static IResult NotFound() => Results.NotFound(new { error = "Customary day not found" });
+
+    // The scope validator's own refusal for an unknown or soft-deleted organisation
+    // (OrgScopeValidator.ValidateOrgAccessAsync), given when the soft-delete commits between that
+    // check and the write's organisation lock.
+    private static IResult OrganisationNotFound() =>
+        Results.Json(new { error = "Access denied", reason = "Organization not found" }, statusCode: 403);
 
     private static CustomaryDayResponse ToResponse(CustomaryDayRow row) => new(
         CustomId: row.CustomId,
