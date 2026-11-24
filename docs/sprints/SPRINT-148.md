@@ -3569,3 +3569,21 @@ M-40 included [O for the 14 facts of the five classes run].
 - **TASK-14849 + -T briefs written by the Orchestrator** from the adjudication's rulings 1, 3 and 4 (transcriptions, no new ruling):
   - **TASK-14849** (`backend-infrastructure`): the start-up seeder backfills only users with no profile row at all, and its race log names the true indexes. Comments are made true in the seeder, Backend `Program.cs`, `IEmploymentProfileResolver.cs` and the resolver's class doc. There is a report-only census of the agreement-code and organisation backfill seeders, which use the same "no open row" test.
   - **TASK-14849-T** (`test-qa`): three Docker facts. A closed profile with an active user gets nothing from the seeder; a user with no row still gets the year-1 row; payroll still refuses the uncovered month after a seeder run. The parity fixture also gains a partial-overlap profile row (POS-D, 22–26 March) that an "order by end date" reader fails.
+
+**Wave 6 briefs, batch A, 2026-11-24:** TASK-14832 (the local profile's new settings API, SEC-061's range check, and the 22-member no-op comparator), TASK-14832-T and TASK-14833 (the editor). They were drafted by a `planner` while CI-M5 ran (report `.claude/reviews/S148-wave6A-briefs-planner-report.md`) and adjudicated (`S148-wave6A-briefs-adjudication.md`, Fable 5.2, **RULED, no owner question**). A planner is applying the rulings and the plan "final + 29".
+- **Bad values get a clear refusal instead of a server error.** A misspelled option, a weekday with only a start time, a number with three decimals, or a number too large for its column are each refused with a 400 and a Danish message (ruling 4's nine codes). A number too large for its column was already refused, as a 500, so no ceiling is added and SEC-033/OQ-2 stands. Clock times must be whole minutes.
+- **The "by analogy" label shows on all three AC agreements.**
+- **The "Kontortid" credit basis is disabled, with a reason, while no office hours are entered.**
+- **The history panel lists the new settings.** This widens TASK-14833 to size L, under the owner's "complete fix" rule.
+- **All the Danish copy is fixed verbatim** (ruling 22).
+- **Told to the owner, not asked (O-17):**
+  - Freezing the new settings into a month's proof moves to S149, with their first reader. The refinement said they already travel in the frozen config, and they do not. Nothing reads them in S148, so no result depends on them.
+  - The storage-limit refusal adds no ceiling.
+  - Clock times are whole minutes.
+  - TASK-14833 now covers the history panel.
+- **Corrected:** wave-5D's "TASK-14832 adds two lock takers" (`SPRINT-148.md:2323`) is wrong. It adds none; the count stays 20.
+
+**TASK-14849 (QUAL-267) returned** `caddb7c6` (report `.claude/reviews/S148-TASK-14849-report.md`). The seeder's query drops `AND p.effective_to IS NULL`, so it backfills only users with no profile row at all. The 23505 log names both unique indexes, and the four comments are made true. Gate: Unit 1746, DemoSeed 170, Regression non-Docker 147.
+- **The census of the agreement-code and organisation backfill seeders** found no writer that ends their open row without a successor (`(unproven)`, by reading).
+- **No test relied on the old backfill.**
+- **TASK-14849-T dispatched** on `caddb7c6`. It is also authorized, comment only, to make three test comments true that TASK-14849's census named.
