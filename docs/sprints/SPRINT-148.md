@@ -4362,3 +4362,25 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - every other 400 on the users PUT shows the raw response body (pre-existing, usability);
   - a malformed `nearestValid` would print "Invalid Date" (unproven, pre-existing).
 - **The next CI run must show:** the frontend build with AC-C13j and AC-C13u (CI-W6).
+
+**TASK-14851 returned** `c99e52a7` on `319f8b68` (report `.claude/reviews/S148-TASK-14851-report.md`).
+- **The repair, in plain words.** The employee-profile PUT re-creates a closed profile when asked with `If-None-Match: *`.
+  - The re-create is dated today or earlier and not before the last real profile's end.
+  - It runs the full chain: scope check, a self refusal for every role, the pay-inputs lock, the drift guard, audit rows, the event, revaluation and the worklist hand-off.
+  - A cancelled change's zero-length row is reopened in the same save (ruling 3's chain), and the carry-forward is skipped on a create.
+  - The GET's 404 now says whether a create is possible and from when, with the last profile's values for pre-filling.
+  - The fraction rule (> 0, at most 3 decimals, ≤ 9.999, no ceiling at 1.000) now applies to the edit as well. Before, ≤ 0 answered 200, decimals were rounded and > 9.999 gave a 500.
+- **Gate:**
+  - Build 0 errors. The warning sets are identical to the base: 126 / 114.
+  - Unit 1848, DemoSeed 170 and Regression non-Docker 147 passed.
+  - PayInputsLock count 20, unchanged.
+- **Local evidence** (a throwaway cluster on port 55431, and the real API booted from the regression factory): worked example 1, the gap fill, the chain and every refusal.
+- **Declared deviations (6),** for the 5a lenses. Among them:
+  - a create whose first write would be a no-op throws;
+  - a category-trigger edge on the reopen write;
+  - "latest non-zero-length row" read as "ended by today".
+- **Found, not fixed:**
+  - F1: a chained reopen whose values equal the cancelled change's raises no revaluation and no trigger;
+  - F2: after a create across a future cancelled change, the drawer will show a "scheduled" change that changes nothing (for TASK-14852);
+  - F3–F5: stale remarks and catalog columns.
+- **The security consult and TASK-14851-T were dispatched together** on `c99e52a7`. Both carry the port-5432 rule.
