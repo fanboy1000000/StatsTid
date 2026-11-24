@@ -3706,3 +3706,22 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **REGEN** `9e298aee` (Orchestrator, on 14832-T's tip): `openapi.json` +204, additions only. The eighteen members land on the response and the save request, with five enums on the response, exactly as TASK-14832 predicted.
 - **TASK-14833 dispatched** (`ux`) on `9e298aee`.
 - **Codex 5a cycle 1** over the backend half (`33f502cf..9e298aee`) is running. 5α and Fable follow when an agent slot frees. TASK-14833 is reviewed on its own delta.
+
+**The 14832 stack reviewed, cycle 1** (`33f502cf..a9707e57`; saved verbatim):
+- **TASK-14833 returned** `a9707e57` (report `S148-TASK-14833-report.md`): the editor card, the history row and four vitest files. tsc, lint, `typecheck:e2e` and build are clean; vitest 106 files / 1240 tests. **Corrected per Codex:** `d6Fields` expands to 16 cases, so the four new files hold 23 and the base was 1217, not 1218.
+- **5α PASS** (`S148-TASK-14832-stack-5alpha.md`): every file is authorized; the 22 members are in one order in all five places; the 20 lock lines are unchanged; the Danish copy is byte for byte (13 strings composed).
+- **Codex:**
+  - **Backend half:** APPROVED-WITH-WARNINGS (`S148-TASK-14832-5a-codex-c1.raw.md`). The tests' `Contains` would admit two errors for one field.
+  - **TASK-14833:** CHANGES-REQUIRED (`S148-TASK-14833-5a-codex-c1.raw.md`). BLOCKER: a refusal naming a field the editor does not render is silent. WARNINGs: a second error hides the first, and the nine-code facts do not assert placement.
+- **Fable:** APPROVED-WITH-WARNINGS (`S148-TASK-14832-stack-5a-reviewer.md`).
+  - W1: the value rules are pinned for 6 of 22 settings, with no fact for "one error per field".
+  - N1: the unknown-field case (unproven today).
+  - N2 to N5: remarks owed at the merge, comment drift, a reseed note, and the worklist on a settings-only save.
+  - SEC-061 may be marked FIXED (CI-pending).
+- **Ruled by the Orchestrator** (`S148-TASK-14832-stack-5a-rulings-c1.md`, R1–R8). The lenses differ only in severity, and every ruling takes the stricter remedy:
+  - **R1, FU-1 (`test-qa`):** exact error lists, a table-driven Unit theory over every setting, and overlapping-failure cases for precedence. Each is proven red by a local scratch mutation of Fable's four examples.
+  - **R2–R4, FU-2 (`ux`):** an unknown-field refusal goes to the banner; the first error per field wins; the nine-code facts assert placement, id, `aria-describedby` and `aria-invalid`.
+  - **R5:** two comment edits by the Orchestrator.
+  - **R6:** four NOTEs accepted. The clock spelling in OpenAPI is later polish. The owner is told at O-17 that a settings-only save puts paid months on HR's worklist.
+  - **R7:** the merge paperwork. **R8:** cycle 2 on the delta.
+- **FU-2 dispatched** (`ux`) on `a9707e57`.
