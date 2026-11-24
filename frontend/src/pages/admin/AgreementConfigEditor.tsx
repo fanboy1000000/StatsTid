@@ -389,24 +389,24 @@ export function AgreementConfigEditor() {
         <legend>Grundlaeggende</legend>
         <div className={styles.fieldGrid}>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Overenskomstkode</label>
-            <input className={styles.input} type="text" value={form.agreementCode} onChange={handleTextChange('agreementCode')} readOnly={isReadOnly} placeholder="f.eks. AC" />
+            <label className={styles.formLabel} htmlFor="ac-agreementCode">Overenskomstkode</label>
+            <input id="ac-agreementCode" className={styles.input} type="text" value={form.agreementCode} onChange={handleTextChange('agreementCode')} readOnly={isReadOnly} placeholder="f.eks. AC" />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>OK-version</label>
-            <input className={styles.input} type="text" value={form.okVersion} onChange={handleTextChange('okVersion')} readOnly={isReadOnly} placeholder="f.eks. OK24" />
+            <label className={styles.formLabel} htmlFor="ac-okVersion">OK-version</label>
+            <input id="ac-okVersion" className={styles.input} type="text" value={form.okVersion} onChange={handleTextChange('okVersion')} readOnly={isReadOnly} placeholder="f.eks. OK24" />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Normmodel</label>
-            <select className={styles.select} value={form.normModel} onChange={handleTextChange('normModel')} disabled={isReadOnly}>
+            <label className={styles.formLabel} htmlFor="ac-normModel">Normmodel</label>
+            <select id="ac-normModel" className={styles.select} value={form.normModel} onChange={handleTextChange('normModel')} disabled={isReadOnly}>
               {NORM_MODELS.map((m) => (
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </select>
           </div>
           <div className={`${styles.formField} ${styles.fieldGridFull}`}>
-            <label className={styles.formLabel}>Beskrivelse</label>
-            <textarea className={styles.textarea} value={form.description ?? ''} onChange={handleTextChange('description')} readOnly={isReadOnly} placeholder="Valgfri beskrivelse" />
+            <label className={styles.formLabel} htmlFor="ac-description">Beskrivelse</label>
+            <textarea id="ac-description" className={styles.textarea} value={form.description ?? ''} onChange={handleTextChange('description')} readOnly={isReadOnly} placeholder="Valgfri beskrivelse" />
           </div>
         </div>
       </fieldset>
@@ -416,16 +416,16 @@ export function AgreementConfigEditor() {
         <legend>Normtid</legend>
         <div className={styles.fieldGrid}>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Ugentlige normtimer</label>
-            <input className={styles.input} type="number" step="0.01" value={form.weeklyNormHours} onChange={handleNumberChange('weeklyNormHours')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-weeklyNormHours">Ugentlige normtimer</label>
+            <input id="ac-weeklyNormHours" className={styles.input} type="number" step="0.01" value={form.weeklyNormHours} onChange={handleNumberChange('weeklyNormHours')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Normperiode (uger)</label>
-            <input className={styles.input} type="number" step="1" value={form.normPeriodWeeks} onChange={handleNumberChange('normPeriodWeeks')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-normPeriodWeeks">Normperiode (uger)</label>
+            <input id="ac-normPeriodWeeks" className={styles.input} type="number" step="1" value={form.normPeriodWeeks} onChange={handleNumberChange('normPeriodWeeks')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Arlige normtimer</label>
-            <input className={styles.input} type="number" step="0.01" value={form.annualNormHours} onChange={handleNumberChange('annualNormHours')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-annualNormHours">Arlige normtimer</label>
+            <input id="ac-annualNormHours" className={styles.input} type="number" step="0.01" value={form.annualNormHours} onChange={handleNumberChange('annualNormHours')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -435,8 +435,8 @@ export function AgreementConfigEditor() {
         <legend>Flex</legend>
         <div className={styles.fieldGrid}>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Maks. flexsaldo (timer)</label>
-            <input className={styles.input} type="number" step="0.01" value={form.maxFlexBalance} onChange={handleNumberChange('maxFlexBalance')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-maxFlexBalance">Maks. flexsaldo (timer)</label>
+            <input id="ac-maxFlexBalance" className={styles.input} type="number" step="0.01" value={form.maxFlexBalance} onChange={handleNumberChange('maxFlexBalance')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -454,12 +454,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="hasMerarbejde">Merarbejde aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Overarbejdsgraense 50% (timer)</label>
-            <input className={styles.input} type="number" step="0.01" value={form.overtimeThreshold50} onChange={handleNumberChange('overtimeThreshold50')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-overtimeThreshold50">Overarbejdsgraense 50% (timer)</label>
+            <input id="ac-overtimeThreshold50" className={styles.input} type="number" step="0.01" value={form.overtimeThreshold50} onChange={handleNumberChange('overtimeThreshold50')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Overarbejdsgraense 100% (timer)</label>
-            <input className={styles.input} type="number" step="0.01" value={form.overtimeThreshold100} onChange={handleNumberChange('overtimeThreshold100')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-overtimeThreshold100">Overarbejdsgraense 100% (timer)</label>
+            <input id="ac-overtimeThreshold100" className={styles.input} type="number" step="0.01" value={form.overtimeThreshold100} onChange={handleNumberChange('overtimeThreshold100')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -473,16 +473,16 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="eveningSupplementEnabled">Aftentillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Start (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.eveningStart} onChange={handleNumberChange('eveningStart')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-eveningStart">Start (time)</label>
+            <input id="ac-eveningStart" className={styles.input} type="number" step="1" value={form.eveningStart} onChange={handleNumberChange('eveningStart')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Slut (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.eveningEnd} onChange={handleNumberChange('eveningEnd')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-eveningEnd">Slut (time)</label>
+            <input id="ac-eveningEnd" className={styles.input} type="number" step="1" value={form.eveningEnd} onChange={handleNumberChange('eveningEnd')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.eveningRate} onChange={handleNumberChange('eveningRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-eveningRate">Sats</label>
+            <input id="ac-eveningRate" className={styles.input} type="number" step="0.01" value={form.eveningRate} onChange={handleNumberChange('eveningRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -496,16 +496,16 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="nightSupplementEnabled">Nattillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Start (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.nightStart} onChange={handleNumberChange('nightStart')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nightStart">Start (time)</label>
+            <input id="ac-nightStart" className={styles.input} type="number" step="1" value={form.nightStart} onChange={handleNumberChange('nightStart')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Slut (time)</label>
-            <input className={styles.input} type="number" step="1" value={form.nightEnd} onChange={handleNumberChange('nightEnd')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nightEnd">Slut (time)</label>
+            <input id="ac-nightEnd" className={styles.input} type="number" step="1" value={form.nightEnd} onChange={handleNumberChange('nightEnd')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.nightRate} onChange={handleNumberChange('nightRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nightRate">Sats</label>
+            <input id="ac-nightRate" className={styles.input} type="number" step="0.01" value={form.nightRate} onChange={handleNumberChange('nightRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -519,12 +519,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="weekendSupplementEnabled">Weekendtillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Lordagssats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.weekendSaturdayRate} onChange={handleNumberChange('weekendSaturdayRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-weekendSaturdayRate">Lordagssats</label>
+            <input id="ac-weekendSaturdayRate" className={styles.input} type="number" step="0.01" value={form.weekendSaturdayRate} onChange={handleNumberChange('weekendSaturdayRate')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sondagssats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.weekendSundayRate} onChange={handleNumberChange('weekendSundayRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-weekendSundayRate">Sondagssats</label>
+            <input id="ac-weekendSundayRate" className={styles.input} type="number" step="0.01" value={form.weekendSundayRate} onChange={handleNumberChange('weekendSundayRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -538,8 +538,8 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="holidaySupplementEnabled">Helligdagstillaeg aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.holidayRate} onChange={handleNumberChange('holidayRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-holidayRate">Sats</label>
+            <input id="ac-holidayRate" className={styles.input} type="number" step="0.01" value={form.holidayRate} onChange={handleNumberChange('holidayRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -553,8 +553,8 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="onCallDutyEnabled">Radighedsvagt aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.onCallDutyRate} onChange={handleNumberChange('onCallDutyRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-onCallDutyRate">Sats</label>
+            <input id="ac-onCallDutyRate" className={styles.input} type="number" step="0.01" value={form.onCallDutyRate} onChange={handleNumberChange('onCallDutyRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -568,12 +568,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="callInWorkEnabled">Tilkald aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Minimumstimer</label>
-            <input className={styles.input} type="number" step="0.01" value={form.callInMinimumHours} onChange={handleNumberChange('callInMinimumHours')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-callInMinimumHours">Minimumstimer</label>
+            <input id="ac-callInMinimumHours" className={styles.input} type="number" step="0.01" value={form.callInMinimumHours} onChange={handleNumberChange('callInMinimumHours')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.callInRate} onChange={handleNumberChange('callInRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-callInRate">Sats</label>
+            <input id="ac-callInRate" className={styles.input} type="number" step="0.01" value={form.callInRate} onChange={handleNumberChange('callInRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
@@ -587,12 +587,12 @@ export function AgreementConfigEditor() {
             <label className={styles.checkboxLabel} htmlFor="travelTimeEnabled">Rejsetid aktiveret</label>
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Arbejdsrejse-sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.workingTravelRate} onChange={handleNumberChange('workingTravelRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-workingTravelRate">Arbejdsrejse-sats</label>
+            <input id="ac-workingTravelRate" className={styles.input} type="number" step="0.01" value={form.workingTravelRate} onChange={handleNumberChange('workingTravelRate')} readOnly={isReadOnly} />
           </div>
           <div className={styles.formField}>
-            <label className={styles.formLabel}>Ikke-arbejdsrejse-sats</label>
-            <input className={styles.input} type="number" step="0.01" value={form.nonWorkingTravelRate} onChange={handleNumberChange('nonWorkingTravelRate')} readOnly={isReadOnly} />
+            <label className={styles.formLabel} htmlFor="ac-nonWorkingTravelRate">Ikke-arbejdsrejse-sats</label>
+            <input id="ac-nonWorkingTravelRate" className={styles.input} type="number" step="0.01" value={form.nonWorkingTravelRate} onChange={handleNumberChange('nonWorkingTravelRate')} readOnly={isReadOnly} />
           </div>
         </div>
       </fieldset>
