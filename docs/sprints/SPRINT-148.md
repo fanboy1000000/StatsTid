@@ -3816,3 +3816,28 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - a re-create across a cancelled change reuses that change's rows;
   - a re-create cannot be dated ahead;
   - a person who has not started can be re-created before the first day.
+
+**The 14834 stack reviewed, cycle 1** (`7cd4d728..52d300c7`; saved verbatim):
+- **TASK-14835 returned** `4694709a` + `52d300c7` (report `S148-TASK-14835-report.md`): the "Kutymefridage" tab and `CustomaryDaysEditor.tsx`. tsc, lint, `typecheck:e2e` and build are clean; vitest 107 files / 1251.
+  - Declared deviation, accepted: three added union members in `api-typed-overloads.test.ts`, which `gen:api` made necessary.
+  - Found and not fixed: `Select` and `Radio` take no aria props, and the lint script lists named files only.
+- **5α PASS** (`S148-TASK-14834-stack-5alpha.md`).
+- **Codex:**
+  - **Backend half:** APPROVED-WITH-WARNINGS (`S148-TASK-14834-5a-codex-c1.raw.md`). A custom starting 9999-12-31 makes withdraw answer 500.
+  - **TASK-14835:** CHANGES-REQUIRED (`S148-TASK-14835-5a-codex-c1.raw.md`). Three BLOCKERs:
+    - an organisation switch during a save shows the previous organisation's list;
+    - a below-minimum date can be submitted;
+    - the add form offers a day already open in the list.
+
+    Plus two WARNINGs (accessibility of the refused controls; tests that pass on wrong code) and one NOTE (a page comment).
+- **Fable:** APPROVED-WITH-WARNINGS (`S148-TASK-14834-stack-5a-reviewer.md`). Seven warnings:
+  - W1: the stale list after an organisation switch.
+  - W2: the 9999-12-31 case. The row can then never be stopped.
+  - W3: no fact pins the GET's or reinstate's organisation check.
+  - **W4: the security consult the merge checklist requires was not run.**
+  - W5: below-minimum dates and a double click.
+  - W6: three tests that pass on wrong code.
+  - W7: two "nothing emits it yet" statements.
+
+  Plus eight NOTEs, among them a wrong future start date blocking earlier dates for that day and scope.
+- **W4 is an Orchestrator miss**, logged for the record: the plan's checklist item 4 requires a read-only `security` consult for TASK-14834 before the merge, and it was not dispatched with the build. It is running now (`S148-TASK-14834-security-consult.md`). Its negative-test list feeds the fix-ups.
