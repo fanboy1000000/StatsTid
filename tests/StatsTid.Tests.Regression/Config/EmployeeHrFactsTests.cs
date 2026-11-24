@@ -477,6 +477,8 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
         var mar31 = new DateOnly(2026, 3, 31);
         await RegressionSeed.SeedEmployeeAsync(Cs, person, "STY01", "HK", "OK26", partTimeFraction: 1.0m);
         await SeedWeekdayHoursAsync(person, mar1, mar31);
+        // March's first week holds February days, so the month before must be approved too (the calculation refuses otherwise).
+        await SeedApprovedMonthAsync(person, new DateOnly(2026, 2, 1), new DateOnly(2026, 2, 28));
         await SeedApprovedMonthAsync(person, mar1, mar31);
         var db = new DbConnectionFactory(Cs);
         await TestFixtures.SeedWageTypeMappingsAsync(db);
@@ -594,7 +596,7 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
     public async Task OrganisationChangedUnderTheLock_409_NothingWritten()
     {
         var jonas = await SeedPersonAsync(Cs, "STY01", "HK");
-        var before = await TrailAsync(jonas);
+        var before = await TrailAsync(jonas, withUsersVersion: false);
 
         var rsp = await RaceUsersRowAsync(jonas,
             "UPDATE users SET primary_org_id = 'STY02', version = version + 1 WHERE user_id = @u",
@@ -602,7 +604,7 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
 
         await AssertDriftAsync(rsp);
         Assert.Equal("STY02", await ScalarStringAsync(Cs, "SELECT primary_org_id FROM users WHERE user_id = @u", ("u", jonas)));
-        Assert.Equal(before, await TrailAsync(jonas));
+        Assert.Equal(before, await TrailAsync(jonas, withUsersVersion: false));
     }
 
     /// <summary>
@@ -615,14 +617,14 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
     public async Task OrganisationChangedUnderTheLock_StaleIfMatch_StillDrift409()
     {
         var jonas = await SeedPersonAsync(Cs, "STY01", "HK");
-        var before = await TrailAsync(jonas);
+        var before = await TrailAsync(jonas, withUsersVersion: false);
 
         var rsp = await RaceUsersRowAsync(jonas,
             "UPDATE users SET primary_org_id = 'STY02', version = version + 1 WHERE user_id = @u",
             () => PutRequest(jonas, new { effectiveFrom = "2026-03-02", overtimeRegime = "OVERTIME", onFlexScheme = true }, ifMatch: "9"));
 
         await AssertDriftAsync(rsp);
-        Assert.Equal(before, await TrailAsync(jonas));
+        Assert.Equal(before, await TrailAsync(jonas, withUsersVersion: false));
     }
 
     /// <summary>
@@ -638,7 +640,7 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
     public async Task PersonDeactivatedUnderTheLock_404_NothingWritten()
     {
         var jonas = await SeedPersonAsync(Cs, "STY01", "HK");
-        var before = await TrailAsync(jonas);
+        var before = await TrailAsync(jonas, withUsersVersion: false);
 
         var rsp = await RaceUsersRowAsync(jonas,
             "UPDATE users SET is_active = FALSE, version = version + 1 WHERE user_id = @u",
@@ -649,7 +651,7 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
         using var doc = JsonDocument.Parse(raw);
         Assert.Equal(new[] { "error" }, doc.RootElement.EnumerateObject().Select(p => p.Name).ToArray());
         Assert.Equal("Employee not found", doc.RootElement.GetProperty("error").GetString());
-        Assert.Equal(before, await TrailAsync(jonas));
+        Assert.Equal(before, await TrailAsync(jonas, withUsersVersion: false));
     }
 
     /// <summary>
@@ -966,7 +968,7 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
     /// <summary>Everything a refused request must leave alone, filtered to the person, as one comparable string: the
     /// facts rows, the facts-audit rows, the events on the person's stream, the audit-view rows about them and the
     /// users row's version.</summary>
-    private Task<string?> TrailAsync(string person) => ScalarStringAsync(Cs,
+    private Task<string?> TrailAsync(string person, bool withUsersVersion = true) => ScalarStringAsync(Cs,
         """
         SELECT concat_ws('|',
           (SELECT COALESCE(string_agg(f::text, ';' ORDER BY f.effective_from), '')
@@ -974,8 +976,8 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
           (SELECT COUNT(*) FROM employee_hr_facts_audit WHERE employee_id = @u),
           (SELECT COUNT(*) FROM outbox_events WHERE stream_id = 'employee-hr-facts-' || @u),
           (SELECT COUNT(*) FROM audit_projection WHERE target_resource_id = @u AND event_type = 'EmployeeHrFactsChanged'),
-          (SELECT version FROM users WHERE user_id = @u))
-        """, ("u", person));
+          CASE WHEN @v THEN (SELECT version FROM users WHERE user_id = @u)::text ELSE '' END)
+        """, ("u", person), ("v", withUsersVersion));
 
     private async Task ExecAsync(string sql, params (string Name, object Value)[] parameters)
     {
