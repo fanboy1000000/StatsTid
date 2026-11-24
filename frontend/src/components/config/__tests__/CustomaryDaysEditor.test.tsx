@@ -535,3 +535,150 @@ describe('Kutymefridage editor: isolation, unsent dates, duplicates, accessibili
     expect(screen.queryByText('Værdien kunne ikke gemmes.')).not.toBeInTheDocument()
   })
 })
+
+// FU-4 (ruling C2-R1 of the 14834 stack): a save still pending while the administrator keeps working.
+// Red conditions are named per fact, taken against the editor as FU-3 left it.
+describe('Kutymefridage editor: edits made while a save is pending', { timeout: 30000 }, () => {
+  const release = () => {
+    let open!: () => void
+    postGate = new Promise<void>(r => { open = r })
+    return open
+  }
+  const idle = () => new Promise<void>(r => setTimeout(r, 50))
+  const setDate = (el: HTMLElement, value: string) => fireEvent.change(el, { target: { value } })
+  const OVERLAP = 'Institutionen har allerede denne dag registreret for samme overenskomst i den valgte periode.'
+  const a = { ...june5, validTo: '2026-11-02' }
+  const b = { ...june5, customId: '33333333-3333-3333-3333-333333333333', validFrom: '2026-11-10', validTo: '2026-11-16' }
+
+  // Red: B's form stays open and its "Genindfør" stays enabled although A is open again (overlap).
+  it('closes another row\'s open Genindfør when a late success makes it ineligible, and sends nothing for it', async () => {
+    rows = [a, b]
+    const u = user()
+    await openTab(u)
+    await screen.findAllByText('Hvert år den 5. juni')
+    const rowsNow = () => screen.getAllByText('Hvert år den 5. juni').map(el => el.closest('tr') as HTMLElement)
+    await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    setDate(within(rowsNow()[0]).getByLabelText('Genindføres fra'), '2026-11-20')
+    const done = release()
+    await u.click(within(rowsNow()[0]).getByRole('button', { name: 'Genindfør' }))
+    await waitFor(() => expect(posts()).toHaveLength(1))
+    await u.click(within(rowsNow()[1]).getByRole('button', { name: 'Genindfør' }))
+    setDate(within(rowsNow()[1]).getByLabelText('Genindføres fra'), '2026-11-20')
+
+    rows = [{ ...a, validTo: null }, b]
+    done()
+    await waitFor(() => expect(within(rowsNow()[0]).getByRole('button', { name: 'Afslut' })).toBeInTheDocument())
+    expect(screen.queryByLabelText('Genindføres fra')).not.toBeInTheDocument()
+    expect(within(rowsNow()[1]).queryByRole('button', { name: 'Genindfør' })).not.toBeInTheDocument()
+    expect(posts()).toHaveLength(1)
+  })
+
+  // Red: the failure writes the old draft and its refusal back over the reopened form.
+  it('keeps the new date when the form was cancelled and reopened during a failing save', async () => {
+    rows = [june5]
+    postReply = { status: 409, body: { error: 'Customary day is already withdrawn' } }
+    const u = user()
+    await openTab(u)
+    const row = (await screen.findByText('Hvert år den 5. juni')).closest('tr') as HTMLElement
+    await u.click(within(row).getByRole('button', { name: 'Afslut' }))
+    setDate(within(row).getByLabelText('Ophører fra'), '2026-11-02')
+    const done = release()
+    await u.click(within(row).getByRole('button', { name: 'Afslut' }))
+    await waitFor(() => expect(posts()).toHaveLength(1))
+    await u.click(within(row).getByRole('button', { name: 'Annuller' }))
+    await u.click(within(row).getByRole('button', { name: 'Afslut' }))
+    setDate(within(row).getByLabelText('Ophører fra'), '2026-12-01')
+    done()
+    await idle()
+    expect(within(row).getByLabelText('Ophører fra')).toHaveValue('2026-12-01')
+    expect(screen.queryByText('Dagen er allerede afsluttet. Genindlæs siden.')).not.toBeInTheDocument()
+  })
+
+  // Red: the failure restores the date that was sent and shows its refusal over the edited one.
+  it('keeps the edited date when the date was changed during a failing save', async () => {
+    rows = [june5]
+    postReply = { status: 409, body: { error: 'Customary day is already withdrawn' } }
+    const u = user()
+    await openTab(u)
+    const row = (await screen.findByText('Hvert år den 5. juni')).closest('tr') as HTMLElement
+    await u.click(within(row).getByRole('button', { name: 'Afslut' }))
+    setDate(within(row).getByLabelText('Ophører fra'), '2026-11-02')
+    const done = release()
+    await u.click(within(row).getByRole('button', { name: 'Afslut' }))
+    await waitFor(() => expect(posts()).toHaveLength(1))
+    setDate(within(row).getByLabelText('Ophører fra'), '2026-12-01')
+    done()
+    await idle()
+    expect(within(row).getByLabelText('Ophører fra')).toHaveValue('2026-12-01')
+    expect(screen.queryByText('Dagen er allerede afsluttet. Genindlæs siden.')).not.toBeInTheDocument()
+  })
+
+  // Red: "9999" passes only by chance; a five-digit year sorts before 9999 lexically, so the button
+  // is enabled and one POST goes out. Both inline actions and create are checked.
+  it('sends no POST for a five-digit year, on an inline action or on create', async () => {
+    rows = [june5, may15]
+    const u = user()
+    await openTab(u)
+    const open = (await screen.findByText('Hvert år den 5. juni')).closest('tr') as HTMLElement
+    await u.click(within(open).getByRole('button', { name: 'Afslut' }))
+    setDate(within(open).getByLabelText('Ophører fra'), '12026-11-02')
+    expect(within(open).getByRole('button', { name: 'Afslut' })).toBeDisabled()
+    await u.click(within(open).getByRole('button', { name: 'Afslut' }))
+    await u.click(within(open).getByRole('button', { name: 'Annuller' }))
+    const closed = rowOf('15. maj 2026')
+    await u.click(within(closed).getByRole('button', { name: 'Genindfør' }))
+    setDate(within(closed).getByLabelText('Genindføres fra'), '12026-11-10')
+    expect(within(closed).getByRole('button', { name: 'Genindfør' })).toBeDisabled()
+    await u.click(within(closed).getByRole('button', { name: 'Genindfør' }))
+
+    await u.click(within(closed).getByRole('button', { name: 'Annuller' }))
+    await fillWorkedExample(u)
+    await choose(u, 'Gælder for', 'HK')
+    setDate(screen.getByLabelText('Gælder fra'), '12026-01-05')
+    expect(screen.getByRole('button', { name: 'Tilføj' })).toBeDisabled()
+    await u.click(screen.getByRole('button', { name: 'Tilføj' }))
+    expect(posts()).toHaveLength(0)
+  })
+
+  // Pin (passes on FU-3's editor; red when dateAllowed(f.validFrom) is weakened to a non-empty check).
+  it('keeps Tilføj disabled at a start date of 9999-12-31', async () => {
+    const u = user()
+    await openTab(u)
+    await screen.findByText('Der er ikke registreret kutymefridage eller lukkedage for institutionen.')
+    await fillWorkedExample(u)
+    expect(screen.getByRole('button', { name: 'Tilføj' })).toBeEnabled()
+    setDate(screen.getByLabelText('Gælder fra'), '9999-12-31')
+    expect(screen.getByRole('button', { name: 'Tilføj' })).toBeDisabled()
+  })
+
+  // Pin (passes on FU-3's editor; red when a late success for a row no longer edited skips the re-read).
+  it('shows the changed list after a late success for a row no longer being edited', async () => {
+    rows = [june5, may15]
+    const u = user()
+    await openTab(u)
+    const open = rowOf('Hvert år den 5. juni')
+    await u.click(within(open).getByRole('button', { name: 'Afslut' }))
+    setDate(within(open).getByLabelText('Ophører fra'), '2026-11-02')
+    const done = release()
+    await u.click(within(open).getByRole('button', { name: 'Afslut' }))
+    await waitFor(() => expect(posts()).toHaveLength(1))
+    await u.click(within(open).getByRole('button', { name: 'Annuller' }))
+    await u.click(within(rowOf('15. maj 2026')).getByRole('button', { name: 'Genindfør' }))
+    rows = [{ ...june5, validTo: '2026-11-02' }, may15]
+    done()
+    await waitFor(() => expect(within(rowOf('Hvert år den 5. juni')).getByText('2. november 2026')).toBeInTheDocument())
+    expect(screen.getByRole('status')).toHaveTextContent('')
+  })
+
+  // Red: the sentence is a plain paragraph, so no status region carries it.
+  it('announces why Tilføj is disabled as a status', async () => {
+    rows = [june5]
+    const u = user()
+    await openTab(u)
+    await screen.findByText('Hvert år den 5. juni')
+    await fillWorkedExample(u)
+    const announced = screen.getAllByRole('status').find(el => el.textContent === OVERLAP)
+    expect(announced).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Tilføj' }).getAttribute('aria-describedby')).toBe(announced?.id)
+  })
+})

@@ -70,11 +70,20 @@ const FORBIDDEN_TEXT = 'Du har ikke adgang til at ændre denne institutions kuty
 const NOT_FOUND_TEXT = 'Dagen findes ikke længere. Genindlæs siden.'
 const GENERIC_FAILURE = 'Ændringen kunne ikke gemmes. Prøv igen.'
 
-/** The last date the screen sends: 9999-12-31 has no later end date, so the server refuses it
- * (DATE_OUT_OF_RANGE, which has no Danish text), and every date input stops one day short. */
+/** The last date the screen sends. The server refuses 9999-12-31 as a start date (no later end date
+ * exists; DATE_OUT_OF_RANGE has no Danish text) but accepts it as a stop or single date; the screen is
+ * stricter and every date input stops one day short. */
 const MAX_DATE = '9999-12-30'
-/** A date the screen knows the server accepts: filled, not before `min`, not after MAX_DATE. */
-const dateAllowed = (d: string, min?: string) => !!d && (!min || d >= min) && d <= MAX_DATE
+/** A real calendar date written yyyy-mm-dd (a five-digit year is not one). */
+function isRealDate(d: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false
+  const [y, m, day] = d.split('-').map(Number)
+  const t = new Date(Date.UTC(y, m - 1, day))
+  t.setUTCFullYear(y)
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === day
+}
+/** A date the screen knows the server accepts: a real date, not before `min`, not after MAX_DATE. */
+const dateAllowed = (d: string, min?: string) => isRealDate(d) && (!min || d >= min) && d <= MAX_DATE
 
 /** A code to its Danish sentence; an unknown code gets the generic one, never the code or the English
  * error. `nearest` is the server's nearestValid[0] (BEFORE_WITHDRAWAL names the earliest date). */
@@ -276,7 +285,27 @@ function RadioGroup({ legend, name, options, value, onChange, errorId, error }: 
   )
 }
 
-interface Inline { id: string; action: 'withdraw' | 'reinstate'; date: string; min: string; refusal: string | null }
+// `session` is unique per open and `rev` counts date edits: a late answer is shown only while both
+// still match the form on screen, so it never restores a draft the user has since changed or closed.
+interface Inline {
+  id: string; action: 'withdraw' | 'reinstate'; date: string; min: string; refusal: string | null
+  session: number; rev: number
+}
+
+/** The earliest date the row's action may use now, or null when the row no longer offers it. */
+function actionMin(row: CustomaryDay | undefined, action: Inline['action'], all: CustomaryDay[]): string | null {
+  if (!row) return null
+  if (action === 'withdraw') return row.validTo ? null : addDays(row.validFrom, 1)
+  return reinstateMin(row, all)
+}
+
+/** The open inline action checked against a fresh list: closed when no longer offered, else its min recomputed. */
+function reconcile(cur: Inline | null, all: CustomaryDay[]): Inline | null {
+  if (!cur) return null
+  const min = actionMin(all.find(r => r.customId === cur.id), cur.action, all)
+  if (min === null) return null
+  return min === cur.min ? cur : { ...cur, min }
+}
 
 export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEditorProps) {
   const [rows, setRows] = useState<CustomaryDay[]>([])
@@ -294,6 +323,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
   const liveOrg = useRef<string | null>(orgId)
   const liveInline = useRef<Inline | null>(null)
   const inFlight = useRef(false)
+  const sessions = useRef(0)
   liveInline.current = inline
   useEffect(() => {
     liveOrg.current = orgId
@@ -304,7 +334,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
     const request = ++latest.current
     const result = await apiClient.get('/api/config/{orgId}/customary-days', { params: { path: { orgId } } })
     if (request !== latest.current) return
-    if (result.ok) { setRows(result.data); setLoad('ok') } else setLoad('failed')
+    if (result.ok) { setRows(result.data); setLoad('ok'); setInline(cur => reconcile(cur, result.data)) } else setLoad('failed')
   }, [orgId])
 
   useEffect(() => {
@@ -341,8 +371,10 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
   }
 
   async function confirm() {
-    if (!inline || !dateAllowed(inline.date, inline.min) || inFlight.current) return
-    const { id, action, date } = inline
+    if (!inline || inFlight.current) return
+    const min = actionMin(rows.find(r => r.customId === inline.id), inline.action, rows)
+    if (min === null || !dateAllowed(inline.date, min)) return
+    const { id, action, date, session, rev } = inline
     inFlight.current = true
     setBusy(true)
     const result = action === 'withdraw'
@@ -355,7 +387,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
     inFlight.current = false
     if (liveOrg.current !== orgId) return
     setBusy(false)
-    const same = liveInline.current?.id === id && liveInline.current.action === action
+    const same = liveInline.current?.session === session && liveInline.current.rev === rev
     if (result.ok) {
       if (!same) { await refresh(); return }
       setInline(null)
@@ -431,7 +463,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
                         min={here.min}
                         max={MAX_DATE}
                         value={here.date}
-                        onChange={e => setInline({ ...here, date: e.target.value, refusal: null })}
+                        onChange={e => setInline({ ...here, date: e.target.value, refusal: null, rev: here.rev + 1 })}
                       />
                       <Button
                         size="sm"
@@ -451,6 +483,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
                       aria-describedby={`cd-day-${r.customId}`}
                       onClick={() => setInline({
                         id: r.customId, action: open ? 'withdraw' : 'reinstate', date: '', min, refusal: null,
+                        session: ++sessions.current, rev: 0,
                       })}
                     >
                       {open ? 'Afslut' : 'Genindfør'}
@@ -558,7 +591,7 @@ export function CustomaryDaysEditor({ orgId, agreementOptions }: CustomaryDaysEd
           <Alert variant="error">{formError ?? unplaced.join(' ')}</Alert>
         )}
 
-        {duplicate && <p id="cd-overlap" style={errorStyle}>{OVERLAP_TEXT}</p>}
+        {duplicate && <p id="cd-overlap" role="status" style={errorStyle}>{OVERLAP_TEXT}</p>}
 
         <Button
           type="submit"
