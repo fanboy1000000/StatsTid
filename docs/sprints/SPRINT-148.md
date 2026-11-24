@@ -3894,3 +3894,22 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **Noted:** a row stopped at 9999-12-31 can never be reinstated. That follows from (a) and gives no 500.
 - **TASK-14838 dispatched** (`ux`, the central editors, on `939e319b`).
 - **FU-2 dispatched** (`test-qa`) on `e811b089`.
+
+**TASK-14838 returned** `b214663c`, `ceb9a8d6`, `5c53a4ed` (a master merge) and `3aabd5a0` (report `S148-TASK-14838-report.md`). It builds the central editors' "Gælder fra" with the batch-B/C rulings:
+- today is preselected, nothing later is allowed, and nothing before the newest version;
+- both admissible Mondays are offered, or the earliest one is named;
+- no "Arkiver" on an active configuration;
+- N-7's 34 labels are tied to their fields;
+- the override page's four write actions are hidden from a LocalAdmin.
+
+**Checks:**
+- 14 files, +1023/−108 (M).
+- 14 of 17 new tests are red on the base (F); 3 are R.
+- vitest: 110 files / 1261.
+
+**Stopped on a blocker it could not fix inside its files.** The typed client's `StructuredOptionsForOp` (`frontend/src/lib/api.ts`) treated an optional request body (`requestBody?:`) as "no body", so `tsc` refused `{ appliesFrom }` on three routes.
+- **The Orchestrator authorizes the root-cause fix:** the optional body becomes optional-and-typed in `api.ts`, with a compile-time pin of the three cases. A workaround cast is not used.
+- The agent is applying it now.
+- Its re-pin of `configTypedWire.test.ts`, the hooks' own test that the signature change broke, is accepted as a declared deviation.
+
+**Found, not fixed, for the 5a lenses:** on the override page, row-action errors show only inside the create form. That is older than this task.
