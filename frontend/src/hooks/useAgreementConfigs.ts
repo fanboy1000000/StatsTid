@@ -134,22 +134,27 @@ export interface NewestVersionDate {
 
 /**
  * The date the newest PUBLISHED version of a key applies from (the lower limit of a new publish's
- * date), read from the per-key version list. The status is `loading` at the start of every read (a
- * previous key's or a failed attempt's value is never carried over), `loaded` with the date (null
- * when the key has no published version) or `failed`; `retry` reads again. Pass an empty
- * `agreementCode` to skip the read (the status stays `loading`). The server stays the authority and
- * refuses a date before the newest version.
+ * date), read from the per-key version list. Each result is stored with the key and the attempt it
+ * answers, and the hook returns `loading` whenever those differ from the current inputs: a previous
+ * key's, a failed attempt's or a not-yet-started read's value is never carried over, not even for
+ * the render before the effect runs. The status is `loaded` with the date (null when the key has no
+ * published version) or `failed`; `retry` reads again. Pass an empty `agreementCode` to skip the
+ * read (the status stays `loading`). The server stays the authority and refuses a date before the
+ * newest version.
  */
 export function useNewestVersionDate(agreementCode: string, okVersion: string): NewestVersionDate {
-  const [state, setState] = useState<{ status: NewestVersionDate['status']; date: string | null }>({
-    status: 'loading',
-    date: null,
-  })
+  const key = `${agreementCode}|${okVersion}`
   const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<{
+    key: string
+    attempt: number
+    status: NewestVersionDate['status']
+    date: string | null
+  }>({ key: '', attempt: 0, status: 'loading', date: null })
   const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
-    setState({ status: 'loading', date: null })
+    setState({ key, attempt, status: 'loading', date: null })
     if (!agreementCode || !okVersion) return
     let cancelled = false
     apiClient
@@ -159,7 +164,7 @@ export function useNewestVersionDate(agreementCode: string, okVersion: string): 
       .then((result) => {
         if (cancelled) return
         if (!result.ok) {
-          setState({ status: 'failed', date: null })
+          setState({ key, attempt, status: 'failed', date: null })
           return
         }
         const dates: string[] = []
@@ -167,12 +172,14 @@ export function useNewestVersionDate(agreementCode: string, okVersion: string): 
           if (c.publishedAt !== null && c.appliesFrom !== null) dates.push(c.appliesFrom)
         }
         dates.sort()
-        setState({ status: 'loaded', date: dates.length > 0 ? dates[dates.length - 1] : null })
+        setState({ key, attempt, status: 'loaded', date: dates.length > 0 ? dates[dates.length - 1] : null })
       })
     return () => { cancelled = true }
-  }, [agreementCode, okVersion, attempt])
+  }, [key, agreementCode, okVersion, attempt])
 
-  return { status: state.status, date: state.date, retry }
+  return state.key === key && state.attempt === attempt
+    ? { status: state.status, date: state.date, retry }
+    : { status: 'loading', date: null, retry }
 }
 
 export function useAgreementConfig(configId: string) {

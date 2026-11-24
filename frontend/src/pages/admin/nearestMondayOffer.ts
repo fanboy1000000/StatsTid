@@ -68,16 +68,47 @@ export function newestKeyDate(
 }
 
 /**
+ * True for exactly `yyyy-MM-dd` (four-digit year) naming a real calendar day. A date input also
+ * yields longer years ("12026-11-11"), which string comparison would rank after today and before
+ * every bound alike; anything else is "not a usable date", the same as an empty field.
+ */
+export function isCalendarDate(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false
+  const d = new Date(`${date}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date
+}
+
+/** The later of two optional ISO dates; null only when both are null. */
+export function laterDate(a: string | null, b: string | null): string | null {
+  if (a === null) return b
+  if (b === null) return a
+  return a > b ? a : b
+}
+
+/**
+ * The earliest date a `BEFORE_PREDECESSOR` refusal says the server accepts (its `nearestValid[0]`),
+ * or null when the error is not that refusal. The caller keeps it as a floor for the row or dialog,
+ * so a later Monday offer never goes below a date the server has just refused.
+ */
+export function predecessorFloor(err: DateRefusalError): string | null {
+  const fields = err.body?.fields
+  if (err.status !== 400 || !Array.isArray(fields)) return null
+  const first = fields.find((f) => f.code === 'BEFORE_PREDECESSOR')?.nearestValid?.[0]
+  return first !== undefined && isCalendarDate(first) ? first : null
+}
+
+/**
  * The refusal the screen already knows: a date after today, or before the lower limit. Reuses the
  * two sentences and buttons of the server refusals, so a date the screen would send in vain is
- * never sent. Null for an empty date (the caller disables the confirm) or an in-bounds date.
+ * never sent. Null for an unusable date (empty, malformed or not a real day: the caller disables
+ * the confirm, with no sentence) or an in-bounds date.
  */
 export function dateBoundRefusal(
   date: string,
   today: string,
   lowerBound: string | null,
 ): DateRefusal | null {
-  if (!date) return null
+  if (!isCalendarDate(date)) return null
   if (date > today) {
     return {
       text: 'Datoen kan ikke ligge efter i dag.',

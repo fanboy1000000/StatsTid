@@ -10,7 +10,15 @@ import { useAuth } from '../../contexts/AuthContext'
 import { useCalendarToday } from '../../contexts/CalendarContext'
 import { hasMinRole } from '../../lib/roles'
 import { formatEffectiveDateLong } from './editPerson/EffectiveDatePicker'
-import { dateBoundRefusal, dateRefusalFrom, newestKeyDate, type DateRefusal } from './nearestMondayOffer'
+import {
+  dateBoundRefusal,
+  dateRefusalFrom,
+  isCalendarDate,
+  laterDate,
+  newestKeyDate,
+  predecessorFloor,
+  type DateRefusal,
+} from './nearestMondayOffer'
 import styles from './PositionOverrideManagement.module.css'
 
 interface CreateForm {
@@ -35,6 +43,10 @@ const emptyForm: CreateForm = {
   weeklyNormHours: '',
   description: '',
 }
+
+// The placeholder date the seeded overrides carry (docker/postgres/init.sql); shown as stored, since
+// the long form would read "1. januar 1".
+const SEEDED_ANCHOR_DATE = '0001-01-01'
 
 function parseOptionalNumber(value: string): number | null {
   if (!value.trim()) return null
@@ -75,32 +87,55 @@ export function PositionOverrideManagement() {
   // The error of a row action (edit, switch), shown above the table; create keeps `formError`.
   const [rowError, setRowError] = useState<string | null>(null)
   const [switching, setSwitching] = useState(false)
+  // The date the server last named as the earliest it accepts (a BEFORE_PREDECESSOR answer), kept per
+  // scope (the create form's typed key, or an override id); it raises the list's bound, never lowers it.
+  const [floor, setFloor] = useState<{ scope: string; date: string } | null>(null)
+  const floorOf = (scope: string) => (floor && floor.scope === scope ? floor.date : null)
+  // The current interaction: bumped whenever the user opens, cancels or edits a form, so the answer
+  // to an earlier submission can tell whether it still belongs to what is on screen.
+  const interaction = useRef(0)
+  const changed = () => { interaction.current += 1 }
   const createDateInput = useRef<HTMLInputElement>(null)
   const rowDateInput = useRef<HTMLInputElement>(null)
 
   const createDate = form.appliesFrom ?? today
-  const createBound = newestKeyDate(data, form)
+  const createScope = `create|${form.agreementCode}|${form.okVersion}|${form.positionCode}`
+  const createBound = laterDate(newestKeyDate(data, form), floorOf(createScope))
   const createBoundRefusal = dateBoundRefusal(createDate, today, createBound)
   // "Unknown" is not "none": while the list is loading or failed the key's lower limit is unknown.
-  const createBlocked = loading || error !== null || !createDate || createBoundRefusal !== null
+  const createBlocked = loading || error !== null || !isCalendarDate(createDate) || createBoundRefusal !== null
 
   const rowItem = data.find((r) => r.overrideId === (editingId ?? pending?.id))
   const rowDateValue = rowDate ?? today
-  const rowBound = rowItem ? newestKeyDate(data, rowItem) : null
+  const rowBound = rowItem ? laterDate(newestKeyDate(data, rowItem), floorOf(rowItem.overrideId)) : null
   const rowBoundRefusal = rowItem ? dateBoundRefusal(rowDateValue, today, rowBound) : null
-  const rowBlocked = !rowDateValue || rowBoundRefusal !== null
+  const rowBlocked = !isCalendarDate(rowDateValue) || rowBoundRefusal !== null
 
   const handleChange = (field: keyof CreateForm) => (e: ChangeEvent<HTMLInputElement>) => {
+    changed()
     setForm((f) => ({ ...f, [field]: e.target.value }))
   }
 
-  // `scope` is 'create' or the override id; `newest` is the key's newest version date.
-  const handleMutationError = (err: unknown, scope: string, newest: string | null) => {
+  const changeRowDate = (date: string) => {
+    changed()
+    setRowDate(date)
+    setDateRefusal(null)
+  }
+
+  // `scope` is the create form's key scope or the override id; `bound` is the date's lower limit.
+  // `mine` is the interaction the submission belonged to: an answer for an interaction that has since
+  // been cancelled, replaced or edited is ignored (the list was already refreshed by the write).
+  const handleMutationError = (err: unknown, scope: string, bound: string | null, mine: number) => {
+    if (mine !== interaction.current) return
     if (isPositionOverrideMutationError(err) && err.status === 412) {
       setStaleConflict({ expected: err.body?.expectedVersion, actual: err.body?.actualVersion })
       return
     }
-    const refusal = isPositionOverrideMutationError(err) ? dateRefusalFrom(err, today, newest) : null
+    const named = isPositionOverrideMutationError(err) ? predecessorFloor(err) : null
+    if (named) setFloor({ scope, date: named })
+    const refusal = isPositionOverrideMutationError(err)
+      ? dateRefusalFrom(err, today, laterDate(bound, named))
+      : null
     if (refusal) {
       setDateRefusal({ scope, refusal })
     } else {
@@ -147,6 +182,7 @@ export function PositionOverrideManagement() {
       return
     }
     if (createBlocked) return
+    const mine = interaction.current
     setSubmitting(true)
     setFormError(null)
     setDateRefusal(null)
@@ -161,20 +197,24 @@ export function PositionOverrideManagement() {
         weeklyNormHours: parseOptionalNumber(form.weeklyNormHours),
         description: form.description || null,
       })
-      setForm(emptyForm)
-      setShowCreate(false)
+      if (mine === interaction.current) {
+        setForm(emptyForm)
+        setShowCreate(false)
+      }
     } catch (err) {
-      handleMutationError(err, 'create', createBound)
+      handleMutationError(err, createScope, createBound, mine)
     } finally {
       setSubmitting(false)
     }
   }
 
   const startEdit = (item: WithEtag<PositionOverrideConfig>) => {
+    changed()
     setPending(null)
     setDateRefusal(null)
     setRowError(null)
     setRowDate(null)
+    setFloor(null)
     setEditingId(item.overrideId)
     setEditForm({
       maxFlexBalance: item.maxFlexBalance?.toString() ?? '',
@@ -185,6 +225,7 @@ export function PositionOverrideManagement() {
   }
 
   const cancelEdit = () => {
+    changed()
     setEditingId(null)
     setEditForm({})
     setDateRefusal(null)
@@ -196,10 +237,12 @@ export function PositionOverrideManagement() {
   const startSwitch = (item: WithEtag<PositionOverrideConfig>, kind: 'deactivate' | 'activate') => {
     cancelEdit()
     setRowDate(null)
+    setFloor(null)
     setPending({ id: item.overrideId, kind })
   }
 
   const cancelSwitch = () => {
+    changed()
     setPending(null)
     setDateRefusal(null)
     setRowError(null)
@@ -207,6 +250,7 @@ export function PositionOverrideManagement() {
 
   const saveEdit = async (item: WithEtag<PositionOverrideConfig>) => {
     if (rowBlocked) return
+    const mine = interaction.current
     setSubmitting(true)
     setDateRefusal(null)
     setRowError(null)
@@ -221,10 +265,12 @@ export function PositionOverrideManagement() {
         weeklyNormHours: parseOptionalNumber(editForm.weeklyNormHours ?? ''),
         description: editForm.description || null,
       })
-      setEditingId(null)
-      setEditForm({})
+      if (mine === interaction.current) {
+        setEditingId(null)
+        setEditForm({})
+      }
     } catch (err) {
-      handleMutationError(err, item.overrideId, rowBound)
+      handleMutationError(err, item.overrideId, rowBound, mine)
     } finally {
       setSubmitting(false)
     }
@@ -232,20 +278,22 @@ export function PositionOverrideManagement() {
 
   const confirmSwitch = async (item: WithEtag<PositionOverrideConfig>, kind: 'deactivate' | 'activate') => {
     if (rowBlocked || switching) return
+    const mine = interaction.current
     setSwitching(true)
     setDateRefusal(null)
     setRowError(null)
     try {
       await (kind === 'deactivate' ? deactivate : activate)(item.overrideId, item.etag, rowDateValue)
-      setPending(null)
+      if (mine === interaction.current) setPending(null)
     } catch (err) {
-      handleMutationError(err, item.overrideId, rowBound)
+      handleMutationError(err, item.overrideId, rowBound, mine)
     } finally {
       setSwitching(false)
     }
   }
 
   const handleEditChange = (field: string) => (e: ChangeEvent<HTMLInputElement>) => {
+    changed()
     setEditForm((f) => ({ ...f, [field]: e.target.value }))
   }
 
@@ -257,6 +305,7 @@ export function PositionOverrideManagement() {
           <button
             className={styles.createBtn}
             onClick={() => {
+              changed()
               setShowCreate(!showCreate)
               setFormError(null)
               setDateRefusal(null)
@@ -406,9 +455,9 @@ export function PositionOverrideManagement() {
             </div>
 
             {renderDateRefusal(
-              'create',
+              createScope,
               createBoundRefusal,
-              (date) => setForm((f) => ({ ...f, appliesFrom: date })),
+              (date) => { changed(); setForm((f) => ({ ...f, appliesFrom: date })) },
               createDateInput,
             )}
             {formError && <div className={styles.alert}>{formError}</div>}
@@ -417,7 +466,7 @@ export function PositionOverrideManagement() {
               <button
                 type="button"
                 className={styles.cancelBtn}
-                onClick={() => setShowCreate(false)}
+                onClick={() => { changed(); setShowCreate(false) }}
               >
                 Annuller
               </button>
@@ -436,7 +485,7 @@ export function PositionOverrideManagement() {
       )}
 
       {rowError && <div className={styles.alert} role="alert">{rowError}</div>}
-      {rowItem && renderDateRefusal(rowItem.overrideId, rowBoundRefusal, setRowDate, rowDateInput)}
+      {rowItem && renderDateRefusal(rowItem.overrideId, rowBoundRefusal, changeRowDate, rowDateInput)}
 
       {!loading && data.length > 0 && (
         <table className={styles.table}>
@@ -529,8 +578,10 @@ export function PositionOverrideManagement() {
                         value={rowDateValue}
                         max={today}
                         min={rowBound ?? undefined}
-                        onChange={(e) => { setRowDate(e.target.value); setDateRefusal(null) }}
+                        onChange={(e) => changeRowDate(e.target.value)}
                       />
+                    ) : item.appliesFrom === SEEDED_ANCHOR_DATE ? (
+                      item.appliesFrom
                     ) : (
                       item.appliesFrom ? formatEffectiveDateLong(item.appliesFrom) : '—'
                     )}
@@ -563,7 +614,7 @@ export function PositionOverrideManagement() {
                           value={rowDateValue}
                           max={today}
                           min={rowBound ?? undefined}
-                          onChange={(e) => { setRowDate(e.target.value); setDateRefusal(null) }}
+                          onChange={(e) => changeRowDate(e.target.value)}
                         />
                         <button
                           className={pending.kind === 'deactivate' ? styles.deactivateBtn : styles.activateBtn}
