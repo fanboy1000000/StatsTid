@@ -26,7 +26,7 @@ namespace StatsTid.Tests.Regression.Config;
 ///
 /// <para>
 /// <b>Fixture.</b> A Backend host with the clock fixed at Tuesday 10 November 2026 (PAT-008), one container
-/// per class. The actor is a LocalAdmin of STY01 with employee id <c>LADM_S148_C10</c>. Docker is
+/// per test (xUnit builds the class, so runs <c>InitializeAsync</c>, once per test method). The actor is a LocalAdmin of STY01 with employee id <c>LADM_S148_C10</c>. Docker is
 /// unavailable on the authoring machine: these facts are CI-pending (a throwaway local cluster is evidence
 /// only). The <c>internal static</c> members are reused by <see cref="CustomaryDaysValidationTests"/>.
 /// </para>
@@ -69,7 +69,8 @@ public sealed class CustomaryDaysTests : IAsyncLifetime
     /// 12:00, given to all, valid from Monday 5 January 2026" (201, version 1), withdraws it from Monday
     /// 2 November 2026 (200, version 2), and reinstates it from Tuesday 10 November 2026 (201, a NEW
     /// custom id at version 1, the withdrawn row left as it was). Each write leaves one audit row, one event
-    /// on <c>customary-days-STY01</c> and one audit-projection row targeting STY01.
+    /// on <c>customary-days-STY01</c> and one audit-projection row targeting STY01; the WITHDRAWN audit row
+    /// carries <c>validTo</c> null in <c>previousData</c> and the date in <c>newData</c>.
     /// <para><b>Product code between the readings:</b> the three POSTs (validation, then one transaction:
     /// organisation lock, row, audit row, outbox event, audit-projection row) and the GET.</para>
     /// <para><b>Red conditions (F).</b> On the code before TASK-14834 no customs route exists, so the create
@@ -126,6 +127,9 @@ public sealed class CustomaryDaysTests : IAsyncLifetime
         Assert.Equal(2, audit2.Count);
         var a2 = audit2[1];
         Assert.Equal(("WITHDRAWN", (long?)1L, 2L, Actor), (a2.Action, a2.VersionBefore, a2.VersionAfter, a2.ActorId));
+        // The audit row shows the end date appearing: null before, the date after.
+        Assert.Equal(JsonValueKind.Null, a2.PreviousData!.Value.GetProperty("validTo").ValueKind);
+        Assert.Equal("2026-11-02", a2.NewData!.Value.GetProperty("validTo").GetString());
 
         var ev2All = await ReadEventsAsync(Cs, "STY01", c1);
         Assert.Equal(2, ev2All.Count);
