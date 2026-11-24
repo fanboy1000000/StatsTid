@@ -3699,3 +3699,10 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - D3: one `using`.
   - D4: one shared parameter binder for the INSERT and the UPDATE, so the two cannot write different columns. This is why the census reads 28, not 29.
 - **TASK-14832-T dispatched** on `cb657327`.
+- **TASK-14832-T returned** `f30b8e1e` (report `.claude/reviews/S148-TASK-14832-T-report.md`). It adds the AC-C4a, -4b, -4e (18 cases plus the clearing fact), -4f and -4g facts as Docker and Unit twins. It also updates the 31-key response pin and gives the pre-S22 migration fact the eighteen columns.
+  - Gate: Unit **1764** (+18), DemoSeed 170, Regression non-Docker 147.
+  - Unit RED on the base: 13 of 18 cases, the 13 refused ones.
+  - **Local, not CI evidence:** 54 of 54 green on a throwaway cluster, and M-49 re-run red at the tip (200 and 400). TASK-14832 left M-49's sites killable.
+- **REGEN** `9e298aee` (Orchestrator, on 14832-T's tip): `openapi.json` +204, additions only. The eighteen members land on the response and the save request, with five enums on the response, exactly as TASK-14832 predicted.
+- **TASK-14833 dispatched** (`ux`) on `9e298aee`.
+- **Codex 5a cycle 1** over the backend half (`33f502cf..9e298aee`) is running. 5α and Fable follow when an agent slot frees. TASK-14833 is reviewed on its own delta.
