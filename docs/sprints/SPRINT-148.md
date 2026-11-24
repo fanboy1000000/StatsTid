@@ -3766,3 +3766,20 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - AC-C4a, -4b, -4e (with the clearing fact), -4f and -4g green, plus the vitest facts AC-C4c, -4h, -4i and AC-S0-8c;
   - PIN-1;
   - the 31-key pin and the pre-S22 migration fact green.
+- **GATE green on master `1bba25a0`** (the 14832 stack merged): build 0 errors; Unit **1846**, DemoSeed 170, Regression non-Docker 147; shortcuts 20 / 0 bad; frontend `tsc` and lint clean; the config vitest folders 9 files / 65 tests. The full vitest suite was 1244 at FU-2's tip (`c4c2ef8f`); after it, only a comment changed in the frontend.
+
+**Wave 6 batches B and C briefs at draft 2, plan "final + 30"** (planner, `.claude/reviews/S148-wave6BC-briefs-applied-report.md`).
+- **What changed:**
+  - Eight briefs, including the new **TASK-14850** (the drawer half of the old 14838).
+  - 159 AC ids; 48 plan-added; mutation ids 52 (M-55, local only).
+  - The three Danish copy tables are byte-identical to the adjudication.
+- **The Orchestrator ratifies the planner's held readings:**
+  - (1) the tab after `Historik`;
+  - (2) `{n}`'s number form via batch-A ruling 22's notes;
+  - (3) AC-C13u is F (vitest);
+  - (4) the proposed fact names;
+  - (5) O-31 … O-33;
+  - (6) its four drafting details;
+  - (7) the QUAL-268 stack is named only in the wave row and the shared-files row until it is briefed;
+  - (8) the older plan pastes are kept, with pointers.
+- **Next:** TASK-14834 (`backend-infrastructure`, the customary-days server), and a planner for the QUAL-268 repair trio. TASK-14838 (the central editors) follows at the next free building slot.
