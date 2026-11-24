@@ -4228,3 +4228,39 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - event-less SQL;
   - a deterministic `custom_id`.
 - **The Fable adjudication follows.**
+
+**Copy adjudication for FU-1** (`.claude/reviews/S148-TASK-14836-stack-copy-adjudication.md`, Fable 5.2, RULED).
+- It rules the strings `Vælg en ordning`, its helper sentence, the empty-set sentence and `Ingen ordning kan vælges`.
+- **It amends C1-R1 (c):** "Mangler" is offered only when both the as-of value and today's value are null. As first written, "Mangler" was offered exactly where clearing must be refused: the server resolves a value that is disallowed at the date to null.
+
+**FU-1** `3daeca6a` (`ux`) and **FU-2** `92419bde` → cherry-picked as `460dc54f` (`test-qa`, the update-in-place fact and three comments).
+- **Orchestrator comment-only commit** `83496e8a` (C1-R3): the self refusal comes after the scope check.
+- **Full vitest, run alone, on `83496e8a`: 109 files, 1304 tests passed.**
+
+**The HR-facts stack, cycle 2:**
+- **Codex c2: CHANGES-REQUIRED.** One WARNING: after `await reload()`, `save()` changes `saving` and the message without a generation check. Codex gives a component-level ordering. It also raises a test NOTE.
+- **Fable c2: APPROVED-WITH-WARNINGS.**
+  - W1: while options are pending or failed, the disabled box shows an option the form does not hold.
+  - NOTEs: a back-dated save overwrites later periods in exotic agreement histories; the flex focus id; the unmatched `form` attribute does not conform; tests; small truths.
+- **5α c2: PASS.**
+- **Rulings c2** (`.claude/reviews/S148-TASK-14836-stack-5a-rulings-c2.md`), by the Orchestrator. No fact is disputed; the stricter remedy is taken.
+  - **C2-R1, FU-3 (`ux`):** the save continuation is guarded by its generation; the select shows what the form holds in every load state; the focus id; the (e3) arm; small truths.
+  - **C2-R2 accepted:**
+    - the unmatched `form` attribute (register candidate, quality Low);
+    - back-dated saves overwriting later periods (recorded beside O-32 for the first pay reader);
+    - no retry control behind "Prøv igen" (register candidate, Low).
+- **FU-3 dispatched.** Cycles used: 2 of 5.
+
+**Wave-7 brief adjudication** (`.claude/reviews/S148-wave7-briefs-adjudication.md`, Fable 5.2, **RULED, no owner question**).
+- **24 rulings.** Every planner lean is accepted.
+- **Added by the adjudication:**
+  - a test that the committed `99-demo-seed.sql` equals the generator;
+  - a January reference-date arm;
+  - a fixed section shape;
+  - the legacy profile columns written out as NULL;
+  - three gate repairs.
+- **Told to the owner, not asked (O-17):**
+  - the seeded profiles and HR facts start at the year-1 anchor;
+  - the demo rows carry no audit history until edited;
+  - S149's first customs reader moves PIN-1 at its planned re-pin.
+- **"final + 32" amendments:** a planner is applying them with the rulings.
