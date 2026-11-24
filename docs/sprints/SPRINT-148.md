@@ -2847,7 +2847,7 @@ M-40 included [O for the 14 facts of the five classes run].
   - AC-C13k (2)'s change is docstring only.
   - The smoke change is the compliance leg's assertions and comment only.
 - **Declared deviation:** the parity fact (T12) overlaps organisation and agreement-code rows, not profile rows.
-- **Found, not fixed:** the two record readers disagree when two profile rows overlap. `EmploymentProfileResolver`'s profile SELECT has no ORDER BY; `DatedRecordTimeline` takes the latest start.
+- **Found, not fixed:** the two record readers disagree when two profile rows overlap. `EmploymentProfileResolver`'s profile SELECT has no ORDER BY; `DatedRecordTimeline` takes the latest start. *(Fixed 2026-11-24 by TASK-14848, QUAL-263; see that entry.)*
   - Writers keep profile rows from overlapping, so no screen shows a difference today.
   - It goes to cycle 2's lenses, and into the T12 QUAL row at the merge.
 - **FU-3 cherry-picked:** `a053b994` became `e1787c56` on `7ecd5d9a`, touching frontend files only. The stack's tip for cycle 2 is `e1787c56`.
@@ -3540,3 +3540,28 @@ M-40 included [O for the 14 facts of the five classes run].
 - **TASK-14848-T** (`test-qa`, per U2's "with tests by `test-qa`"): the parity fixture gains an overlapping profile row with an explicit expectation. It is shown to discriminate on a throwaway local cluster: green on the fix, red under a scratch `ASC` mutation.
 - **The order is RED-by-mutation rather than RED-first.** On undefined order a red-first pin would be flaky (U2 accepted FU-T's omission for that reason).
 - Review: 5α plus both 5a lenses; one merge; the Docker fact is CI-verified at the next CI run.
+
+**TASK-14848 + -T (QUAL-263) built, reviewed and adjudicated; merged, 2026-11-24.**
+- **What it does, in plain words.** Payroll and the compliance check read an employee's record one day at a time; Teamoversigt and the balance read it a month at a time. Where two profile rows covered the same day, the month reader took the later start and the day reader let the database choose. Now both take the later start, so they cannot disagree on position, part-time fraction or category.
+- **Built:**
+  - TASK-14848 `7104f07b` (`backend-infrastructure`): `ORDER BY ep.effective_from DESC LIMIT 1` on the resolver's profile SELECT and three comments made true. Gate: Unit 1746, DemoSeed 170, Regression non-Docker 147. A 25-hit census of `FROM employee_profiles`: every single-day covering read is now ordered latest-start-first.
+  - TASK-14848-T `665575c4` (`test-qa`): the parity fixture gains POS-C (12–14 March, inside POS-B) with an explicit expectation. **Local, not CI evidence:** green 1/1 on a throwaway cluster, red under a scratch `ASC` mutation on 12 and 13 March.
+  - The Orchestrator's remark commit `2ee498fc` (adjudication ruling 2, comment only).
+- **Reviewed (cycle 1, saved verbatim):**
+  - 5α PASS (`S148-TASK-14848-5alpha.md`).
+  - Codex APPROVED-WITH-WARNINGS (`S148-TASK-14848-5a-codex-c1.raw.md`): W1, an application writer creates overlaps; W2, the test remarks over-claim.
+  - Fable APPROVED (`S148-TASK-14848-5a-reviewer.md`), with six NOTEs. Its Focus 2 concluded that "nobody moves".
+- **Adjudicated** (`S148-TASK-14848-5a-adjudication-c1.md`, Fable 5.2, RULED, no owner question), because the lenses disagreed on a fact:
+  - **Ruling 1, Codex W1 upheld.** The start-up seeder (every backend start) gives any active user with no *open* profile row a full-time default row from year 1. A person created through the admin screen whose profile HR closed while they stay employed gets that row at the next restart. It overlaps the closed profile and covers every day after the close, so QUAL-265's refusal and HRP-015's "cannot register" list stop firing for the person: they are paid as full time on an invented record. Registered as **QUAL-267 (H, OPEN)**, fixed in S148 by **TASK-14849 + -T**.
+  - **What may be claimed for TASK-14848:** no pay figure moves for a person whose profile rows do not overlap, which is every timeline the dated writer and the demo world produce. One application path writes overlaps (QUAL-267). On such a record the days inside the closed profile now read the closed row in payroll, where the row was undefined before. Replay is unaffected. *(This corrects TASK-14848's report, § 1, "Who notices", which said nothing writes overlaps.)*
+  - **Ruling 2:** W2 and Fable NOTEs 1 and 4. The Orchestrator applied three exact comment edits to the test (`2ee498fc`): the evidence sentence, the red conditions (earliest start is red by rule; no order is red only while POS-C is inserted last), and a do-not-reorder line.
+  - **Rulings 3 and 4:** a partial-overlap profile row (so an "order by end date" resolver goes red) and the two older untrue comments (`IEmploymentProfileResolver.cs:35-36`; the resolver's class doc on the live-row index) go into TASK-14849 and -T.
+  - **Ruling 5:** Codex N1 (the fraction is not compared) is accepted. Fable NOTE 3 (other Docker fixtures may hold accidental overlaps; unproven) is to be read at the next CI run: a red with a changed position, fraction or category on an overlapped day is read first as a fixture overlap.
+  - **Ruling 6:** no cycle 2.
+- **Lens miss, for the model-routing register at close:** the Fable reviewer's "nobody moves" missed the seeder path that Codex found; the adjudicator upheld Codex.
+- **Merged** `--no-ff` (this commit): QUAL-263 is FIXED, CI-pending, and QUAL-267 is registered. **The next CI run must show:**
+  - `DatedRecordTimelineParityTests.EveryDay_OnEqualsTheResolver_OverlapAndThreeGapKinds` green;
+  - Docker Regression at or above CI-W5's 2795, with any red read through NOTE 3 first;
+  - PIN-1/2/3 unchanged.
+  QUAL-263 moves to CI-verified only then.
+- **Next:** the GATE on master, then the TASK-14849 + -T briefs (ruling 1's contract, plus rulings 3 and 4).

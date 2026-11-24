@@ -124,7 +124,8 @@ public sealed class UserAgreementCodeRepository
             -- happened to emit first. The most important consumer of this read is the LOGIN
             -- TOKEN, so "arbitrary" would mean a JWT carrying an agreement code chosen by the
             -- query planner. Latest start wins, which is the same tie-break the sibling profile
-            -- read uses.
+            -- read, EmploymentProfileResolver.GetByEmployeeIdAtAsync's profile SELECT, uses
+            -- since S148 (QUAL-263).
             ORDER BY effective_from DESC
             LIMIT 1
             """, conn);

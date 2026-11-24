@@ -172,8 +172,11 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
         // users.primary_org_id. A scalar subselect, so a day no organisation row covers reads NULL
         // (thrown below) instead of dropping the profile row, and latest-start-wins keeps the read
         // deterministic if two rows ever overlapped (non-overlap is a writer invariant, not an
-        // index; the GetByUserIdAtAsync tie-break). agreement_code is NOT joined here — TASK-3406
-        // sources it from UserAgreementCodeRepository below.
+        // index; the GetByUserIdAtAsync tie-break). The profile row has its own tie-break, the same
+        // rule: latest start wins if two profile rows cover the day (QUAL-263), as in the organisation
+        // sub-select and UserAgreementCodeRepository.GetByUserIdAtAsync; idx_employee_profiles_history
+        // makes start dates unique, so the order has no ties. agreement_code is NOT joined here —
+        // TASK-3406 sources it from UserAgreementCodeRepository below.
         const string sql =
             """
             SELECT
@@ -192,6 +195,8 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
             WHERE ep.employee_id = @employeeId
               AND ep.effective_from <= @asOfDate
               AND (ep.effective_to IS NULL OR ep.effective_to > @asOfDate)
+            ORDER BY ep.effective_from DESC
+            LIMIT 1
             """;
 
         await using var conn = _dbFactory.Create();
