@@ -1626,6 +1626,171 @@
         }
       }
     },
+    "/api/config/{orgId}/customary-days": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CustomaryDayResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.CreateCustomaryDayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CustomaryDayResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/{orgId}/customary-days/{customId}/withdraw": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.WithdrawCustomaryDayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CustomaryDayResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/{orgId}/customary-days/{customId}/reinstate": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "orgId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.ReinstateCustomaryDayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CustomaryDayResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/skema/{employeeId}/month": {
       "get": {
         "tags": [
@@ -6707,6 +6872,114 @@
           },
           "name": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.CustomaryDayResponse": {
+        "required": [
+          "agreementCode",
+          "createdAt",
+          "createdBy",
+          "customId",
+          "kind",
+          "orgId",
+          "paidMode",
+          "part",
+          "partFromTime",
+          "partHours",
+          "recurringDay",
+          "recurringMonth",
+          "singleDate",
+          "updatedAt",
+          "validFrom",
+          "validTo",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "customId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "recurringMonth": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "recurringDay": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "singleDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "kind": {
+            "enum": [
+              "PAID_DAY_OFF",
+              "CLOSURE_DAY"
+            ],
+            "type": "string"
+          },
+          "part": {
+            "enum": [
+              "WHOLE_DAY",
+              "FROM_TIME",
+              "HOURS"
+            ],
+            "type": "string"
+          },
+          "partFromTime": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "partHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "paidMode": {
+            "enum": [
+              "GIVEN_TO_ALL",
+              "ON_REQUEST"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "validTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false
@@ -12287,6 +12560,80 @@
           },
           "paidAbsenceCreditBasis": {
             "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.CreateCustomaryDayRequest": {
+        "type": "object",
+        "properties": {
+          "agreementCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "recurringMonth": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "recurringDay": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "singleDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "nullable": true
+          },
+          "part": {
+            "type": "string",
+            "nullable": true
+          },
+          "partFromTime": {
+            "type": "string",
+            "format": "time",
+            "nullable": true
+          },
+          "partHours": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "paidMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.ReinstateCustomaryDayRequest": {
+        "type": "object",
+        "properties": {
+          "validFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Endpoints.CustomaryDayEndpoints.WithdrawCustomaryDayRequest": {
+        "type": "object",
+        "properties": {
+          "validTo": {
+            "type": "string",
+            "format": "date",
             "nullable": true
           }
         },
