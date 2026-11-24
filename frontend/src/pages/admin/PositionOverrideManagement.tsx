@@ -59,6 +59,9 @@ export function PositionOverrideManagement() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState<CreateForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
+  // True while the create request is pending: the fields that identify the override are locked, so an
+  // answer about one key cannot land in a form that shows another.
+  const [creating, setCreating] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<Partial<CreateForm>>({})
@@ -83,10 +86,11 @@ export function PositionOverrideManagement() {
   const today = useCalendarToday()
   const [rowDate, setRowDate] = useState<string | null>(null)
   const [pending, setPending] = useState<{ id: string; kind: 'deactivate' | 'activate' } | null>(null)
-  // The refusal on screen, for the create form or for the row step.
-  const [dateRefusal, setDateRefusal] = useState<{ kind: 'create' | 'row'; refusal: DateRefusal } | null>(null)
-  const clearRefusal = (kind: 'create' | 'row') =>
-    setDateRefusal((r) => (r && r.kind === kind ? null : r))
+  // The server's refusal of a date, one slot for the create form and one for the row step; each is set
+  // and cleared only by its own interaction.
+  const [createRefusal, setCreateRefusal] = useState<DateRefusal | null>(null)
+  const [rowRefusal, setRowRefusal] = useState<DateRefusal | null>(null)
+  const clearRefusal = (kind: 'create' | 'row') => (kind === 'create' ? setCreateRefusal(null) : setRowRefusal(null))
   // The error of a row action (edit, switch), shown above the table; a create's error is `formError`,
   // inside the create form.
   const [rowError, setRowError] = useState<string | null>(null)
@@ -163,7 +167,8 @@ export function PositionOverrideManagement() {
       ? dateRefusalFrom(err, today, laterDate(bound, named))
       : null
     if (refusal) {
-      setDateRefusal({ kind: mine.kind, refusal })
+      if (mine.kind === 'create') setCreateRefusal(refusal)
+      else setRowRefusal(refusal)
     } else {
       const message = err instanceof Error ? err.message : String(err)
       if (mine.kind === 'create') setFormError(message)
@@ -178,7 +183,7 @@ export function PositionOverrideManagement() {
     setDate: (date: string) => void,
     input: RefObject<HTMLInputElement | null>,
   ) => {
-    const shown = known ?? (dateRefusal && dateRefusal.kind === kind ? dateRefusal.refusal : null)
+    const shown = known ?? (kind === 'create' ? createRefusal : rowRefusal)
     return shown ? (
       <div className={styles.alert} role="alert">
         {shown.text}
@@ -210,6 +215,7 @@ export function PositionOverrideManagement() {
     if (createBlocked) return
     const mine: Submission = { kind: 'create', gen: createGen.current, date: createDate }
     setSubmitting(true)
+    setCreating(true)
     setFormError(null)
     clearRefusal('create')
     try {
@@ -231,6 +237,7 @@ export function PositionOverrideManagement() {
       handleMutationError(err, mine, createScope, createBound)
     } finally {
       setSubmitting(false)
+      setCreating(false)
     }
   }
 
@@ -379,6 +386,7 @@ export function PositionOverrideManagement() {
                   type="text"
                   required
                   value={form.agreementCode}
+                  disabled={creating}
                   onChange={handleChange('agreementCode')}
                   placeholder="f.eks. AC"
                 />
@@ -393,6 +401,7 @@ export function PositionOverrideManagement() {
                   type="text"
                   required
                   value={form.okVersion}
+                  disabled={creating}
                   onChange={handleChange('okVersion')}
                   placeholder="f.eks. OK24"
                 />
@@ -407,6 +416,7 @@ export function PositionOverrideManagement() {
                   type="text"
                   required
                   value={form.positionCode}
+                  disabled={creating}
                   onChange={handleChange('positionCode')}
                   placeholder="f.eks. SPECIAL01"
                 />

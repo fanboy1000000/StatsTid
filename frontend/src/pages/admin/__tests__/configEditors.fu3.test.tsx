@@ -1,13 +1,14 @@
 // S148 T23 FU-3 (cycle-3 ruling C3-R1). Kind F, one section per fact.
 // Red conditions on bf994ddf: a refused create shows its error above the table and keeps it after a
 // successful retry; one page-wide counter drops a refusal or a success when the user typed in another
-// field or form; a late answer for row A closes row B's step; a create floor is lost when an unrelated
-// row edit opens; a BEFORE_PREDECESSOR answer does not read the list again; the publish dialog's date
-// can change while a publish is pending and a late success replaces the page with the spinner.
+// field or form; a create floor is lost when an unrelated row edit opens; a BEFORE_PREDECESSOR answer
+// does not read the list again; the publish dialog's date can change while a publish is pending and a
+// late success replaces the page with the spinner. The late-answer-for-row-A fact is retained
+// regression coverage, not red on bf994ddf.
 //
 // Today is Thursday 12 November 2026 throughout.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { screen, waitFor, fireEvent, within, act } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { AgreementConfigEditor } from '../AgreementConfigEditor'
 import { PositionOverrideManagement } from '../PositionOverrideManagement'
@@ -90,6 +91,7 @@ function mountOverrides(
   rows: PositionOverrideConfig[],
   calls: Call[],
   onWrite: (call: Call) => unknown = () => jsonResponse(200, rows[0]),
+  onList: (read: number) => unknown = () => jsonResponse(200, rows),
 ) {
   const reads = { list: 0 }
   mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -99,7 +101,7 @@ function mountOverrides(
       return onWrite(call)
     }
     reads.list += 1
-    return jsonResponse(200, rows)
+    return onList(reads.list)
   })
   renderWithCalendar(TODAY, <PositionOverrideManagement />)
   return reads
@@ -169,7 +171,11 @@ describe('(b) an answer stays valid when only other things changed', () => {
   it('a switch on row A that succeeds after "Annuller" and a switch on row B keeps B\'s step', async () => {
     const calls: Call[] = []
     const write = held()
-    mountOverrides([row('o1'), row('o2', 'OTHER')], calls, () => write.promise)
+    const reread = held()
+    const rows = [row('o1'), row('o2', 'OTHER')]
+    const reads = mountOverrides(rows, calls, () => write.promise, (n) =>
+      n === 1 ? jsonResponse(200, rows) : reread.promise,
+    )
     await screen.findByText('OTHER')
     fireEvent.click(screen.getAllByRole('button', { name: 'Deaktiver' })[0])
     fireEvent.click(screen.getAllByRole('button', { name: 'Deaktiver' })[0])
@@ -179,12 +185,17 @@ describe('(b) an answer stays valid when only other things changed', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Deaktiver' })[1])
     expect(screen.getByText('Deaktiveres fra')).toBeDefined()
 
+    // The write succeeds; the list read that follows it is held, then answered with A switched off.
     write.release(jsonResponse(200, row('o1')))
-    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Annuller' })).toHaveLength(1))
-    // The list was read again after the write; B's step is still open.
-    await screen.findByText('OTHER')
-    expect(screen.getByText('Deaktiveres fra')).toBeDefined()
-    expect((screen.getAllByRole('button', { name: 'Deaktiver' })[0] as HTMLButtonElement).disabled).toBe(false)
+    await waitFor(() => expect(reads.list).toBe(2))
+    reread.release(jsonResponse(200, [{ ...rows[0], status: 'INACTIVE' }, rows[1]]))
+    await screen.findByRole('button', { name: 'Aktiver' })
+    await act(async () => {})
+    // The late success of A has run; B's own step is still open and its confirm control is enabled.
+    const rowB = screen.getByText('OTHER').closest('tr') as HTMLElement
+    await waitFor(() => expect((within(rowB).getByRole('button', { name: 'Deaktiver' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(within(rowB).getByText('Deaktiveres fra')).toBeDefined()
+    expect(within(rowB).getByRole('button', { name: 'Annuller' })).toBeDefined()
   })
 })
 

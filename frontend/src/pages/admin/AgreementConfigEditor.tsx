@@ -177,9 +177,10 @@ export function AgreementConfigEditor() {
   // raises the version read's bound, never lowers it; the next opening of the publish dialog clears it.
   const [floor, setFloor] = useState<string | null>(null)
   const publishBound = laterDate(newestVersion.date, floor)
-  // The current dialog interaction: bumped whenever the dialog opens or closes (its date cannot change
-  // while a publish is pending), so the answer to an earlier publish can tell whether it still belongs
-  // to what is on screen.
+  // The current dialog interaction, bumped (changed()) when a dialog opens, when the publish date is
+  // changed, when a "Brug ..." offer is taken, and when closeDialog() closes it. The not-DRAFT effect
+  // below closes without bumping; harmless, as no publish is pending then. The answer to an earlier
+  // publish compares its value with the current one to tell whether it still belongs to what is on screen.
   const interaction = useRef(0)
   const changed = () => { interaction.current += 1 }
   const closeDialog = () => { changed(); setConfirmDialog(null) }
@@ -240,8 +241,9 @@ export function AgreementConfigEditor() {
 
   useEffect(() => { fetchConfig() }, [fetchConfig])
 
-  // A dialog never stays open on a config that is no longer a draft (a publish that finished after the
-  // dialog was closed, or one from another tab).
+  // Defence in depth: a dialog never stays open on a config that is no longer a draft. Not reachable
+  // from the screen today (Publicer and Arkiver only show for a draft, and a late publish success
+  // arrives after its dialog is closed).
   useEffect(() => {
     if (config && config.status !== 'DRAFT') setConfirmDialog(null)
   }, [config])

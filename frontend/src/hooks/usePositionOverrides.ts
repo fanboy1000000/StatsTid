@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
 import type { components } from '../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
@@ -77,11 +77,16 @@ export function usePositionOverrides() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // `loading` is the first read only (no rows to show yet). A later read, from `refetch` or after a
+  // write, is quiet: the rows already shown stay on screen, and a failed one leaves them and sets `error`.
+  const hasRows = useRef(false)
+
   const fetchAll = useCallback(async () => {
-    setLoading(true)
+    if (!hasRows.current) setLoading(true)
     const result = await apiClient.get('/api/admin/position-overrides')
     if (result.ok) {
       setData(result.data.map(decorateRow))
+      hasRows.current = true
       setError(null)
     } else {
       setError(result.error)
