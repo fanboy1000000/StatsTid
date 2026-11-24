@@ -4052,3 +4052,36 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - `confirm()`'s re-check is unpinned defence in depth.
 - **For the model-routing register:** the 14834 stack took five review cycles. Each of FU-3 to FU-6 closed the previous cycle's findings and exposed a narrower async edge in the editor. Codex found each new edge first; Fable agreed or called it harmless. The server side was settled at cycle 2.
 - **The next CI run must show:** AC-C10a, -10b (the six arms and the 40-case theory), -10d (with FU-1's edges and the soft-delete staging) and -10e green, and PIN-1 unchanged.
+
+**The 14834 stack merge GATE, 2026-11-24 (on `1cc0cb1d`): green.**
+- Build: 0 errors.
+- Unit 1846, DemoSeed 170 and Regression non-Docker 147 passed. The shortcut check found 20 lines, 0 bad.
+- Frontend `tsc` and lint are clean. The full vitest run, done alone, passed: 108 files, 1274 tests.
+- The seven stack worktrees were pruned, their `node_modules` junctions unlinked first.
+
+**TASK-14838 FU-3 returned** `be76a295` on `bf994ddf` (report `.claude/reviews/S148-TASK-14838-FU-3-report.md`).
+- It gives the create form and the row step their own generation and floor slot, and routes errors by action kind.
+- The publish dialog is locked while saving, and a late success re-reads the config quietly.
+- 7 of its 8 new facts were red on `bf994ddf`.
+- Full vitest, run alone: on `bf994ddf`, 114 files and 1297 tests passed; on `be76a295`, 115 files and 1306 tests passed.
+
+**TASK-14838 cycle 4, 2026-11-24.**
+- 5α c4: PASS.
+- Fable c4: APPROVED-WITH-WARNINGS.
+- Codex c4: CHANGES-REQUIRED.
+- All four cycle-3 defects are closed.
+- **Rulings c4** (`.claude/reviews/S148-TASK-14838-5a-rulings-c4.md`), made by the Orchestrator without an adjudicator, because no fact is disputed. Each takes the stricter remedy. **C4-R1, FU-4 (`ux`):**
+  - (a) Two refusal slots. Both lenses found that a refusal in one form wiped the other form's explanation.
+  - (b) A quiet list re-read. Fable found that the re-read took the table, and the open row step, off the screen; the Orchestrator verified it in `usePositionOverrides.fetchAll`.
+  - (c) The create form's key fields are locked while its create is pending (Fable NOTE 4, stricter remedy).
+  - (d) The switch fact is made decisive.
+  - (e) Three comments are made true.
+- **C4-R2 accepted:**
+  - a current publish success navigates without a re-read, an explicit exception to C3-R1(c)'s wording;
+  - FU-3's other two judgment calls;
+  - the not-DRAFT effect has no test (it cannot be reached from the screen);
+  - **a register candidate for the close:** a failed quiet re-read after a late publish success leaves the old draft state on screen (unproven).
+- **Cycles used: 4 of 5.** Cycle 5 is the last: if it needs another fix-up, the Orchestrator halts and asks the owner.
+- **FU-4 dispatched** (`ux`) on `be76a295`.
+
+**TASK-14836 dispatched** (`backend-infrastructure`, HR facts) on `1cc0cb1d`. It is told about the NUL-byte class of FU-1 and that SEC-068 is not its job. **The security consult runs as soon as it returns, in parallel with TASK-14836-T**, so the consult's negative tests can reach the -T pass. That is the lesson of the TASK-14834 miss.
