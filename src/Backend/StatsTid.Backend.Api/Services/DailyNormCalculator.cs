@@ -686,9 +686,9 @@ public sealed record DatedRecord(string AgreementCode, string? Position, string 
 /// overlapping the range, <c>= ANY(@ids)</c>), so a screen reads each employee's records once for the month
 /// instead of once per day (N-3). A day's record follows <see cref="EmploymentProfileResolver"/>'s rules: the
 /// profile row covering the day (joined to its user), end-exclusive (ADR-018 D8), then the organisation row and
-/// the agreement-code row covering it, the latest start winning where rows overlap; on overlapping profile rows only
-/// the timeline does, since the resolver's profile read has no order and which row it returns is undefined
-/// (QUAL-263). A covering profile row without either of the other two is a record gap, as the resolver's
+/// the agreement-code row covering it, the latest start winning where rows overlap, on all three tables and in
+/// both readers (QUAL-263 closed the profile divergence). A covering profile row without either of the other two
+/// is a record gap, as the resolver's
 /// <see cref="EmployeeProfileNotFoundException"/> is; the caller decides what a gap means (ADR-023 D3).
 /// </summary>
 public sealed class DatedRecordTimeline
