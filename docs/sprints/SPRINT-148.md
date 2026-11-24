@@ -3565,3 +3565,7 @@ M-40 included [O for the 14 facts of the five classes run].
   - PIN-1/2/3 unchanged.
   QUAL-263 moves to CI-verified only then.
 - **Next:** the GATE on master, then the TASK-14849 + -T briefs (ruling 1's contract, plus rulings 3 and 4).
+- **GATE green on master `f5ff8260`** (TASK-14848 merged): build 0 errors; Unit 1746, DemoSeed 170, Regression non-Docker 147; shortcuts 20 found, 0 bad. The two TASK-14848 worktrees are pruned.
+- **TASK-14849 + -T briefs written by the Orchestrator** from the adjudication's rulings 1, 3 and 4 (transcriptions, no new ruling):
+  - **TASK-14849** (`backend-infrastructure`): the start-up seeder backfills only users with no profile row at all, and its race log names the true indexes. Comments are made true in the seeder, Backend `Program.cs`, `IEmploymentProfileResolver.cs` and the resolver's class doc. There is a report-only census of the agreement-code and organisation backfill seeders, which use the same "no open row" test.
+  - **TASK-14849-T** (`test-qa`): three Docker facts. A closed profile with an active user gets nothing from the seeder; a user with no row still gets the year-1 row; payroll still refuses the uncovered month after a seeder run. The parity fixture also gains a partial-overlap profile row (POS-D, 22–26 March) that an "order by end date" reader fails.
