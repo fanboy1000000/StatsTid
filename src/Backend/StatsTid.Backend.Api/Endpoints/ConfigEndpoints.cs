@@ -311,8 +311,8 @@ public static class ConfigEndpoints
                     //     read, met by a same-day edit during the wait, passes the repo's checks with
                     //     the same profile id, but step 4's delta describes the older version. Same
                     //     412, same rollback.
-                    if (saveResult.LockedPredecessorProfileId != predecessor?.ProfileId
-                        || saveResult.LockedPredecessorVersion != predecessor?.Version)
+                    // CI-M5 MUTATION M-49: the id half of the second guard is removed (the repository's 2b is removed too)
+                    if (saveResult.LockedPredecessorVersion != predecessor?.Version)
                     {
                         throw new OptimisticConcurrencyException(
                             "The current profile changed after this request read it; refresh and retry.",

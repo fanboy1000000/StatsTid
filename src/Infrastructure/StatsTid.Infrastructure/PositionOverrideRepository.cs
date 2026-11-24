@@ -79,6 +79,7 @@ public sealed class PositionOverrideRepository
     public async Task<PositionOverrideConfigEntity?> GetInForceAsync(
         string agreementCode, string okVersion, string positionCode, DateOnly day, CancellationToken ct = default)
     {
+        // CI-M5 MUTATION M-15: the same-date tie-break is inverted (recorded_at, version_id ascending)
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
@@ -91,7 +92,7 @@ public sealed class PositionOverrideRepository
             WHERE h.agreement_code = @agreementCode AND h.ok_version = @okVersion
               AND h.position_code = @positionCode
               AND v.applies_from <= @day
-            ORDER BY v.applies_from DESC, v.recorded_at DESC, v.version_id DESC
+            ORDER BY v.applies_from DESC, v.recorded_at ASC, v.version_id ASC
             LIMIT 1
             """, conn);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
@@ -676,7 +677,7 @@ public sealed class PositionOverrideRepository
             JOIN position_override_configs h ON h.override_id = v.override_id
             WHERE h.agreement_code = @agreementCode AND h.ok_version = @okVersion
               AND h.position_code = @positionCode
-            ORDER BY v.applies_from DESC, v.recorded_at DESC, v.version_id DESC
+            ORDER BY v.applies_from DESC, v.recorded_at ASC, v.version_id ASC
             LIMIT 1
             """, conn, tx))
         {

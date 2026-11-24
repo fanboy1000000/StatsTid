@@ -57,13 +57,15 @@ public sealed class AgreementConfigRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
+        // CI-M5 MUTATION M-9: the in-force read selects by status alone, not published_at IS NOT NULL
+        // CI-M5 MUTATION M-15: the same-date tie-break is inverted (published_at ASC)
         await using var cmd = new NpgsqlCommand(
             """
             SELECT * FROM agreement_configs
             WHERE agreement_code = @agreementCode AND ok_version = @okVersion
-              AND published_at IS NOT NULL
+              AND status IN ('ACTIVE','ARCHIVED')
               AND applies_from <= @day
-            ORDER BY applies_from DESC, published_at DESC
+            ORDER BY applies_from DESC, published_at ASC
             LIMIT 1
             """, conn);
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
@@ -85,11 +87,12 @@ public sealed class AgreementConfigRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
+        // CI-M5 MUTATION M-9: the planner's boundary read selects by status alone too, so pay splits at a draft's date
         await using var cmd = new NpgsqlCommand(
             """
             SELECT DISTINCT applies_from FROM agreement_configs
             WHERE agreement_code = @agreementCode AND ok_version = @okVersion
-              AND published_at IS NOT NULL
+              AND status IN ('ACTIVE','ARCHIVED')
               AND applies_from > @afterExclusive AND applies_from <= @toInclusive
             ORDER BY applies_from
             """, conn);
@@ -693,11 +696,12 @@ public sealed class AgreementConfigRepository
     private static async Task<AgreementConfigEntity?> ReadPredecessorAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string agreementCode, string okVersion, CancellationToken ct)
     {
+        // CI-M5 MUTATION M-9: the predecessor read selects by status alone, not published_at IS NOT NULL
         await using var cmd = new NpgsqlCommand(
             """
             SELECT * FROM agreement_configs
             WHERE agreement_code = @agreementCode AND ok_version = @okVersion
-              AND published_at IS NOT NULL
+              AND status IN ('ACTIVE','ARCHIVED')
             ORDER BY applies_from DESC, published_at DESC
             LIMIT 1
             """, conn, tx);

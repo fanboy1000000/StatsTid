@@ -3252,9 +3252,17 @@ public sealed class PeriodCalculationService
     /// first day of every EMPLOYED segment. So it only reads them.
     /// </para>
     /// </summary>
-    private static EvaluationInputs FrozenEvaluationInputs(PlannedCalculation plan, PlanInputs frozen)
+    private EvaluationInputs FrozenEvaluationInputs(PlannedCalculation plan, PlanInputs frozen)
     {
-        var configs = frozen.ConfigRuns!.Select(run => run.Config).ToArray();
+        // CI-M5 MUTATION M-13: replay resolves each piece's configuration through the lookup instead of using the stored one
+        var configs = new AgreementRuleConfig[frozen.Pieces.Count];
+        for (var i = 0; i < configs.Length; i++)
+        {
+            var piece = frozen.Pieces[i];
+            configs[i] = RequireConfigLookup().ResolveAsync(
+                piece.OrgId!, piece.AgreementCode, OkVersionResolver.ResolveVersion(piece.From), piece.Position,
+                piece.From, CancellationToken.None).GetAwaiter().GetResult();
+        }
 
         var segmentProfiles = new EmploymentProfile?[plan.Segments.Count];
         for (int s = 0; s < plan.Segments.Count; s++)

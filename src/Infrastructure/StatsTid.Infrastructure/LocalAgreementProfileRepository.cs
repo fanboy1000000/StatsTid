@@ -316,7 +316,8 @@ public sealed class LocalAgreementProfileRepository
         //     before the backdate guard (3a) and the same-day branch (3b), so a replaced
         //     predecessor always answers "refresh and retry" (412 at the PUT route), never a date
         //     error about a row the caller never saw. Not supplied (null): no check.
-        if (expectedPredecessor is { } expected && current?.ProfileId != expected.ProfileId)
+        // CI-M5 MUTATION M-49: the repository's step-2b identity check is removed (the route's 6b id half is removed too)
+        if (false && expectedPredecessor is { } expected && current?.ProfileId != expected.ProfileId)
         {
             throw new OptimisticConcurrencyException(
                 "The current profile changed after this request read it; refresh and retry.",

@@ -412,7 +412,7 @@ public sealed class DailyNormCalculator
                 ? await ConfigInForceAsync(key, day, monthEnd, stretches, ct)
                 : await NoRecordConfigAsync(key, day) ?? await NoRecordConfigAsync(key, monthEnd);
             if (config is not null)
-                sum += DayNorm.ForWeekday(config.WeeklyNormHours, fraction);
+                sum += DayNorm.ForWeekday(config.WeeklyNormHours, dayRecord?.Fraction ?? fraction);
         }
 
         return sum;
@@ -678,7 +678,8 @@ public sealed class DailyNormCalculator
 }
 
 /// <summary>A dated employment record on one day: the agreement, the position and the organisation it names.</summary>
-public sealed record DatedRecord(string AgreementCode, string? Position, string OrgId);
+// CI-M5 MUTATION M-12: the record carries the day's own part-time fraction, which ComputeMonthNormAsync uses instead of the month-end one
+public sealed record DatedRecord(string AgreementCode, string? Position, string OrgId, decimal? Fraction = null);
 
 /// <summary>
 /// The dated employment records of a set of employees over a range, read set-based in three statements on the
@@ -714,7 +715,7 @@ public sealed class DatedRecordTimeline
     {
         const string profilesSql =
             """
-            SELECT ep.employee_id, ep.effective_from, ep.effective_to, ep.position
+            SELECT ep.employee_id, ep.effective_from, ep.effective_to, ep.position, ep.part_time_fraction
             FROM employee_profiles ep
             INNER JOIN users u ON u.user_id = ep.employee_id
             WHERE ep.employee_id = ANY(@ids)
@@ -760,7 +761,7 @@ public sealed class DatedRecordTimeline
         var agreementCode = Covering(_agreementCodes, employeeId, day);
         if (agreementCode?.Value is null)
             return (null, "agreement_code");
-        return (new DatedRecord(agreementCode.Value, profile.Value, organisation.Value), null);
+        return (new DatedRecord(agreementCode.Value, profile.Value, organisation.Value, profile.Fraction), null);
     }
 
     private static DatedRow? Covering(Dictionary<string, List<DatedRow>> rows, string employeeId, DateOnly day)
@@ -793,7 +794,8 @@ public sealed class DatedRecordTimeline
             list.Add(new DatedRow(
                 reader.GetFieldValue<DateOnly>(1),
                 reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3)));
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetDecimal(4) : null));
         }
 
         return rows;
@@ -801,5 +803,5 @@ public sealed class DatedRecordTimeline
 
     /// <summary>One dated row: <c>[From, To)</c>, end-exclusive, and its value (the position, which may be null,
     /// the agreement code or the organisation).</summary>
-    private sealed record DatedRow(DateOnly From, DateOnly? To, string? Value);
+    private sealed record DatedRow(DateOnly From, DateOnly? To, string? Value, decimal? Fraction = null);
 }
