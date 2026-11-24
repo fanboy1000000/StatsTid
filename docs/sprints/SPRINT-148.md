@@ -3625,3 +3625,24 @@ M-40 included [O for the 14 facts of the five classes run].
 - **Status change:** wave 5's mutation rows are CI-verified (M-9, M-12, M-13, M-15, M-49). QUAL-260's M-49 note is marked CI-verified.
 - **PR #68 is closed unmerged**, `ci/s148-m5` is deleted, and the CI-M5 worktree is pruned.
 - **Wave 5 is closed on CI.** CI-W5 and CI-M5 are both green, so wave 6 may be dispatched. **Batch A** (TASK-14832 → -T → REGEN → 14833) is next. Batches B and C are being drafted.
+
+**TASK-14849 + -T (QUAL-267) reviewed and merged, 2026-11-24.**
+- **What it does, in plain words:** a backend restart no longer gives a still-employed person whose profile HR closed an invented full-time profile. Payroll keeps refusing the uncovered month by name, and HR's "cannot register" list keeps showing the person. A person with no profile at all is still given the default. The parity fixture also gains a second overlap shape (POS-D), so a reader ordered by end date, or by insertion, goes red.
+- **Built:**
+  - TASK-14849 `caddb7c6` (report `S148-TASK-14849-report.md`; gate Unit 1746, DemoSeed 170, Regression non-Docker 147);
+  - TASK-14849-T `6440f7dc` (report `S148-TASK-14849-T-report.md`). **Local, not CI evidence:** the three seeder facts and the parity fact are green; facts (1) and (3) are red under the reverted predicate; the parity fact is red under `ORDER BY ep.effective_to` on 22–23 March and under `… DESC` on 12–13 March. The census of seeder-using classes went green on a rerun (62 of 62) after the local cluster ran out of connections.
+- **Reviewed (cycle 1, saved verbatim):**
+  - 5α PASS (`S148-TASK-14849-5alpha.md`).
+  - Codex APPROVED (`S148-TASK-14849-5a-codex-c1.raw.md`), with two comment NOTEs.
+  - Fable APPROVED-WITH-WARNINGS (`S148-TASK-14849-5a-reviewer.md`).
+- **Ruled by the Orchestrator, without an adjudicator.** The verdicts differ only in level: Codex makes no finding contrary to Fable's, and every remedy is a comment edit or a register row.
+  - **Fable WARNING, verified:** `EmployeeProfileEndpoints.cs:450-482` answers 404 when no profile row covers today, and S141 left a repair path to a ruling. It is registered as **QUAL-268 (M, OPEN), the owner question "how does HR repair a closed profile?"**, and HRP-015 is re-read.
+  - **Codex N1/N2 and Fable's comment NOTE:** the Orchestrator's comment-only commit `8fad083b` (four files, six lines; small-task exception).
+  - **Fable's NOTE on direct-SQL closers (unproven):** the next CI run is the evidence; the change only makes the seeder write less.
+  - **The insertion-order mutant:** argued from the dates, not run, and accepted.
+  - The seeder's Information log ("users without live rows") stays: it is literally true.
+- **Merged** `--no-ff` (this commit): QUAL-267 is FIXED, CI-pending, and QUAL-268 is registered. **The next CI run must show:**
+  - `EmployeeProfileSeederClosedProfileTests` (3) green;
+  - `DatedRecordTimelineParityTests` green;
+  - the full Docker Regression with no new red (Fable's NOTE on the direct-SQL closers);
+  - PIN-1/2/3 unchanged.

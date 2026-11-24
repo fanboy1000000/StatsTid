@@ -426,7 +426,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         }
 
         // EmployeeProfileCreated outbox events with actor_id='SYSTEM_SEED'. The seeder
-        // backfills EVERY active user lacking a live profile (EmployeeProfileSeeder.SeedAsync
+        // backfills EVERY active user with no profile row at all (EmployeeProfileSeeder.SeedAsync
         // — no name filter), so this UNFILTERED count tracks the full init.sql users seed.
         // seed-set growth S51–S63 (init.sql users seed = 19): 19 events, not the original 7.
         await using (var evCmd = new NpgsqlCommand(

@@ -133,8 +133,12 @@ namespace StatsTid.Infrastructure;
 /// <b>Self-managed read-only.</b> Unlike <see cref="EmployeeProfileRepository"/>, this
 /// resolver is a hot-path read used per-segment by PCS; it owns its own connection
 /// and is NOT a candidate for (conn, tx) overloading (ADR-018 D5 does not apply to
-/// pure reads). PostgreSQL connection pooling + the live-row index on
-/// <c>employee_profiles(employee_id, effective_to)</c> handle the throughput.
+/// pure reads). PostgreSQL connection pooling + the history index handle the throughput: the
+/// profile read (one employee, latest start first, QUAL-263) matches
+/// <c>idx_employee_profiles_history</c> <c>(employee_id, effective_from)</c>, which a backward seek
+/// stopped at one row can serve. The live-row index, <c>idx_employee_profiles_live</c>, is on
+/// <c>employee_id</c> where <c>effective_to IS NULL</c> (one open row per employee), so it cannot
+/// serve a read that may land on a closed row.
 /// </para>
 ///
 /// <para>

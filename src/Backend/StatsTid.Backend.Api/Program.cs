@@ -521,9 +521,11 @@ if (args.Contains("--openapi"))
     await EntitlementConfigSeeder.SeedAsync(dbFactory, logger);
 }
 
-// ── S31 / TASK-3106: seed employee_profiles for any user lacking a live row ──
+// ── S31 / TASK-3106: seed employee_profiles for any active user with no profile row at all ──
 // Runs AFTER agreement/entitlement seeders + AFTER init.sql users seed.
-// Idempotent: NOT EXISTS predicate skips users with existing live profiles.
+// Idempotent: NOT EXISTS predicate skips users with any profile row, open or closed. A person
+// whose profile HR closed while they stay employed is a record gap HR repairs, never a default
+// (QUAL-267, QUAL-265).
 // Each new row commits with an EmployeeProfileCreated outbox event atomically
 // (ADR-018 D5). Default values (part_time_fraction=1.0, position=NULL) — admins re-enter
 // correct values post-S31 via the /api/admin/employee-profiles/{employeeId} PUT (TASK-3107).

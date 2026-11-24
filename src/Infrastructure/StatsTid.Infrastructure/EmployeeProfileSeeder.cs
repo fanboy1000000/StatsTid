@@ -7,9 +7,13 @@ using StatsTid.SharedKernel.Events;
 namespace StatsTid.Infrastructure;
 
 /// <summary>
-/// Seeds the <c>employee_profiles</c> table with one live row per existing user on first boot.
-/// Idempotent: reads users + existing employee_profiles, creates rows ONLY for users that
-/// don't yet have a live (effective_to IS NULL) profile. Each new row commits atomically
+/// Seeds the <c>employee_profiles</c> table, at every backend start, with one open default row for
+/// each active user who has no profile row at all.
+/// Idempotent: reads users + existing employee_profiles, creates rows ONLY for users with no
+/// profile row at all (open, closed or retired zero-length). A person whose profile HR closed while
+/// they stay employed is a record gap HR repairs, never a default: a backfilled row would cover the
+/// days after the close and silence payroll's record-gap refusal and the "cannot register" list
+/// (QUAL-267, QUAL-265). Each new row commits atomically
 /// with an <see cref="EmployeeProfileCreated"/> outbox event in a single transaction —
 /// matching the 4-way atomicity contract that <c>POST /api/admin/users</c> uses for new
 /// users in steady state (TASK-3108).
@@ -91,7 +95,9 @@ public static class EmployeeProfileSeeder
         await using var conn = dbFactory.Create();
         await conn.OpenAsync(ct);
 
-        // Find users that lack a live employee_profiles row.
+        // Find active users with no employee_profiles row at all (open, closed or retired
+        // zero-length). A person whose profile HR closed while they stay employed is a record gap
+        // HR repairs, never a default (QUAL-267, QUAL-265).
         await using var findMissingCmd = new NpgsqlCommand(
             """
             SELECT u.user_id
@@ -99,7 +105,7 @@ public static class EmployeeProfileSeeder
             WHERE u.is_active = TRUE
               AND NOT EXISTS (
                   SELECT 1 FROM employee_profiles p
-                  WHERE p.employee_id = u.user_id AND p.effective_to IS NULL
+                  WHERE p.employee_id = u.user_id
               )
             ORDER BY u.user_id
             """, conn);
@@ -228,11 +234,15 @@ public static class EmployeeProfileSeeder
                 await tx.CommitAsync(ct);
                 seeded++;
             }
+            // Reached only by a race: the find-missing read sits outside this transaction, so a
+            // second instance starting at the same moment can write the user's row first. The
+            // year-1 insert then collides on either unique index (one open row per employee, or
+            // one row per start date), whichever PostgreSQL checks first.
             catch (PostgresException pgEx) when (pgEx.SqlState == "23505")
             {
                 await tx.RollbackAsync(ct);
                 logger.LogWarning(
-                    "EmployeeProfile seed for {EmployeeId} lost concurrent-startup race (23505 on idx_employee_profiles_live); skipping",
+                    "EmployeeProfile seed for {EmployeeId} lost concurrent-startup race (23505 on idx_employee_profiles_live or idx_employee_profiles_history); skipping",
                     employeeId);
                 skippedRace++;
             }
