@@ -3783,3 +3783,18 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - (7) the QUAL-268 stack is named only in the wave row and the shared-files row until it is briefed;
   - (8) the older plan pastes are kept, with pointers.
 - **Next:** TASK-14834 (`backend-infrastructure`, the customary-days server), and a planner for the QUAL-268 repair trio. TASK-14838 (the central editors) follows at the next free building slot.
+
+**TASK-14834 returned** `3614319a` on `7cd4d728` (report `.claude/reviews/S148-TASK-14834-report.md`).
+- **What it built:** the customary-days server.
+  - Four routes, `LocalAdminOrAbove`, each scoped to the organisation: list, create, withdraw and reinstate. A reinstatement writes a new row, so the gap stays on record.
+  - Each write is one transaction at READ COMMITTED. The organisation row is locked `FOR NO KEY UPDATE` first, then the row, audit row, event and audit-projection row are written.
+  - Ruling 8's overlap guard answers 409 with `conflictingCustomId`.
+  - No pay lock, no worklist and no freezing (S1-9).
+- **Gate:** build 0 errors (CA2100 113, unchanged); Unit 1846, DemoSeed 170, Regression non-Docker 147; the 20 lock lines are unchanged.
+- **Checked locally** on a throwaway cluster: the worked example and the overlap. The organisation lock does not block inserts that reference the organisation, and a second organisation lock waits.
+- **Accepted by the Orchestrator:**
+  - The `{customId:guid}` route constraint (house style). A non-GUID id gets routing's 404.
+  - **The overlap key is form-exact and leaves out `kind`, as ruling 8 is written.** A recurring 5 June and a single 2026-06-05 do not conflict. A paid day off and a closure day on the same day and scope do conflict. This is flagged for the 5a lenses.
+- **Settled:** `"12:00"` does not bind, so TASK-14835 sends `"HH:mm:ss"`.
+- **Found, not fixed:** `ConfigEndpoints.cs:364` falls back to `LocalAdmin` for the audit role when the claim is missing (probably unreachable; Low). It is carried to the 5a review.
+- **TASK-14834-T dispatched** on `3614319a`.
