@@ -123,16 +123,33 @@ export function useAgreementConfigs(statusFilter?: string) {
   return { configs, loading, error, refetch: fetchConfigs }
 }
 
+export interface NewestVersionDate {
+  /** `loading` from the start of every read; `loaded` when the list was read; `failed` when it was not. */
+  status: 'loading' | 'loaded' | 'failed'
+  /** The newest published version's date; null unless `loaded`, and null when `loaded` with no published version. */
+  date: string | null
+  /** Reads the list again (after a failure). */
+  retry: () => void
+}
+
 /**
  * The date the newest PUBLISHED version of a key applies from (the lower limit of a new publish's
- * date), read once from the per-key version list. Null while loading, when the key has no published
- * version, or when the read fails: the server stays the authority and refuses a date before it.
- * Pass an empty `agreementCode` to skip the read (a config that is not loaded yet).
+ * date), read from the per-key version list. The status is `loading` at the start of every read (a
+ * previous key's or a failed attempt's value is never carried over), `loaded` with the date (null
+ * when the key has no published version) or `failed`; `retry` reads again. Pass an empty
+ * `agreementCode` to skip the read (the status stays `loading`). The server stays the authority and
+ * refuses a date before the newest version.
  */
-export function useNewestVersionDate(agreementCode: string, okVersion: string): string | null {
-  const [newest, setNewest] = useState<string | null>(null)
+export function useNewestVersionDate(agreementCode: string, okVersion: string): NewestVersionDate {
+  const [state, setState] = useState<{ status: NewestVersionDate['status']; date: string | null }>({
+    status: 'loading',
+    date: null,
+  })
+  const [attempt, setAttempt] = useState(0)
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
+    setState({ status: 'loading', date: null })
     if (!agreementCode || !okVersion) return
     let cancelled = false
     apiClient
@@ -140,18 +157,22 @@ export function useNewestVersionDate(agreementCode: string, okVersion: string): 
         params: { path: { agreementCode, okVersion } },
       })
       .then((result) => {
-        if (cancelled || !result.ok) return
+        if (cancelled) return
+        if (!result.ok) {
+          setState({ status: 'failed', date: null })
+          return
+        }
         const dates: string[] = []
         for (const c of result.data) {
           if (c.publishedAt !== null && c.appliesFrom !== null) dates.push(c.appliesFrom)
         }
         dates.sort()
-        setNewest(dates.length > 0 ? dates[dates.length - 1] : null)
+        setState({ status: 'loaded', date: dates.length > 0 ? dates[dates.length - 1] : null })
       })
     return () => { cancelled = true }
-  }, [agreementCode, okVersion])
+  }, [agreementCode, okVersion, attempt])
 
-  return newest
+  return { status: state.status, date: state.date, retry }
 }
 
 export function useAgreementConfig(configId: string) {

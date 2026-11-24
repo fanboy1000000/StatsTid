@@ -3,7 +3,9 @@
 // getByLabelText cannot find the 24 fields below whose label is untied (the eight checkboxes were
 // already tied); the assertion that each lookup returns a form control fails with "Unable to find a
 // form control associated with that label". Where a label text repeats (Start, Slut, Sats), each
-// lookup is scoped to its fieldset by the legend, so a tie to the wrong field fails too.
+// lookup is scoped to its fieldset by the legend, so a tie to the wrong field fails too, and each
+// row names the id its label must reach (S148 T23 FU-1: a label tied to another field's control
+// would pass the tag check alone).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, within, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
@@ -14,41 +16,41 @@ import { CONFIG_ID, draftConfig } from './agreementConfigFixture'
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
-// [fieldset legend, label text, expected control tag]
-const FIELDS: [string, string, string][] = [
-  ['Grundlaeggende', 'Overenskomstkode', 'INPUT'],
-  ['Grundlaeggende', 'OK-version', 'INPUT'],
-  ['Grundlaeggende', 'Normmodel', 'SELECT'],
-  ['Grundlaeggende', 'Beskrivelse', 'TEXTAREA'],
-  ['Normtid', 'Ugentlige normtimer', 'INPUT'],
-  ['Normtid', 'Normperiode (uger)', 'INPUT'],
-  ['Normtid', 'Arlige normtimer', 'INPUT'],
-  ['Flex', 'Maks. flexsaldo (timer)', 'INPUT'],
-  ['Overarbejde', 'Overarbejde aktiveret', 'INPUT'],
-  ['Overarbejde', 'Merarbejde aktiveret', 'INPUT'],
-  ['Overarbejde', 'Overarbejdsgraense 50% (timer)', 'INPUT'],
-  ['Overarbejde', 'Overarbejdsgraense 100% (timer)', 'INPUT'],
-  ['Aftentillaeg', 'Aftentillaeg aktiveret', 'INPUT'],
-  ['Aftentillaeg', 'Start (time)', 'INPUT'],
-  ['Aftentillaeg', 'Slut (time)', 'INPUT'],
-  ['Aftentillaeg', 'Sats', 'INPUT'],
-  ['Nattillaeg', 'Nattillaeg aktiveret', 'INPUT'],
-  ['Nattillaeg', 'Start (time)', 'INPUT'],
-  ['Nattillaeg', 'Slut (time)', 'INPUT'],
-  ['Nattillaeg', 'Sats', 'INPUT'],
-  ['Weekendtillaeg', 'Weekendtillaeg aktiveret', 'INPUT'],
-  ['Weekendtillaeg', 'Lordagssats', 'INPUT'],
-  ['Weekendtillaeg', 'Sondagssats', 'INPUT'],
-  ['Helligdagstillaeg', 'Helligdagstillaeg aktiveret', 'INPUT'],
-  ['Helligdagstillaeg', 'Sats', 'INPUT'],
-  ['Radighedsvagt', 'Radighedsvagt aktiveret', 'INPUT'],
-  ['Radighedsvagt', 'Sats', 'INPUT'],
-  ['Tilkald', 'Tilkald aktiveret', 'INPUT'],
-  ['Tilkald', 'Minimumstimer', 'INPUT'],
-  ['Tilkald', 'Sats', 'INPUT'],
-  ['Rejsetid', 'Rejsetid aktiveret', 'INPUT'],
-  ['Rejsetid', 'Arbejdsrejse-sats', 'INPUT'],
-  ['Rejsetid', 'Ikke-arbejdsrejse-sats', 'INPUT'],
+// [fieldset legend, label text, expected control tag, expected control id]
+const FIELDS: [string, string, string, string][] = [
+  ['Grundlaeggende', 'Overenskomstkode', 'INPUT', 'ac-agreementCode'],
+  ['Grundlaeggende', 'OK-version', 'INPUT', 'ac-okVersion'],
+  ['Grundlaeggende', 'Normmodel', 'SELECT', 'ac-normModel'],
+  ['Grundlaeggende', 'Beskrivelse', 'TEXTAREA', 'ac-description'],
+  ['Normtid', 'Ugentlige normtimer', 'INPUT', 'ac-weeklyNormHours'],
+  ['Normtid', 'Normperiode (uger)', 'INPUT', 'ac-normPeriodWeeks'],
+  ['Normtid', 'Arlige normtimer', 'INPUT', 'ac-annualNormHours'],
+  ['Flex', 'Maks. flexsaldo (timer)', 'INPUT', 'ac-maxFlexBalance'],
+  ['Overarbejde', 'Overarbejde aktiveret', 'INPUT', 'hasOvertime'],
+  ['Overarbejde', 'Merarbejde aktiveret', 'INPUT', 'hasMerarbejde'],
+  ['Overarbejde', 'Overarbejdsgraense 50% (timer)', 'INPUT', 'ac-overtimeThreshold50'],
+  ['Overarbejde', 'Overarbejdsgraense 100% (timer)', 'INPUT', 'ac-overtimeThreshold100'],
+  ['Aftentillaeg', 'Aftentillaeg aktiveret', 'INPUT', 'eveningSupplementEnabled'],
+  ['Aftentillaeg', 'Start (time)', 'INPUT', 'ac-eveningStart'],
+  ['Aftentillaeg', 'Slut (time)', 'INPUT', 'ac-eveningEnd'],
+  ['Aftentillaeg', 'Sats', 'INPUT', 'ac-eveningRate'],
+  ['Nattillaeg', 'Nattillaeg aktiveret', 'INPUT', 'nightSupplementEnabled'],
+  ['Nattillaeg', 'Start (time)', 'INPUT', 'ac-nightStart'],
+  ['Nattillaeg', 'Slut (time)', 'INPUT', 'ac-nightEnd'],
+  ['Nattillaeg', 'Sats', 'INPUT', 'ac-nightRate'],
+  ['Weekendtillaeg', 'Weekendtillaeg aktiveret', 'INPUT', 'weekendSupplementEnabled'],
+  ['Weekendtillaeg', 'Lordagssats', 'INPUT', 'ac-weekendSaturdayRate'],
+  ['Weekendtillaeg', 'Sondagssats', 'INPUT', 'ac-weekendSundayRate'],
+  ['Helligdagstillaeg', 'Helligdagstillaeg aktiveret', 'INPUT', 'holidaySupplementEnabled'],
+  ['Helligdagstillaeg', 'Sats', 'INPUT', 'ac-holidayRate'],
+  ['Radighedsvagt', 'Radighedsvagt aktiveret', 'INPUT', 'onCallDutyEnabled'],
+  ['Radighedsvagt', 'Sats', 'INPUT', 'ac-onCallDutyRate'],
+  ['Tilkald', 'Tilkald aktiveret', 'INPUT', 'callInWorkEnabled'],
+  ['Tilkald', 'Minimumstimer', 'INPUT', 'ac-callInMinimumHours'],
+  ['Tilkald', 'Sats', 'INPUT', 'ac-callInRate'],
+  ['Rejsetid', 'Rejsetid aktiveret', 'INPUT', 'travelTimeEnabled'],
+  ['Rejsetid', 'Arbejdsrejse-sats', 'INPUT', 'ac-workingTravelRate'],
+  ['Rejsetid', 'Ikke-arbejdsrejse-sats', 'INPUT', 'ac-nonWorkingTravelRate'],
 ]
 
 beforeEach(() => {
@@ -75,10 +77,11 @@ describe('AgreementConfigEditor — every label is tied to its field (N-7)', () 
 
     expect(FIELDS).toHaveLength(33)
     const ids = new Set<string>()
-    for (const [legend, label, tag] of FIELDS) {
+    for (const [legend, label, tag, id] of FIELDS) {
       const group = within(screen.getByRole('group', { name: legend }))
       const control = group.getByLabelText(label)
       expect(control.tagName, `${legend} / ${label}`).toBe(tag)
+      expect(control.id, `${legend} / ${label}`).toBe(id)
       ids.add(control.id)
     }
     // No two fields share an id (a repeated label text must not collapse onto one field).

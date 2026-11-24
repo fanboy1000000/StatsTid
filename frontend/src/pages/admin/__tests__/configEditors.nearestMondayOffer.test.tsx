@@ -143,11 +143,17 @@ describe('the agreement editor: a mid-week refusal offers only what the server a
     expect(posts[0].body).toEqual({ appliesFrom: c.typed })
     expectOffer(c)
 
+    // S148 T23 FU-1: every offered button is exercised, and its retry carries the date it set.
     for (const b of c.buttons) {
       fireEvent.click(screen.getByRole('button', { name: b.label }))
       expect((screen.getByLabelText('Gælder fra') as HTMLInputElement).value).toBe(b.date)
       expect(screen.queryByRole('alert')).toBeNull()
-      break
+      const before = posts.length
+      const confirms = screen.getAllByRole('button', { name: 'Publicer' })
+      fireEvent.click(confirms[confirms.length - 1])
+      await waitFor(() => expect(posts.length).toBe(before + 1))
+      expect(posts[before].body).toEqual({ appliesFrom: b.date })
+      await waitFor(() => expect(screen.getByRole('alert')).toBeDefined())
     }
   })
 })
@@ -199,9 +205,14 @@ describe('the override page: a mid-week refusal offers only what the server acce
       expect(posts[0].body).toMatchObject({ appliesFrom: c.typed })
       expectOffer(c)
 
-      if (c.buttons.length > 0) {
-        fireEvent.click(screen.getByRole('button', { name: c.buttons[0].label }))
-        expect((screen.getByLabelText('Ændringen gælder fra') as HTMLInputElement).value).toBe(c.buttons[0].date)
+      for (const b of c.buttons) {
+        fireEvent.click(screen.getByRole('button', { name: b.label }))
+        expect((screen.getByLabelText('Ændringen gælder fra') as HTMLInputElement).value).toBe(b.date)
+        const before = posts.length
+        fireEvent.click(screen.getByRole('button', { name: 'Gem' }))
+        await waitFor(() => expect(posts.length).toBe(before + 1))
+        expect(posts[before].body).toMatchObject({ appliesFrom: b.date })
+        await waitFor(() => expect(screen.getByRole('alert')).toBeDefined())
       }
     })
   })
@@ -224,16 +235,23 @@ describe('the override page: a mid-week refusal offers only what the server acce
       expect(posts[0].body).toEqual({ appliesFrom: c.typed })
       expectOffer(c)
 
-      if (c.buttons.length > 0) {
-        fireEvent.click(screen.getByRole('button', { name: c.buttons[0].label }))
-        expect((screen.getByLabelText('Deaktiveres fra') as HTMLInputElement).value).toBe(c.buttons[0].date)
+      for (const b of c.buttons) {
+        fireEvent.click(screen.getByRole('button', { name: b.label }))
+        expect((screen.getByLabelText('Deaktiveres fra') as HTMLInputElement).value).toBe(b.date)
+        const before = posts.length
+        fireEvent.click(screen.getByRole('button', { name: 'Deaktiver' }))
+        await waitFor(() => expect(posts.length).toBe(before + 1))
+        expect(posts[before].body).toEqual({ appliesFrom: b.date })
+        await waitFor(() => expect(screen.getByRole('alert')).toBeDefined())
       }
     })
   })
 })
 
 describe('other refusals and other errors', () => {
-  it('a future date answers with the not-after-today sentence and a button that sets today', async () => {
+  // S148 T23 FU-1: the screen no longer sends a date after today, so the server's refusal is
+  // reached by an in-bounds date (the server's day is earlier than the screen's).
+  it('a server refusal of an in-bounds date answers with the not-after-today sentence and a button that sets today', async () => {
     const posts: { url: string; method: string; body: unknown }[] = []
     mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === 'PUT') {
@@ -254,8 +272,9 @@ describe('other refusals and other errors', () => {
     renderWithCalendar(TODAY, <PositionOverrideManagement />)
     await screen.findByText('DEPARTMENT_HEAD')
     fireEvent.click(screen.getByRole('button', { name: 'Rediger' }))
-    fireEvent.change(screen.getByLabelText('Ændringen gælder fra'), { target: { value: '2026-11-20' } })
+    fireEvent.change(screen.getByLabelText('Ændringen gælder fra'), { target: { value: '2026-11-11' } })
     fireEvent.click(screen.getByRole('button', { name: 'Gem' }))
+    await waitFor(() => expect(posts).toHaveLength(1))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Datoen kan ikke ligge efter i dag.'))
     fireEvent.click(screen.getByRole('button', { name: 'Brug dags dato' }))
     expect((screen.getByLabelText('Ændringen gælder fra') as HTMLInputElement).value).toBe(TODAY)

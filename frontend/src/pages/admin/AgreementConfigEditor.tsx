@@ -8,7 +8,7 @@ import { EntitlementSection, type Entitlement } from '../../components/admin/Ent
 import { Spinner } from '../../components/ui'
 import { useCalendarToday } from '../../contexts/CalendarContext'
 import { formatEffectiveDateLong } from './editPerson/EffectiveDatePicker'
-import { dateRefusalFrom, type DateRefusal } from './nearestMondayOffer'
+import { dateBoundRefusal, dateRefusalFrom, type DateRefusal } from './nearestMondayOffer'
 import styles from './AgreementConfigEditor.module.css'
 
 // S118 / TASK-11801 (PAT-012) — the by-id GET rides the TYPED spec-keyed form;
@@ -169,12 +169,28 @@ export function AgreementConfigEditor() {
   // a refusal is shown with the dates it would accept (nearestMondayOffer.ts).
   const today = useCalendarToday()
   // The version list is read when the publish dialog opens (an empty code skips the read).
-  const newestVersionDate = useNewestVersionDate(
+  const newestVersion = useNewestVersionDate(
     confirmDialog === 'publish' ? (config?.agreementCode ?? '') : '',
     config?.okVersion ?? '',
   )
+  const newestVersionDate = newestVersion.date
+  // null = untouched (today); a cleared field is '' and disables the confirm.
   const [publishDate, setPublishDate] = useState<string | null>(null)
   const [dateRefusal, setDateRefusal] = useState<DateRefusal | null>(null)
+  const publishDateInput = useRef<HTMLInputElement>(null)
+  const effectivePublishDate = publishDate ?? today
+  // The refusal the screen already knows (a date out of bounds), shown before anything is sent.
+  const boundRefusal =
+    newestVersion.status === 'loaded'
+      ? dateBoundRefusal(effectivePublishDate, today, newestVersionDate)
+      : null
+  const publishBlocked = newestVersion.status !== 'loaded' || !effectivePublishDate || boundRefusal !== null
+  const shownRefusal = boundRefusal ?? dateRefusal
+
+  // The dialog opens with focus on its date input (publish only; archive has no field).
+  useEffect(() => {
+    if (confirmDialog === 'publish') publishDateInput.current?.focus()
+  }, [confirmDialog])
 
   // S126 / F2 — stale-response guard. Keyed on [configId, isNew]: navigating between config rows
   // while a load is in flight would otherwise let the abandoned config's response win, and this
@@ -276,12 +292,13 @@ export function AgreementConfigEditor() {
       setError('ETag mangler — genindlaes konfigurationen.')
       return
     }
+    if (publishBlocked) return
     setSaving(true)
     setError(null)
     setStaleConflict(null)
     setDateRefusal(null)
     try {
-      await publishConfig(configId, etag, publishDate ?? today)
+      await publishConfig(configId, etag, effectivePublishDate)
       navigate('/global/overenskomster')
     } catch (err) {
       // A refused date keeps the dialog open with the dates the server would accept; every other
@@ -657,8 +674,13 @@ export function AgreementConfigEditor() {
       {/* Confirm dialogs */}
       {confirmDialog && (
         <div className={styles.overlay} onClick={() => setConfirmDialog(null)}>
-          <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
-            <h2 className={styles.dialogTitle}>
+          <div
+            className={styles.dialog}
+            role="dialog"
+            aria-labelledby="ac-dialog-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className={styles.dialogTitle} id="ac-dialog-title">
               {confirmDialog === 'publish' ? 'Publicer overenskomst' : 'Arkiver overenskomst'}
             </h2>
             <p className={styles.dialogText}>
@@ -673,26 +695,41 @@ export function AgreementConfigEditor() {
                   className={styles.input}
                   id="ac-publish-date"
                   type="date"
-                  value={publishDate ?? today}
+                  ref={publishDateInput}
+                  value={effectivePublishDate}
                   max={today}
                   min={newestVersionDate ?? undefined}
                   onChange={(e) => { setPublishDate(e.target.value); setDateRefusal(null) }}
                   aria-describedby="ac-publish-date-help"
                 />
-                <p className={styles.dialogText} id="ac-publish-date-help">
-                  {newestVersionDate
-                    ? `Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag eller før ${formatEffectiveDateLong(newestVersionDate)}, hvor den seneste publicerede version gælder fra.`
-                    : 'Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag.'}
-                </p>
-                {dateRefusal && (
+                {newestVersion.status === 'failed' && (
                   <div className={styles.alert} role="alert">
-                    {dateRefusal.text}
-                    {dateRefusal.buttons.map((b) => (
+                    Datoen for den seneste publicerede version kunne ikke hentes.
+                    <button type="button" className={styles.secondaryBtn} onClick={newestVersion.retry}>
+                      Prøv igen
+                    </button>
+                  </div>
+                )}
+                {newestVersion.status === 'loaded' && (
+                  <p className={styles.dialogText} id="ac-publish-date-help">
+                    {newestVersionDate
+                      ? `Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag eller før ${formatEffectiveDateLong(newestVersionDate)}, hvor den seneste publicerede version gælder fra.`
+                      : 'Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag.'}
+                  </p>
+                )}
+                {shownRefusal && (
+                  <div className={styles.alert} role="alert">
+                    {shownRefusal.text}
+                    {shownRefusal.buttons.map((b) => (
                       <button
                         key={b.date}
                         type="button"
                         className={styles.secondaryBtn}
-                        onClick={() => { setPublishDate(b.date); setDateRefusal(null) }}
+                        onClick={() => {
+                          setPublishDate(b.date)
+                          setDateRefusal(null)
+                          publishDateInput.current?.focus()
+                        }}
                       >
                         {b.label}
                       </button>
@@ -708,7 +745,7 @@ export function AgreementConfigEditor() {
               <button
                 className={confirmDialog === 'publish' ? styles.primaryBtn : styles.dangerBtn}
                 onClick={confirmDialog === 'publish' ? handlePublish : handleArchive}
-                disabled={confirmDialog === 'publish' && (saving || !(publishDate ?? today))}
+                disabled={confirmDialog === 'publish' && (saving || publishBlocked)}
               >
                 {confirmDialog === 'publish' ? 'Publicer' : 'Arkiver'}
               </button>
