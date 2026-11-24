@@ -78,6 +78,25 @@ const existingProfile: LocalAgreementProfile = {
   createdAt: '2026-04-27T08:00:00Z',
   // S22 / ADR-018 D7: version replaces profileId-as-ETag.
   version: 1,
+  // S148 C-4 (T16): the institution's new settings, none set.
+  flexSettlementPeriod: null,
+  flexCapTestPeriod: null,
+  flexPlusCapHours: null,
+  flexMinusCapHours: null,
+  flexDailyCreditCapHours: null,
+  flexAboveCapAction: null,
+  flexLeavingAction: null,
+  officeHoursMonStart: null,
+  officeHoursMonEnd: null,
+  officeHoursTueStart: null,
+  officeHoursTueEnd: null,
+  officeHoursWedStart: null,
+  officeHoursWedEnd: null,
+  officeHoursThuStart: null,
+  officeHoursThuEnd: null,
+  officeHoursFriStart: null,
+  officeHoursFriEnd: null,
+  paidAbsenceCreditBasis: null,
 }
 
 describe('ProfileEditor', () => {

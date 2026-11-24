@@ -21,8 +21,8 @@
 // S119 / TASK-11901 (Typed API Contract retrofit Pass 6, PAT-012): all three
 // calls ride the TYPED spec-keyed `apiFetchWithEtag` form. The hand-written
 // `ProfileSaveRequest` local was DELETED in favor of the generated spec type
-// (audited: same 6 keys; the 5 override members are spec-optional because they
-// are not C#-`required` — the FE always sends all 6, byte-unchanged). The PUT
+// (audited: same keys; the override and settings members are spec-optional because
+// they are not C#-`required` — the FE always sends every key, byte-unchanged). The PUT
 // threads the flexible precondition through the structured options: null etag →
 // `ifNoneMatch: '*'` (the program's FIRST live use), else `ifMatch` with the
 // ready RFC 7232 wire string. Error bodies stay DELIBERATELY UNTYPED (the

@@ -33,6 +33,7 @@ import {
   Table,
 } from '../../components/ui'
 import { ProfileEditor } from '../../components/config/ProfileEditor'
+import { historySettingLines } from '../../components/config/profileSettingsCopy'
 import styles from './ConfigManagement.module.css'
 
 // Must mirror the agreement_code values seeded as ACTIVE in
@@ -170,7 +171,7 @@ interface RowWithDeltaProps {
   onToggle: () => void
 }
 
-function RowWithDelta({ row, expanded, onToggle }: RowWithDeltaProps) {
+export function RowWithDelta({ row, expanded, onToggle }: RowWithDeltaProps) {
   return (
     <>
       <tr>
@@ -195,6 +196,9 @@ function RowWithDelta({ row, expanded, onToggle }: RowWithDeltaProps) {
                 <li>MaxFlexBalance: {valueOrInherit(row.maxFlexBalance)}</li>
                 <li>MaxOvertimeHoursPerPeriod: {valueOrInherit(row.maxOvertimeHoursPerPeriod)}</li>
                 <li>OvertimeRequiresPreApproval: {row.overtimeRequiresPreApproval === null ? '(arvet fra central)' : row.overtimeRequiresPreApproval ? 'Ja' : 'Nej'}</li>
+                {historySettingLines(row).map(l => (
+                  <li key={l.label}>{l.label}: {l.value}</li>
+                ))}
               </ul>
             </div>
           </td>

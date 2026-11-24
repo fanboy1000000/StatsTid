@@ -9,7 +9,7 @@
 //  • exactly ONE precondition header per request (mutual exclusion);
 //  • URLs (typed path-key interpolation) byte-identical to the legacy
 //    encodeURIComponent template strings;
-//  • the PUT body byte-identical (the 6-key ProfileSaveRequest);
+//  • the PUT body byte-identical (the full ProfileSaveRequest);
 //  • the 412-body ROUND-TRIP: a structured 412 response's body reaches the
 //    caller's runtime narrowing (error shapes stay DELIBERATELY untyped —
 //    guard, never cast).
@@ -74,7 +74,8 @@ beforeEach(() => {
   mockFetch.mockReset()
 })
 
-// A full 13-member spec profile (LocalAgreementProfileResponse).
+// A spec profile row (LocalAgreementProfileResponse), untyped: its members are the ones the
+// calls under test read.
 const profile = {
   profileId: '11111111-2222-3333-4444-555555555555',
   orgId: 'STY02',
@@ -167,7 +168,7 @@ describe('saveProfile — BOTH precondition branches, byte-identical', () => {
     expect(calls[0].headers['If-None-Match']).toBeUndefined()
   })
 
-  it('the PUT body is byte-identical: exactly the 5 ProfileSaveRequest keys (S148 C-7)', async () => {
+  it('the PUT body is byte-identical: the helper passes its body through unchanged (S148 C-7)', async () => {
     const calls = captureCalls(() => ({ body: profile, etag: '"6"' }))
     await saveProfile('STY02', 'HK', 'OK24', saveBody, '"5"')
     expect(calls[0].body).toEqual(saveBody)
