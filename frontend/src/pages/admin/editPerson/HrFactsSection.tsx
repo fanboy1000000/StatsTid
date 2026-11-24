@@ -125,15 +125,15 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
 
   // Reads today's facts, which also carry the version the next save must name, and resets the form to them.
   const reload = useCallback(
-    async (): Promise<boolean> => {
-      if (today == null) return false
+    async (): Promise<'ok' | 'failed' | 'stale'> => {
+      if (today == null) return 'failed'
       const issuedFor = ++generation.current
       const result = await readFacts(today)
-      if (issuedFor !== generation.current) return false
+      if (issuedFor !== generation.current) return 'stale'
       if (!result.ok) {
         setAsOf((a) => ({ ...a, status: 'failed' }))
         setLoadState(result.status === 403 ? 'noAccess' : 'failed')
-        return false
+        return 'failed'
       }
       const facts = result.data.data
       setCurrent(facts)
@@ -148,7 +148,7 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
       setFlex(facts.onFlexScheme == null ? '' : facts.onFlexScheme ? 'true' : 'false')
       setDate(today)
       setLoadState('ready')
-      return true
+      return 'ok'
     },
     [readFacts, today],
   )
@@ -169,13 +169,14 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
   useEffect(() => {
     if (!focusAfterRefusal.current) return
     focusAfterRefusal.current = false
-    const id = fieldErrors.regime ? 'pd-hrf-regime' : fieldErrors.flex ? 'pd-hrf-flex-yes' : fieldErrors.date ? 'pd-hrf-date' : null
+    const id = fieldErrors.regime ? 'pd-hrf-regime' : fieldErrors.flex ? 'pd-hrf-flex-true' : fieldErrors.date ? 'pd-hrf-date' : null
     if (id) document.getElementById(id)?.focus()
   }, [fieldErrors])
 
   const onDateChange = async (next: string) => {
     setDate(next)
     setFieldErrors((e) => ({ ...e, date: undefined }))
+    setMessage(null)
     const issuedFor = ++generation.current
     // Until the answer for this date arrives, the old options are not this date's.
     setAsOf((a) => ({ ...a, status: 'pending' }))
@@ -217,8 +218,11 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
           })
     if (issuedFor !== generation.current) return
     if (result.ok) {
+      // A stale re-read belongs to an older form generation and touches nothing; a failed one leaves the
+      // read-failed text (readFailed) and no message.
       const reloaded = await reload()
-      setMessage(reloaded ? { text: 'Oplysningerne om overarbejde og flex er gemt.', error: false } : null)
+      if (reloaded === 'stale') return
+      setMessage(reloaded === 'ok' ? { text: 'Oplysningerne om overarbejde og flex er gemt.', error: false } : null)
     } else if (result.status === 400) {
       const fields = (result.body as { fields?: { field: string; code: string; nearestValid?: string[] | null }[] } | undefined)
         ?.fields
@@ -234,7 +238,8 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
       if (unplaced) setMessage({ text: UNPLACEABLE_REFUSAL, error: true })
     } else if (result.status === 412 || (result.status === 409 && (result.body as { currentVersion?: number } | undefined)?.currentVersion != null)) {
       const reloaded = await reload()
-      setMessage(reloaded ? { text: CHANGED, error: true } : null)
+      if (reloaded === 'stale') return
+      setMessage(reloaded === 'ok' ? { text: CHANGED, error: true } : null)
     } else if (result.status === 409) {
       setMessage({
         text: 'Medarbejderen er flyttet til en anden institution i mellemtiden. Genindlæs siden.',
@@ -262,7 +267,7 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
   // reads a value its agreement does not allow on a date as null, and clearing today's valid record from
   // such a date must stay refused.
   const offerEmpty = asOf.regime == null && recorded == null
-  const needsPlaceholder = optionsReady && !offerEmpty && regime === ''
+  const needsPlaceholder = !offerEmpty && regime === ''
   const canPick = optionsReady && !noAgreement && !noRegimes
   const localDateError: string | null =
     date === '' || !isUsableDate(date) || today == null

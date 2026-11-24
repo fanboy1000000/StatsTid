@@ -21,12 +21,19 @@
 //  (b2) F Red conditions: a failed as-of read shows no text and leaves Save enabled.
 //  (b3) R Regression pin: a deferred answer for an earlier date never changes a form saved since.
 //  (c)  F Red conditions: "Mangler" is offered and OVERTIME is not preselected at 2026-03-16.
-//  (d)  F Red conditions: the select shows the first allowed option, not the placeholder, and Save is enabled.
+//  (d)  F Red conditions: the select shows the first allowed option, not the placeholder.
 //  (e)  F Red conditions: no placeholder text and no (e2) sentence exist.
 //  (f)  F Red conditions: the "reloaded" sentence shows although the re-read answered 500.
 //  (g)  F Red conditions: focus stays on the Save button.
 //  (h)  F Red conditions: no HR inputs are rendered without a resolved today.
-//  (i1)-(i6) R Pins for the request bodies, the refreshed version header and the refusal texts.
+//  (i1)-(i3), (i5), (i6) R Pins for the request bodies, the refreshed version header and the refusal texts.
+//  (i4) F Red conditions: focus stays on the Save button (red on 59bee5dd).
+// FU-3 (C2-R1, Step 5a cycle 2) facts, each with its kind, red on 83496e8a's section where F:
+//  (a-gen) F Red conditions: a stale re-read of person A unlocks Save and clears "Gemmer..." for person B's pending save.
+//  (b2-ph) F Red conditions: a failed read shows the first allowed option, not "Ingen ordning kan vælges".
+//  (c-flex) F Red conditions: focus stays on the document, because the old target id pd-hrf-flex-yes does not exist.
+//  (d-e3) R Pin: no agreement and nothing recorded keeps "Mangler"; a flex-only save is enabled and sends a null regime.
+//  (e-msg) F Red conditions: the "gemt" message stays after a date change.
 // Every case first waits until `ep-email` is enabled (each input is disabled while the drawer loads).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -474,6 +481,22 @@ describe('PersonDrawer — TASK-14836 FU-1 (C1-R1): the section validates and fo
     expect(regimeSelect()).toBeDisabled()
   })
 
+  it('(b2-ph) F: from the placeholder state, a failed read for a new date shows "Ingen ordning kan vælges" as the selected option', async () => {
+    factsForDate['2026-04-06'] = { ...AC_DAY }
+    renderEdit()
+    await waitForSection()
+    setDate('2026-04-06')
+    await waitFor(() => expect(shownOption()).toBe('Vælg en ordning'))
+    readOverride = res(500, { error: 'boom' })
+    setDate('2026-05-04')
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-status').textContent).toContain(READ_FAILED))
+    expect(regimeSelect()).toBeDisabled()
+    expect(regimeSelect().value).toBe('')
+    expect(shownOption()).toBe('Ingen ordning kan vælges')
+    expect(regimeSelect().selectedOptions[0].disabled).toBe(true)
+    expect(screen.queryByTestId('pd-hrf-regime-help')).toBeNull()
+  })
+
   it('(b3) R: a deferred answer for an earlier date changes nothing in a form saved since', async () => {
     let release!: () => void
     gates['2026-04-06'] = new Promise<void>((r) => (release = r))
@@ -534,6 +557,32 @@ describe('PersonDrawer — TASK-14836 FU-1 (C1-R1): the section validates and fo
     expect(screen.getByTestId('pd-hrf-save')).toBeEnabled()
   })
 
+  it('(d-e3) R: with no agreement and nothing recorded, "Mangler" stays selected and a flex-only save sends a null regime', async () => {
+    facts = SEEDED
+    factsForDate['2026-01-05'] = { ...SEEDED, asOf: '2026-01-05', agreementCode: null, allowedOvertimeRegimes: [] }
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    setDate('2026-01-05')
+    await screen.findByTestId('pd-hrf-no-agreement')
+    expect(regimeSelect()).toBeDisabled()
+    expect(shownOption()).toBe(MISSING)
+    expect(screen.getByTestId('pd-hrf-save')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(hrCalls('PUT')).toHaveLength(1))
+    expect(hrCalls('PUT')[0].body).toEqual({ effectiveFrom: '2026-01-05', overtimeRegime: null, onFlexScheme: false })
+  })
+
+  it('(e-msg) F: a date change clears the saved message', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(await screen.findByText('Oplysningerne om overarbejde og flex er gemt.')).toBeInTheDocument()
+    setDate('2026-11-09')
+    expect(screen.queryByTestId('pd-hrf-message')).toBeNull()
+  })
+
   it('(e) F: nothing to choose shows "Ingen ordning kan vælges" (no agreement) or the no-regimes sentence, with Save disabled', async () => {
     factsForDate['2026-01-05'] = NO_AGREEMENT_DAY
     factsForDate['2026-02-02'] = { ...JONAS, asOf: '2026-02-02', agreementCode: 'ZZ', allowedOvertimeRegimes: [], overtimeRegime: null }
@@ -575,6 +624,53 @@ describe('PersonDrawer — TASK-14836 FU-1 (C1-R1): the section validates and fo
     putResult = res(400, { fields: [{ field: 'OvertimeRegime', code: 'NOT_ALLOWED_FOR_AGREEMENT', nearestValid: [] }] })
     fireEvent.click(screen.getByTestId('pd-hrf-save'))
     await waitFor(() => expect(document.activeElement).toBe(regimeSelect()))
+  })
+
+  it('(c-flex) F: a refused flex field takes focus', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-yes'))
+    putResult = res(400, { fields: [{ field: 'OnFlexScheme', code: 'UNKNOWN_VALUE' }] })
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('pd-hrf-flex-yes')))
+  })
+
+  it('(a-gen) F: a stale re-read of person A cannot unlock the Save of person B', async () => {
+    const getsOf: Record<string, number> = { A: 0, B: 0 }
+    const putsOf: string[] = []
+    let releaseARead!: () => void
+    let releaseBPut!: () => void
+    const aRead = new Promise<void>((r) => (releaseARead = r))
+    const bPut = new Promise<void>((r) => (releaseBPut = r))
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      const who = /employees\/([^/]+)\/hr-facts/.exec(url)![1]
+      if ((init?.method ?? 'GET') === 'PUT') {
+        putsOf.push(who)
+        if (who === 'B') await bPut
+        return res(200, { employeeId: who, version: 2 }, '"2"')
+      }
+      getsOf[who]++
+      if (who === 'A' && getsOf.A === 2) await aRead
+      return res(200, { ...JONAS, employeeId: who }, '"1"')
+    })
+    const { rerender } = render(<HrFactsSection employeeId="A" today={TODAY} />)
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-save')).toBeEnabled())
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(getsOf.A).toBe(2))
+    rerender(<HrFactsSection employeeId="B" today={TODAY} />)
+    await waitFor(() => expect(getsOf.B).toBe(1))
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-save')).toBeEnabled())
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(putsOf).toEqual(['A', 'B']))
+    expect(screen.getByTestId('pd-hrf-save').textContent).toBe('Gemmer...')
+    releaseARead()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+    expect(screen.getByTestId('pd-hrf-save').textContent).toBe('Gemmer...')
+    expect(screen.queryByTestId('pd-hrf-message')).toBeNull()
+    expect(putsOf).toEqual(['A', 'B'])
+    releaseBPut()
+    expect(await screen.findByText('Oplysningerne om overarbejde og flex er gemt.')).toBeInTheDocument()
   })
 
   it('(h) F: with no resolved today the inputs are rendered disabled', async () => {
