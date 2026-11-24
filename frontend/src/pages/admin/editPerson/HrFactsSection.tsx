@@ -5,6 +5,9 @@
 // per agreement, read for the form's date) and on the dates; this screen only offers what the server
 // serves and shows each refusal in Danish. No calculation reads either fact yet, and the section
 // says so (D6_NOTE). The seeded "since always" row (0001-01-01) is never shown and sets no earliest date.
+// The section checks its own date (a real day, not after today, not before the live row's start) and
+// sends nothing for a date it knows the server would refuse. Every read and save answer belongs to the
+// form generation (employee, date, reload) it was issued for; a late answer for an older one is dropped.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetchWithEtag, type ApiResult, type ApiResponseWithEtag } from '../../../lib/api'
 import type { components } from '../../../lib/api-types'
@@ -26,6 +29,22 @@ interface HrFactsSectionProps {
 
 const SEEDED_ANCHOR = '0001-01-01'
 const MISSING = 'Mangler – ikke registreret'
+const READ_FAILED = 'Oplysningerne kunne ikke hentes. Prøv igen.'
+const PICK = 'Vælg en ordning'
+const NOTHING_CHOOSABLE = 'Ingen ordning kan vælges'
+const NOT_CHOOSABLE_HERE =
+  'Den registrerede ordning kan ikke vælges for den overenskomst, medarbejderen har på den valgte dato. Vælg en anden ordning.'
+const NO_REGIMES =
+  'Der findes ingen ordninger for den overenskomst, medarbejderen har på den valgte dato, så en ordning kan ikke vælges.'
+
+/** Exactly `yyyy-MM-dd`, a real calendar day, year 1 or later. */
+function isUsableDate(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < '0001-01-01') return false
+  const d = new Date(`${date}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date
+}
+
+type AsOf = { status: 'pending' | 'ready' | 'failed'; agreementCode: string | null; allowed: string[]; regime: string | null }
 
 const REGIME_LABELS: Record<string, string> = {
   OVERTIME: 'Overarbejde: ret til overarbejdsbetaling',
@@ -81,18 +100,18 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
   const [current, setCurrent] = useState<HrFacts | null>(null)
   const [etag, setEtag] = useState<string | null>(null)
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'failed' | 'noAccess'>('loading')
-  // The agreement and allowed set the server serves for the form's date.
-  const [options, setOptions] = useState<{ agreementCode: string | null; allowed: string[] }>({
-    agreementCode: null,
-    allowed: [],
-  })
+  // What the server serves for the form's date: the agreement, the allowed set and the regime recorded then.
+  const [asOf, setAsOf] = useState<AsOf>({ status: 'pending', agreementCode: null, allowed: [], regime: null })
   const [regime, setRegime] = useState('')
   const [flex, setFlex] = useState<'' | 'true' | 'false'>('')
   const [date, setDate] = useState(today ?? '')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
-  const optionsSeq = useRef(0)
+  // The form generation: bumped by every date change, reload and employee change. An answer is applied
+  // only while the generation it was issued under is still the current one.
+  const generation = useRef(0)
+  const focusAfterRefusal = useRef(false)
 
   const readFacts = useCallback(
     (asOf: string): Promise<ApiResult<ApiResponseWithEtag<HrFacts>>> =>
@@ -106,18 +125,25 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
 
   // Reads today's facts, which also carry the version the next save must name, and resets the form to them.
   const reload = useCallback(
-    async (isCancelled: () => boolean = () => false): Promise<boolean> => {
+    async (): Promise<boolean> => {
       if (today == null) return false
+      const issuedFor = ++generation.current
       const result = await readFacts(today)
-      if (isCancelled()) return false
+      if (issuedFor !== generation.current) return false
       if (!result.ok) {
+        setAsOf((a) => ({ ...a, status: 'failed' }))
         setLoadState(result.status === 403 ? 'noAccess' : 'failed')
         return false
       }
       const facts = result.data.data
       setCurrent(facts)
       setEtag(result.data.etag)
-      setOptions({ agreementCode: facts.agreementCode ?? null, allowed: facts.allowedOvertimeRegimes })
+      setAsOf({
+        status: 'ready',
+        agreementCode: facts.agreementCode ?? null,
+        allowed: facts.allowedOvertimeRegimes,
+        regime: facts.overtimeRegime ?? null,
+      })
       setRegime(facts.overtimeRegime ?? '')
       setFlex(facts.onFlexScheme == null ? '' : facts.onFlexScheme ? 'true' : 'false')
       setDate(today)
@@ -128,32 +154,51 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
   )
 
   useEffect(() => {
-    let cancelled = false
     setLoadState('loading')
+    setAsOf({ status: 'pending', agreementCode: null, allowed: [], regime: null })
+    setSaving(false)
     setMessage(null)
     setFieldErrors({})
-    void reload(() => cancelled)
+    void reload()
     return () => {
-      cancelled = true
+      generation.current++
     }
   }, [reload])
+
+  // A refused save moves focus to the first invalid field, so a screen reader announces it.
+  useEffect(() => {
+    if (!focusAfterRefusal.current) return
+    focusAfterRefusal.current = false
+    const id = fieldErrors.regime ? 'pd-hrf-regime' : fieldErrors.flex ? 'pd-hrf-flex-yes' : fieldErrors.date ? 'pd-hrf-date' : null
+    if (id) document.getElementById(id)?.focus()
+  }, [fieldErrors])
 
   const onDateChange = async (next: string) => {
     setDate(next)
     setFieldErrors((e) => ({ ...e, date: undefined }))
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) return
-    const seq = ++optionsSeq.current
+    const issuedFor = ++generation.current
+    // Until the answer for this date arrives, the old options are not this date's.
+    setAsOf((a) => ({ ...a, status: 'pending' }))
+    if (!isUsableDate(next)) return
     const result = await readFacts(next)
-    if (seq !== optionsSeq.current || !result.ok) return
-    const allowed = result.data.data.allowedOvertimeRegimes
-    setOptions({ agreementCode: result.data.data.agreementCode ?? null, allowed })
-    setRegime((r) => (allowed.includes(r) ? r : ''))
+    if (issuedFor !== generation.current) return
+    if (!result.ok) {
+      setAsOf((a) => ({ ...a, status: 'failed' }))
+      return
+    }
+    const facts = result.data.data
+    const allowed = facts.allowedOvertimeRegimes
+    const recordedThen = facts.overtimeRegime ?? null
+    setAsOf({ status: 'ready', agreementCode: facts.agreementCode ?? null, allowed, regime: recordedThen })
+    // Keep a choice the new set still allows; otherwise the regime recorded for that date; otherwise none.
+    setRegime((r) => (allowed.includes(r) ? r : recordedThen != null && allowed.includes(recordedThen) ? recordedThen : ''))
   }
 
   const save = async () => {
     setSaving(true)
     setMessage(null)
     setFieldErrors({})
+    const issuedFor = generation.current
     const version = current?.liveVersion ?? parseVersionFromETag(etag)
     const body = { effectiveFrom: date, overtimeRegime: regime || null, onFlexScheme: flex === 'true' }
     const result =
@@ -170,6 +215,7 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
             ifMatch: formatVersionAsIfMatch(version),
             body,
           })
+    if (issuedFor !== generation.current) return
     if (result.ok) {
       const reloaded = await reload()
       setMessage(reloaded ? { text: 'Oplysningerne om overarbejde og flex er gemt.', error: false } : null)
@@ -183,11 +229,12 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
         if (key == null) unplaced = true
         else errors[key] ??= hrFactsCodeText(f.code, f.nearestValid)
       }
+      focusAfterRefusal.current = Object.keys(errors).length > 0
       setFieldErrors(errors)
       if (unplaced) setMessage({ text: UNPLACEABLE_REFUSAL, error: true })
     } else if (result.status === 412 || (result.status === 409 && (result.body as { currentVersion?: number } | undefined)?.currentVersion != null)) {
-      await reload()
-      setMessage({ text: CHANGED, error: true })
+      const reloaded = await reload()
+      setMessage(reloaded ? { text: CHANGED, error: true } : null)
     } else if (result.status === 409) {
       setMessage({
         text: 'Medarbejderen er flyttet til en anden institution i mellemtiden. Genindlæs siden.',
@@ -208,8 +255,27 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
   const recorded = current?.overtimeRegime ?? null
   const seeded = current?.liveEffectiveFrom == null || current.liveEffectiveFrom === SEEDED_ANCHOR
   const min = seeded ? undefined : (current?.liveEffectiveFrom ?? undefined)
-  const noAgreement = options.agreementCode == null
-  const canSave = !inputsOff && flex !== '' && date !== '' && !(recorded != null && regime === '')
+  const optionsReady = asOf.status === 'ready'
+  const noAgreement = optionsReady && asOf.agreementCode == null
+  const noRegimes = optionsReady && asOf.agreementCode != null && asOf.allowed.length === 0
+  // "Mangler" is offered only where nothing is recorded at the form's date AND none today: the server
+  // reads a value its agreement does not allow on a date as null, and clearing today's valid record from
+  // such a date must stay refused.
+  const offerEmpty = asOf.regime == null && recorded == null
+  const needsPlaceholder = optionsReady && !offerEmpty && regime === ''
+  const canPick = optionsReady && !noAgreement && !noRegimes
+  const localDateError: string | null =
+    date === '' || !isUsableDate(date) || today == null
+      ? null
+      : date > today
+        ? hrFactsCodeText('EFFECTIVE_FROM_NOT_TODAY_OR_PAST')
+        : min != null && date < min
+          ? hrFactsCodeText('BEFORE_CURRENT_ROW', [min])
+          : null
+  const dateOk = isUsableDate(date) && localDateError == null
+  const dateErrorText = fieldErrors.date ?? localDateError
+  const canSave = !inputsOff && optionsReady && flex !== '' && dateOk && (regime !== '' || offerEmpty)
+  const readFailed = loadState === 'failed' || asOf.status === 'failed'
 
   return (
     <section className={styles.section} aria-labelledby="pd-hrf-heading">
@@ -221,7 +287,7 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
       </div>
 
       <div role="status" data-testid="pd-hrf-status">
-        {loadState === 'failed' && 'Oplysningerne kunne ikke hentes. Prøv igen.'}
+        {readFailed && READ_FAILED}
         {loadState === 'noAccess' && NO_ACCESS_READ}
         {message && (
           <div className={message.error ? styles.sectionError : undefined} data-testid="pd-hrf-message">
@@ -230,8 +296,9 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
         )}
       </div>
 
-      {current && (
+      {(current || today == null) && (
         <>
+          {current && (
           <div className={styles.formField} data-testid="pd-hrf-current">
             <div className={styles.staticValue}>
               {recorded ? (
@@ -252,6 +319,7 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
               {current.onFlexScheme == null ? 'Ikke registreret' : current.onFlexScheme ? 'Ja' : 'Nej'}
             </div>
           </div>
+          )}
 
           <div className={styles.formField}>
             <label className={styles.formLabel} htmlFor="pd-hrf-regime">
@@ -265,14 +333,25 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
                 setRegime(e.target.value)
                 setFieldErrors((f) => ({ ...f, regime: undefined }))
               }}
-              disabled={inputsOff || noAgreement}
+              disabled={inputsOff || !optionsReady || noAgreement || noRegimes}
               aria-invalid={fieldErrors.regime ? true : undefined}
-              aria-describedby={describedBy(fieldErrors.regime && 'pd-hrf-regime-error', selfLockNoteId)}
+              aria-describedby={describedBy(
+                fieldErrors.regime && 'pd-hrf-regime-error',
+                needsPlaceholder && canPick && 'pd-hrf-regime-help',
+                noAgreement && 'pd-hrf-no-agreement',
+                noRegimes && 'pd-hrf-no-regimes',
+                selfLockNoteId,
+              )}
               data-testid="pd-hrf-regime"
             >
-              {recorded == null && <option value="">{MISSING}</option>}
+              {offerEmpty && <option value="">{MISSING}</option>}
+              {needsPlaceholder && (
+                <option value="" disabled>
+                  {canPick ? PICK : NOTHING_CHOOSABLE}
+                </option>
+              )}
               {!noAgreement &&
-                options.allowed.map((code) => (
+                asOf.allowed.map((code) => (
                   <option key={code} value={code}>
                     {REGIME_LABELS[code] ?? code}
                   </option>
@@ -283,9 +362,19 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
                 {fieldErrors.regime}
               </div>
             )}
+            {needsPlaceholder && canPick && (
+              <div className={styles.helperText} id="pd-hrf-regime-help" data-testid="pd-hrf-regime-help">
+                {NOT_CHOOSABLE_HERE}
+              </div>
+            )}
             {noAgreement && (
-              <div className={styles.helperText} data-testid="pd-hrf-no-agreement">
+              <div className={styles.helperText} id="pd-hrf-no-agreement" data-testid="pd-hrf-no-agreement">
                 Medarbejderen har ingen overenskomst på den valgte dato, så en ordning kan ikke vælges.
+              </div>
+            )}
+            {noRegimes && (
+              <div className={styles.helperText} id="pd-hrf-no-regimes" data-testid="pd-hrf-no-regimes">
+                {NO_REGIMES}
               </div>
             )}
           </div>
@@ -327,12 +416,13 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
               id="pd-hrf-date"
               type="date"
               value={date}
-              max={today ?? undefined}
-              min={min}
+              // Detached from the drawer's <form> (no form owner): a half-typed date is natively invalid
+              // and would block "Gem ændringer". The limits are checked in code instead of min/max.
+              form="pd-hrf-detached"
               onChange={(e) => void onDateChange(e.target.value)}
               disabled={inputsOff}
-              aria-invalid={fieldErrors.date ? true : undefined}
-              aria-describedby={describedBy('pd-hrf-date-help', fieldErrors.date && 'pd-hrf-date-error', selfLockNoteId)}
+              aria-invalid={dateErrorText ? true : undefined}
+              aria-describedby={describedBy('pd-hrf-date-help', !!dateErrorText && 'pd-hrf-date-error', selfLockNoteId)}
               data-testid="pd-hrf-date"
             />
             <div className={styles.helperText} id="pd-hrf-date-help">
@@ -340,9 +430,9 @@ export function HrFactsSection({ employeeId, today, disabled = false, selfLockNo
                 ? `Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag og ikke før ${longDate(min)}, hvor den nuværende registrering begynder.`
                 : 'Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag.'}
             </div>
-            {fieldErrors.date && (
+            {dateErrorText && (
               <div id="pd-hrf-date-error" className={styles.sectionError}>
-                {fieldErrors.date}
+                {dateErrorText}
               </div>
             )}
           </div>

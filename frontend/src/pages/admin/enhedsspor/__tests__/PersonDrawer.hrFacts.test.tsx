@@ -13,15 +13,30 @@
 //  (7) F  Red conditions: no select and no date input to carry a refusal.
 //  (6b) F Red conditions: no section inputs to be enabled.
 //  (8) R  Regression pin: a non-HR actor sees no section and no HR-facts request is sent.
+// FU-1 (C1-R1, Step 5a cycle 1) facts, each with its kind and its red condition on 59bee5dd's section:
+//  (a1) F Red conditions: a future date leaves Save enabled and shows no text.
+//  (a2) F Red conditions: a date before the live row's start leaves Save enabled and shows no text.
+//  (a3) F Red conditions: the native min on the date input blocks the drawer's own submit.
+//  (b1) F Red conditions: Save and the select stay enabled while the as-of read is pending.
+//  (b2) F Red conditions: a failed as-of read shows no text and leaves Save enabled.
+//  (b3) R Regression pin: a deferred answer for an earlier date never changes a form saved since.
+//  (c)  F Red conditions: "Mangler" is offered and OVERTIME is not preselected at 2026-03-16.
+//  (d)  F Red conditions: the select shows the first allowed option, not the placeholder, and Save is enabled.
+//  (e)  F Red conditions: no placeholder text and no (e2) sentence exist.
+//  (f)  F Red conditions: the "reloaded" sentence shows although the re-read answered 500.
+//  (g)  F Red conditions: focus stays on the Save button.
+//  (h)  F Red conditions: no HR inputs are rendered without a resolved today.
+//  (i1)-(i6) R Pins for the request bodies, the refreshed version header and the refusal texts.
 // Every case first waits until `ep-email` is enabled (each input is disabled while the drawer loads).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within, render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import { orgsFromForest } from '../personDrawerData'
 import { PersonDrawer } from '../PersonDrawer'
+import { HrFactsSection } from '../../editPerson/HrFactsSection'
 import { renderWithCalendar } from '../../../../test/renderWithCalendar'
 
 const auth = vi.hoisted(() => ({ employeeId: 'SOMEONE_ELSE', role: 'LocalHR' }))
@@ -106,10 +121,14 @@ const NO_ROW = { ...SEEDED, overtimeRegime: null, onFlexScheme: null, effectiveF
 let facts: Record<string, unknown>
 let factsForDate: Record<string, Record<string, unknown>>
 let putResult: Response | null
+let readOverride: Response | null
+let gates: Record<string, Promise<void> | undefined>
 
 function setupRouter() {
   calls = []
   putResult = null
+  readOverride = null
+  gates = {}
   factsForDate = {}
   mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
@@ -124,6 +143,8 @@ function setupRouter() {
     if (url.includes('/hr-facts')) {
       if (method === 'PUT') return putResult ?? res(200, { employeeId: 'EMP1', version: 2 }, '"2"')
       const asOf = new URL(url, 'http://x').searchParams.get('asOf') ?? ''
+      if (gates[asOf]) await gates[asOf]
+      if (readOverride) return readOverride
       return res(200, factsForDate[asOf] ?? facts, facts.liveVersion != null ? `"${facts.liveVersion}"` : undefined)
     }
     if (url.includes('/employee-profiles/') && method === 'GET') {
@@ -252,6 +273,7 @@ describe('PersonDrawer — TASK-14837 the HR-facts section (AC-C11g)', () => {
     await waitFor(() => expect(hrCalls('GET').some((c) => c.url.includes('asOf=2026-04-06'))).toBe(true))
     await waitFor(() =>
       expect(optionTexts()).toEqual([
+        'Vælg en ordning',
         'Merarbejde: krav på godtgørelse',
         'Merarbejde: godtgørelse efter skøn',
         'Ingen godtgørelse for merarbejde',
@@ -261,7 +283,7 @@ describe('PersonDrawer — TASK-14837 the HR-facts section (AC-C11g)', () => {
     factsForDate['2026-01-05'] = { ...JONAS, asOf: '2026-01-05', agreementCode: null, allowedOvertimeRegimes: [] }
     fireEvent.change(screen.getByTestId('pd-hrf-date'), { target: { value: '2026-01-05' } })
     expect(await screen.findByText(NO_AGREEMENT)).toBeInTheDocument()
-    expect(optionTexts()).toEqual([])
+    expect(optionTexts()).toEqual(['Ingen ordning kan vælges'])
   })
 
   it('(4) F: save sends the exact request (If-Match, the chosen values and date)', async () => {
@@ -271,6 +293,7 @@ describe('PersonDrawer — TASK-14837 the HR-facts section (AC-C11g)', () => {
     fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
     fireEvent.change(screen.getByTestId('pd-hrf-date'), { target: { value: '2026-04-06' } })
     await waitFor(() => expect(hrCalls('GET').some((c) => c.url.includes('asOf=2026-04-06'))).toBe(true))
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-save')).toBeEnabled())
     fireEvent.click(screen.getByTestId('pd-hrf-save'))
     await waitFor(() => expect(hrCalls('PUT')).toHaveLength(1))
     expect(hrCalls('PUT')[0].url).toContain('/api/admin/employees/EMP1/hr-facts')
@@ -298,21 +321,20 @@ describe('PersonDrawer — TASK-14837 the HR-facts section (AC-C11g)', () => {
     expect(before).toBeGreaterThan(0)
   })
 
-  it("(5) F: the date's max is today, its min the live row's start; no min for a seeded row", async () => {
+  it("(5) F: the helper names today and the live row's start as the limits; the input carries no native limits", async () => {
     renderEdit()
     await waitForSection()
     const date = screen.getByTestId('pd-hrf-date')
-    expect(date.getAttribute('max')).toBe(TODAY)
-    expect(date.getAttribute('min')).toBe('2026-03-02')
+    expect(date.hasAttribute('max')).toBe(false)
+    expect(date.hasAttribute('min')).toBe(false)
     expect(screen.getByText(/ikke før 2\. marts 2026, hvor den nuværende registrering begynder\./)).toBeInTheDocument()
   })
 
-  it('(5b) F: a seeded row sets no min and shows the helper without a lower limit', async () => {
+  it('(5b) F: a seeded row shows the helper without a lower limit', async () => {
     facts = SEEDED
     renderEdit()
     await waitForSection()
     const date = screen.getByTestId('pd-hrf-date')
-    expect(date.getAttribute('max')).toBe(TODAY)
     expect(date.hasAttribute('min')).toBe(false)
     expect(screen.getByText('Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag.')).toBeInTheDocument()
   })
@@ -377,5 +399,263 @@ describe('PersonDrawer — TASK-14837 the HR-facts section (AC-C11g)', () => {
     await waitForLoaded()
     expect(screen.queryByRole('heading', { name: HEADING })).toBeNull()
     expect(hrCalls()).toHaveLength(0)
+  })
+})
+
+describe('PersonDrawer — TASK-14836 FU-1 (C1-R1): the section validates and follows its own form', () => {
+  const setDate = (v: string) => fireEvent.change(screen.getByTestId('pd-hrf-date'), { target: { value: v } })
+  const regimeSelect = () => screen.getByTestId('pd-hrf-regime') as HTMLSelectElement
+  const shownOption = () => regimeSelect().selectedOptions[0]?.textContent
+  const NO_AGREEMENT_DAY = { ...JONAS, asOf: '2026-01-05', agreementCode: null, allowedOvertimeRegimes: [], overtimeRegime: null }
+  const AC_DAY = { ...SEEDED, asOf: '2026-04-06' }
+  const READ_FAILED = 'Oplysningerne kunne ikke hentes. Prøv igen.'
+  const CHANGED = 'Oplysningerne er ændret i mellemtiden. De er indlæst igen; kontrollér dem, og gem igen.'
+
+  it('(a1) F: a date after today shows the ruled text, marks the field, disables Save and sends no PUT', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    setDate('2026-11-11')
+    expect(await screen.findByText('Datoen kan ikke ligge efter i dag.')).toBeInTheDocument()
+    expect(screen.getByTestId('pd-hrf-date').getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByTestId('pd-hrf-date').getAttribute('aria-describedby')).toContain('pd-hrf-date-error')
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(hrCalls('PUT')).toHaveLength(0)
+  })
+
+  it("(a2) F: a date before the live row's start shows the ruled text, disables Save and sends no PUT", async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    setDate('2026-03-01')
+    expect(await screen.findByText('Datoen kan tidligst være 2. marts 2026.')).toBeInTheDocument()
+    expect(screen.getByTestId('pd-hrf-date').getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(hrCalls('PUT')).toHaveLength(0)
+  })
+
+  it("(a3) F: with an invalid HR date in place, the drawer's own save still submits", async () => {
+    renderEdit()
+    await waitForSection()
+    setDate('2026-03-01')
+    expect(await screen.findByText('Datoen kan tidligst være 2. marts 2026.')).toBeInTheDocument()
+    expect(screen.getByTestId('pd-hrf-date').getAttribute('form')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Gem ændringer' }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.url.includes('/users/EMP1'))).toBe(true))
+  })
+
+  it('(b1) F: while the as-of read is pending the select and Save are disabled, then enabled by the answer', async () => {
+    let release!: () => void
+    gates['2026-04-06'] = new Promise<void>((r) => (release = r))
+    factsForDate['2026-04-06'] = { ...JONAS, asOf: '2026-04-06' }
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    expect(screen.getByTestId('pd-hrf-save')).toBeEnabled()
+    setDate('2026-04-06')
+    await waitFor(() => expect(hrCalls('GET').some((c) => c.url.includes('asOf=2026-04-06'))).toBe(true))
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+    expect(regimeSelect()).toBeDisabled()
+    release()
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-save')).toBeEnabled())
+    expect(regimeSelect()).toBeEnabled()
+  })
+
+  it('(b2) F: a failed as-of read shows the ruled text and keeps Save and the select disabled', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    readOverride = res(500, { error: 'boom' })
+    setDate('2026-04-06')
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-status').textContent).toContain(READ_FAILED))
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+    expect(regimeSelect()).toBeDisabled()
+  })
+
+  it('(b3) R: a deferred answer for an earlier date changes nothing in a form saved since', async () => {
+    let release!: () => void
+    gates['2026-04-06'] = new Promise<void>((r) => (release = r))
+    factsForDate['2026-04-06'] = { ...AC_DAY }
+    renderEdit()
+    await waitForSection()
+    setDate('2026-04-06')
+    await waitFor(() => expect(hrCalls('GET').some((c) => c.url.includes('asOf=2026-04-06'))).toBe(true))
+    setDate(TODAY)
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-save')).toBeEnabled())
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(await screen.findByText('Oplysningerne om overarbejde og flex er gemt.')).toBeInTheDocument()
+    release()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(optionTexts()).toEqual(['Overarbejde: ret til overarbejdsbetaling', 'Undtaget fra reglerne om overarbejde'])
+    expect(regimeSelect().value).toBe('OVERTIME')
+  })
+
+  it('(c) F: a regime valid at the form date is preselected there and "Mangler" is not offered', async () => {
+    facts = { ...SEEDED, asOf: TODAY, overtimeRegime: null, effectiveFrom: '2026-03-02', liveEffectiveFrom: '2026-03-02' }
+    factsForDate['2026-03-16'] = { ...JONAS, asOf: '2026-03-16' }
+    renderEdit()
+    await waitForSection()
+    expect(optionTexts()[0]).toBe(MISSING)
+    setDate('2026-03-16')
+    await waitFor(() => expect(regimeSelect().value).toBe('OVERTIME'))
+    expect(optionTexts()).not.toContain(MISSING)
+    expect(shownOption()).toBe('Overarbejde: ret til overarbejdsbetaling')
+  })
+
+  it('(d) F: the select shows what the form holds: the placeholder and helper on an agreement that cannot hold the regime, the regime again on return', async () => {
+    factsForDate['2026-04-06'] = { ...AC_DAY }
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    expect(regimeSelect().value).toBe('OVERTIME')
+    expect(shownOption()).toBe('Overarbejde: ret til overarbejdsbetaling')
+    expect(screen.getByTestId('pd-hrf-save')).toBeEnabled()
+
+    setDate('2026-04-06')
+    await waitFor(() => expect(shownOption()).toBe('Vælg en ordning'))
+    expect(regimeSelect().value).toBe('')
+    expect(regimeSelect().selectedOptions[0].disabled).toBe(true)
+    expect(optionTexts()).not.toContain(MISSING)
+    const help = screen.getByTestId('pd-hrf-regime-help')
+    expect(help.textContent).toBe(
+      'Den registrerede ordning kan ikke vælges for den overenskomst, medarbejderen har på den valgte dato. Vælg en anden ordning.',
+    )
+    expect(regimeSelect().getAttribute('aria-describedby')).toContain('pd-hrf-regime-help')
+    expect(regimeSelect().getAttribute('aria-invalid')).toBeNull()
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+
+    setDate(TODAY)
+    await waitFor(() => expect(regimeSelect().value).toBe('OVERTIME'))
+    expect(shownOption()).toBe('Overarbejde: ret til overarbejdsbetaling')
+    expect(screen.queryByTestId('pd-hrf-regime-help')).toBeNull()
+    expect(screen.getByTestId('pd-hrf-save')).toBeEnabled()
+  })
+
+  it('(e) F: nothing to choose shows "Ingen ordning kan vælges" (no agreement) or the no-regimes sentence, with Save disabled', async () => {
+    factsForDate['2026-01-05'] = NO_AGREEMENT_DAY
+    factsForDate['2026-02-02'] = { ...JONAS, asOf: '2026-02-02', agreementCode: 'ZZ', allowedOvertimeRegimes: [], overtimeRegime: null }
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+
+    setDate('2026-01-05')
+    await waitFor(() => expect(shownOption()).toBe('Ingen ordning kan vælges'))
+    expect(regimeSelect()).toBeDisabled()
+    expect(screen.getByTestId('pd-hrf-no-agreement')).toBeInTheDocument()
+    expect(screen.queryByTestId('pd-hrf-regime-help')).toBeNull()
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+
+    setDate('2026-02-02')
+    expect((await screen.findByTestId('pd-hrf-no-regimes')).textContent).toBe(
+      'Der findes ingen ordninger for den overenskomst, medarbejderen har på den valgte dato, så en ordning kan ikke vælges.',
+    )
+    expect(regimeSelect()).toBeDisabled()
+    expect(shownOption()).toBe('Ingen ordning kan vælges')
+    expect(screen.getByTestId('pd-hrf-save')).toBeDisabled()
+  })
+
+  it('(f) F: a 412 whose re-read fails shows the read-failed text, never the reloaded sentence', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    putResult = res(412, { error: 'Version mismatch' })
+    readOverride = res(500, { error: 'boom' })
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(screen.getByTestId('pd-hrf-status').textContent).toContain(READ_FAILED))
+    expect(screen.queryByText(CHANGED)).toBeNull()
+  })
+
+  it('(g) F: after a refused save the first invalid field has focus', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-yes'))
+    putResult = res(400, { fields: [{ field: 'OvertimeRegime', code: 'NOT_ALLOWED_FOR_AGREEMENT', nearestValid: [] }] })
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(document.activeElement).toBe(regimeSelect()))
+  })
+
+  it('(h) F: with no resolved today the inputs are rendered disabled', async () => {
+    // The drawer itself cannot mount without a calendar (other sections need it), so the section is rendered alone.
+    render(<HrFactsSection employeeId="EMP1" today={null} />)
+    await screen.findByRole('heading', { name: HEADING })
+    for (const id of ['pd-hrf-regime', 'pd-hrf-flex-yes', 'pd-hrf-flex-no', 'pd-hrf-date', 'pd-hrf-save']) {
+      expect(screen.getByTestId(id), id).toBeDisabled()
+    }
+    expect(hrCalls('GET')).toHaveLength(0)
+  })
+
+  it('(i1) R: the no-row save sends exactly the date, a null regime and the flex choice', async () => {
+    facts = NO_ROW
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-yes'))
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(hrCalls('PUT')).toHaveLength(1))
+    expect(hrCalls('PUT')[0].body).toEqual({ effectiveFrom: TODAY, overtimeRegime: null, onFlexScheme: true })
+  })
+
+  it('(i2) R: after a 412 the next save sends the refreshed version and shows the refreshed values', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    putResult = res(412, { error: 'Version mismatch' })
+    facts = { ...JONAS, liveVersion: 2, onFlexScheme: false, overtimeRegime: 'EXEMPT' }
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(await screen.findByText(CHANGED)).toBeInTheDocument()
+    await waitFor(() => expect(regimeSelect().value).toBe('EXEMPT'))
+    expect((screen.getByTestId('pd-hrf-flex-no') as HTMLInputElement).checked).toBe(true)
+    putResult = null
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(hrCalls('PUT')).toHaveLength(2))
+    expect(hrCalls('PUT')[1].headers['If-Match']).toBe('"2"')
+    expect(hrCalls('PUT')[1].body).toEqual({ effectiveFrom: TODAY, overtimeRegime: 'EXEMPT', onFlexScheme: false })
+  })
+
+  it('(i3) R: saving unchanged values is sent and announced as saved', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-yes'))
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(hrCalls('PUT')).toHaveLength(1))
+    expect(hrCalls('PUT')[0].body).toEqual({ effectiveFrom: TODAY, overtimeRegime: 'OVERTIME', onFlexScheme: true })
+    expect(await screen.findByText('Oplysningerne om overarbejde og flex er gemt.')).toBeInTheDocument()
+  })
+
+  it('(i4) R: BEFORE_CURRENT_ROW puts its text on the date field', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    putResult = res(400, { fields: [{ field: 'EffectiveFrom', code: 'BEFORE_CURRENT_ROW', nearestValid: ['2026-03-09'] }] })
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    await waitFor(() => expect(document.getElementById('pd-hrf-date-error')?.textContent).toBe('Datoen kan tidligst være 9. marts 2026.'))
+    expect(screen.getByTestId('pd-hrf-date').getAttribute('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(screen.getByTestId('pd-hrf-date'))
+  })
+
+  it('(i5) R: 403 and 404 on save show their Danish texts', async () => {
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-no'))
+    putResult = res(403, { error: 'Forbidden' })
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(await screen.findByText('Du har ikke adgang til at ændre disse oplysninger.')).toBeInTheDocument()
+    putResult = res(404, { error: 'Not found' })
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(await screen.findByText('Medarbejderen findes ikke længere.')).toBeInTheDocument()
+  })
+
+  it('(i6) R: a create 409 carrying currentVersion reloads and says the facts changed', async () => {
+    facts = NO_ROW
+    renderEdit()
+    await waitForSection()
+    fireEvent.click(screen.getByTestId('pd-hrf-flex-yes'))
+    putResult = res(409, { currentVersion: 3 })
+    facts = { ...JONAS, liveVersion: 3 }
+    fireEvent.click(screen.getByTestId('pd-hrf-save'))
+    expect(await screen.findByText(CHANGED)).toBeInTheDocument()
+    await waitFor(() => expect(regimeSelect().value).toBe('OVERTIME'))
   })
 })
