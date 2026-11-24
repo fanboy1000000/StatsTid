@@ -4313,3 +4313,29 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 **TASK-14851 dispatched** (`backend-infrastructure`, the QUAL-268 repair route) on `319f8b68`. It is built early on its own branch, as ruling 43 allows.
 
 **TASK-14850 dispatched** (`ux`, the drawer's transfer date block) on `319f8b68`, after the HR-facts stack's green GATE.
+
+**TASK-14850 returned** `8471e464` (`ux`) on `319f8b68` (report `.claude/reviews/S148-TASK-14850-report.md`).
+- **While the organisation changes,** the drawer offers no date after today: `max` is today, and the ruled NR-P4 block sentence appears with the save disabled.
+- **The two transfer refusals are mapped to ruled Danish,** the earliest date included.
+- **The picker's label, helper and parenthesis are made true** (BC-6).
+- **The self lock (X7) is untouched.**
+- **Tests:** AC-C13j (1) F and (2) R; AC-C13u F (two rows).
+
+**TASK-14850, cycle 1.** The plan's row asks only for Fable; Codex was also run, because the owner has asked that both lenses check work.
+- **Codex c1: APPROVED-WITH-WARNINGS.** W: `BEFORE_CURRENT_ORGANISATION` without `nearestValid` falls back to the raw body.
+- **Fable c1: APPROVED-WITH-WARNINGS.**
+  - W1: the three rewritten date-field texts are pinned by no test.
+  - NOTEs: the merged `aria-describedby` is untested; the base showed the raw response body, not an English sentence; the dateless refusal; the block is not announced; an emptied date (pre-existing); two loose remarks.
+- **5α c1: PASS.**
+- **Rulings c1** (`.claude/reviews/S148-TASK-14850-5a-rulings-c1.md`):
+  - **C1-R1, FU-1 (`ux`):**
+    - the dateless refusal shows the house's ruled "Værdien kunne ikke gemmes.";
+    - the three texts are pinned;
+    - the merged `aria-describedby` gets a fact;
+    - `role="alert"` on the block, as the house pattern;
+    - five comments are made true;
+    - the RED quote.
+  - **C1-R2 accepted, with register candidates for the close:**
+    - an emptied date field;
+    - every other users-PUT 400 shows the raw response body (pre-existing).
+- **FU-1 dispatched.** Cycles used: 1 of 5.
