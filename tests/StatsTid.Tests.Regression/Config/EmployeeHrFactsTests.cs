@@ -172,6 +172,67 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
         AssertHkAgreement(mar1);
     }
 
+    /// <summary>
+    /// <b>F (CI).</b> Jonas (HK) has <c>OVERTIME</c>/on flex from Monday 2 March 2026 (version 1); Lise saves
+    /// <c>EXEMPT</c>/off flex with the same date and <c>If-Match: "1"</c>. HR corrects the record in place: one row,
+    /// the same <c>facts_id</c>, version 2, still open; ETag <c>"2"</c>; one audit row <c>UPDATED</c> (versions 1 to 2, the
+    /// old values in <c>previous_data</c>, the new in <c>new_data</c>, Lise as the actor); one event <c>UPDATED</c> with no
+    /// <c>precedingFactsId</c> and <c>versionBefore</c> 1; one projection row for STY01.
+    /// <para><b>Product code between the readings:</b> the PUT's update-in-place branch (date equal to the open row's start).</para>
+    /// <para><b>Red conditions (F).</b> On <c>1cc0cb1d</c> the route answers 404, so the status assertion fails first. On a
+    /// route that superseded or inserted instead of updating, the row count is 2 (or the <c>facts_id</c> differs).</para>
+    /// </summary>
+    [Fact]
+    public async Task SameDateSave_UpdatesInPlace_Audited()
+    {
+        var jonas = await SeedPersonWithLiveRowAsync("2026-03-02", "OVERTIME", flex: true);
+        var original = Assert.Single(await ReadRowsAsync(jonas));
+        var auditBefore = await ReadAuditAsync(jonas);
+        var eventsBefore = await ReadEventsAsync(jonas);
+
+        using var rsp = await PutAsync(LiseClient(), jonas,
+            new { effectiveFrom = "2026-03-02", overtimeRegime = "EXEMPT", onFlexScheme = false }, ifMatch: "1");
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("\"2\"", rsp.Headers.ETag?.Tag);
+        var row = Assert.Single(await ReadRowsAsync(jonas));
+        Assert.Equal(original.FactsId, row.FactsId);
+        Assert.Equal(("EXEMPT", (bool?)false, new DateOnly(2026, 3, 2), (DateOnly?)null, 2L),
+            (row.Regime, row.Flex, row.From, row.To, row.Version));
+
+        var audit = await ReadAuditAsync(jonas);
+        Assert.Equal(auditBefore.Count + 1, audit.Count);
+        Assert.Equal(("UPDATED", (long?)1L, 2L, Lise),
+            (audit[^1].Action, audit[^1].VersionBefore, audit[^1].VersionAfter, audit[^1].ActorId));
+        await using (var conn = new NpgsqlConnection(Cs))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "SELECT previous_data::text, new_data::text FROM employee_hr_facts_audit WHERE employee_id = @u AND action = 'UPDATED'", conn);
+            cmd.Parameters.AddWithValue("u", jonas);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync(), "no UPDATED audit row");
+            var previous = JsonDocument.Parse(reader.GetString(0)).RootElement;
+            var current = JsonDocument.Parse(reader.GetString(1)).RootElement;
+            Assert.Equal("OVERTIME", previous.GetProperty("overtimeRegime").GetString());
+            Assert.True(previous.GetProperty("onFlexScheme").GetBoolean());
+            Assert.Equal(1L, previous.GetProperty("version").GetInt64());
+            Assert.Equal("EXEMPT", current.GetProperty("overtimeRegime").GetString());
+            Assert.False(current.GetProperty("onFlexScheme").GetBoolean());
+            Assert.Equal(2L, current.GetProperty("version").GetInt64());
+            Assert.False(await reader.ReadAsync(), "more than one UPDATED audit row");
+        }
+
+        var events = await ReadEventsAsync(jonas);
+        Assert.Equal(eventsBefore.Count + 1, events.Count);
+        var updated = events[^1];
+        Assert.Equal("UPDATED", updated.Payload.GetProperty("action").GetString());
+        Assert.True(!updated.Payload.TryGetProperty("precedingFactsId", out var preceding) || preceding.ValueKind == JsonValueKind.Null);
+        Assert.Equal(1L, updated.Payload.GetProperty("versionBefore").GetInt64());
+        Assert.Equal(2L, updated.Payload.GetProperty("versionAfter").GetInt64());
+        await AssertProjectionAsync(updated.EventId, jonas);
+    }
+
     // ═════════════════════════════════════════════════════════════════════════════════════
     //  AC-C11b — self-edit, departed subject, another organisation; plus the consult's access negatives
     // ═════════════════════════════════════════════════════════════════════════════════════
@@ -240,7 +301,7 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
     }
 
     /// <summary>
-    /// <b>F (CI), a Theory over two arms.</b> The person is deactivated (<c>is_active = false</c>) and the actor is Lise:
+    /// <b>F (CI), a Theory over three arms.</b> The person is deactivated (<c>is_active = false</c>) and the actor is Lise:
     /// (1) 403 <c>Target employee not found</c>; the person is active with a last day in March (past the leaver grace
     /// by date) and the actor is Lise: (2) the same reason; the actor is the person, still active, last day before the
     /// clock: (3) 403 <c>A departed employee cannot act on their own record</c>, not the self reason (the validator's
@@ -609,9 +670,9 @@ public sealed class EmployeeHrFactsTests : IClassFixture<DepartedSelfHostFixture
 
     /// <summary>
     /// <b>F (CI)</b> (consult row 12). The same seam with a stale <c>If-Match: "9"</c> on a person with no row: still the
-    /// drift 409 (the guard is before any facts row is read), not 412.
-    /// <para><b>Red conditions (F).</b> On <c>1cc0cb1d</c> 404 (the helper fails naming it). If the facts rows were read
-    /// before the guard the answer would be 412.</para>
+    /// drift 409 (the drift guard is evaluated before the precondition), not 412.
+    /// <para><b>Red conditions (F).</b> On <c>1cc0cb1d</c> 404 (the helper fails naming it). If the precondition were evaluated
+    /// before the drift guard the answer would be 412; the read order is not what this proves.</para>
     /// </summary>
     [Fact]
     public async Task OrganisationChangedUnderTheLock_StaleIfMatch_StillDrift409()

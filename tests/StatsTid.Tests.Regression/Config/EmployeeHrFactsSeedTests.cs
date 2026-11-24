@@ -19,7 +19,7 @@ namespace StatsTid.Tests.Regression.Config;
 /// </para>
 ///
 /// <para>
-/// <b>Kind F (CI, Docker; not run locally).</b> Red conditions: on <c>1cc0cb1d</c> the seed does not exist,
+/// <b>Kind F (CI, Docker; CI-pending).</b> Red conditions: on <c>1cc0cb1d</c> the seed does not exist,
 /// <c>employee_hr_facts</c> is empty, and the first assertion (19 rows) fails with 0. The re-apply arm also fails
 /// on any seed written over every user (the test user would have a row). Product code between the readings:
 /// <c>init.sql</c>, applied and re-applied.
