@@ -4499,3 +4499,25 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 **CI-W6 is next:** evidence only, on a `ci/s148-w6` branch with a draft PR, closed unmerged when judged. Wave 6 has no CI mutation run (ruling 40).
 
 **CI-W6 started** (run 45582399602, draft PR #69 on `ci/s148-w6` at `b75c3fb0`, headSha confirmed). It is evidence only and is closed unmerged when judged. Wave 7 (TASK-14839 + -T) is dispatched after CI-W6 is judged green.
+
+**CI-W6 judged, 2026-11-25: green on every job.** Run 45582399602, draft PR #69, headSha `b75c3fb0` confirmed. Results were read from the trx files by name, not from the job colour.
+- **Counts:**
+  - Unit 1848 of 1848; DemoSeed 170 of 170; **Regression 2969 of 2969** (CI-W5: 2795), the Docker-gated facts included. None failed and none was left unrun.
+  - Smoke 10 of 10; E2E green; frontend-build green with **vitest 122 files and 1405 tests**, the same as the local GATE on `ee3c7805`.
+  - gitleaks and lizard green. The docs job: `check_docs.py`, `check_endpoint_contracts.py` (all 6 registered contract tests found) and `check_openapi_convention.py` passed their hard checks. The design-sync gate warned (4 files drifted); it is advisory by the owner's ruling of 2026-11-24.
+- **The plan's CI-W6 row (PLAN:756), all green:**
+  - AC-C4a, -4e (`LocalProfileNewColumnsTests`, 21/21) and AC-C4b, -4f, -4g (`LocalProfileValidationTests`: Regression 13/13, Unit 100/100);
+  - AC-C10a, -10b, -10d (`CustomaryDaysTests` 2/2, `CustomaryDaysAccessTests` 42/42, `CustomaryDaysValidationTests` 21/21);
+  - AC-C11a … f (`EmployeeHrFactsTests` 36/36 with `SameDateSave_UpdatesInPlace_Audited`, `EmployeeHrFactsSeedTests` 1/1, Unit `EmployeeHrFactsValueTests` 2/2, the contract test `HrFacts_Get_SchemaMatchesRuntime`);
+  - AC-Q268a–e, -i, -j (`ProfileRecreateRouteTests` 30/30), -f (`PayInputsLockCensusTests` 21/21), -g (`ProfileRecreateHandOffTests`), -h (`ProfileRecreatePayrollTests`), -k (`S148ProfileRecreateSpecRuntimeTests`, with `Get_NoCurrentProfile_404BodyMatchesSpec`);
+  - FU-3's facts 1a–1d, 2a and 7a, by name, all green;
+  - the vitest files of AC-C4c, -4h, -4i, AC-S0-8c, AC-C10e, AC-C11g, AC-C2v, -2w, AC-C13j, -13u and AC-Q268l, -m all ran inside the 1405.
+- **The pins and carried watch items:**
+  - **PIN-1:** `DemoPayLinesPinTests` 2/2; no golden moved. `ConfigSeedParityTests` green.
+  - The 31-key response pin (`S119ProfileSpecRuntimeTests` 8/8) and the pre-S22 migration fact (`EndExclusiveMigrationTests` 4/4).
+  - QUAL-263's parity fact `DatedRecordTimelineParityTests.EveryDay_OnEqualsTheResolver_OverlapAndThreeGapKinds`; QUAL-267's `EmployeeProfileSeederClosedProfileTests` (3/3).
+  - `OrganisationDriftGuardTests` 7/7: the `ProfileClose_…` fact that failed once in a loaded local run passed in CI.
+- **Status change:** wave 6's Docker facts move from "CI-pending" to "CI-verified" (run 45582399602). QUAL-263, QUAL-267 and QUAL-268 are marked CI-verified, with QUAL-266's answer, SEC-061's fix and HRP-015's note. ADR-034's "CI-pending until CI-W5" line gains its CI-W5 note (missed at CI-W5).
+- **Timing:** build-and-test took 2 h 17 min (Regression alone 2 h 15 min), about a minute longer than CI-W5's 2 h 16 min. Recorded, not judged.
+- **PR #69 is closed unmerged**, and `ci/s148-w6` is deleted.
+- **Wave 7 next:** TASK-14839 (`backend-infrastructure`, the demo world's S148 rows; brief draft 2, adjudicated, plan "final + 32"), then TASK-14839-T.

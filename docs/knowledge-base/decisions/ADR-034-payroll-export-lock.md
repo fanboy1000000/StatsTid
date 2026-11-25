@@ -134,7 +134,7 @@ The Backend reopen **READS** `payroll_export_records` (never writes it — the P
   - `PayInputsLockRaceTests`: both orders, both routes and the 503;
   - `PayrollRecordCoverageTests`;
   - `PayInputsLockTimingTests`.
-- The Docker facts were green on the local runs and are CI-pending until CI-W5.
+- The Docker facts were green on the local runs and were CI-pending until CI-W5. *(CI-verified at CI-W5, run 45280970629, 2026-11-24; this note added 2026-11-25.)*
 
 ### D5 — Reopen lock + corrections-only (OQ-2); the manifest evolves
 When `payroll_export_records` has a row for the period's `(employee, year, month)`, the reopen endpoint returns a discriminated **409** `{kind:"payroll-locked", reason:"Måneden er sendt til lønkørsel — brug en korrektion."}` for **ALL roles** (leader, HR, GlobalAdmin — no recall). The only post-lock path is the ADR-013 retroactive correction (`/recalculate`, GlobalAdmin), which reads its diff baseline from `current_effective_lines` (NOT caller-supplied) and **updates** `current_effective_lines` to the corrected state in the same tx — so a 2nd correction diffs against the 1st correction's result, not the original (avoiding double-counting); `original_lines` stays immutable. A `/recalculate` of a never-exported month is cleanly rejected ("ikke sendt til lønkørsel — genåbn i stedet"). The leader Teamoversigt surfaces `payrollExported` per row (a batched read) and hides the Genåbn control for locked rows, showing a "Sendt til lønkørsel" indicator instead.

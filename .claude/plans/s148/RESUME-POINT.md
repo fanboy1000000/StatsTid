@@ -1,6 +1,12 @@
-# S148 resume point — updated 2026-11-23
+# S148 resume point — updated 2026-11-25
 
-The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 24").
+The Orchestrator's handoff. Read it together with the tail of `docs/sprints/SPRINT-148.md` and `.claude/plans/PLAN-s148.md` ("final + 32").
+
+## NOW (2026-11-25, after the machine restart)
+- **Wave 6 is closed on CI.** CI-W6 was judged green from the trx files (run 45582399602, headSha `b75c3fb0`; Unit 1848, DemoSeed 170, Regression 2969, Smoke 10, vitest 122/1405). PR #69 is closed unmerged and `ci/s148-w6` is deleted. QUAL-263, -267 and -268, SEC-061 and HRP-015's note are marked CI-verified.
+- **Wave 7 next:** TASK-14839 (`backend-infrastructure`, brief `.claude/plans/s148/TASK-14839.md`, draft 2 adjudicated), base = master; then TASK-14839-T (`test-qa`); then 5α plus both lenses, the merge, the GATE, and the last CI run before the sprint close.
+- **Judging a CI run:** `node .claude/reviews/S148-session-helpers/trxjudge.js <trx> <ClassOrMethod> …` prints the counters, every non-passed result, and green/RED/MISSING per name.
+- Everything below this section is the history up to wave 6.
 
 ## Where the work stands
 
