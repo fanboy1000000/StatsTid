@@ -120,8 +120,8 @@ The future Test #1 (catalog ↔ DI registrations ↔ EventSerializer parity) par
 | `UserAgreementCodeChanged` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, old_agreement_code, new_agreement_code, effective_from}` | interface | S44b |
 | `UserAgreementCodeSeeded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{user_id, agreement_code, effective_from, row_version}` | interface | S44b |
 | `UserAgreementCodeSuperseded` | TENANT_TARGETED | `user → users.primary_org_id` | `user_id` | `{predecessor_assignment_id, new_assignment_id, user_id, ...effective_dates, old/new_agreement_code, version_before/after}` | interface | S44b |
-| `EmployeeProfileCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, weeklyNormHours, partTimeFraction, position, effectiveFrom}` | interface | S44c |
-| `EmployeeProfileUpdated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, weeklyNormHours, partTimeFraction, position, versionBefore, versionAfter}` | interface | S44c |
+| `EmployeeProfileCreated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, partTimeFraction, position, effectiveFrom}` | interface | S44c |
+| `EmployeeProfileUpdated` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, partTimeFraction, position, versionBefore, versionAfter}` | interface | S44c |
 | `EmployeeProfileSuperseded` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{predecessorProfileId, newProfileId, employeeId, predecessorEffectiveFrom, newEffectiveFrom, ...}` | interface | S44c |
 | `EmployeeProfileSoftDeleted` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, effectiveTo}` | interface | S44c |
 | `EmployeeProfileScheduledChangeRetired` | TENANT_TARGETED | `employee → users.primary_org_id` | `employee_id` | `{profileId, employeeId, scheduledFrom, retiredBy, …}` — emitted once per scheduled row destroyed by a profile DELETE (owner ruling OQ-5 (a): deleting a profile also retires any scheduled change, **and the retirement must itself be audited** — a row audited into existence must not vanish unrecorded). Distinguished from the delete's own row by a `source` discriminator in the JSONB, because both carry `action = DELETED` and the column is CHECK-constrained to four values (S141 is schema-free) | interface | S141 |
@@ -175,7 +175,7 @@ For reference (these do NOT get rows in audit_projection):
 
 - `TimeEntryRegistered`, `AbsenceRegistered` (high-volume; visible via S27 projections)
 - `TimerCheckedIn`, `TimerCheckedOut` (operational)
-- `NormCheckCompleted`, `FlexBalanceUpdated` (never emitted; deleted in S146 TASK-14607), `SupplementCalculated`, `OvertimeCalculated`, `PeriodCalculationCompleted`, `OvertimeCompensationApplied` (rule-engine internals)
+- `NormCheckCompleted`, `FlexBalanceUpdated` (never emitted; deleted in S146 TASK-14607), `SupplementCalculated`, `OvertimeCalculated`, `PeriodCalculationCompleted` (rule-engine internals); `OvertimeCompensationApplied` (emitted by the Backend's compensate route, `OvertimeEndpoints.cs:713`, with no audit row by design, ADR-018 D3 Pattern C, `:704-705`; the "rule-engine internals" label was wrong, corrected 2026-11-25 from the TASK-14805 report's F-3)
 - `RestPeriodViolationDetected`, `CompensatoryRestGranted` (compliance flags; future revisit)
 - `IntegrationDeliveryTracked` (outbox telemetry)
 - `SegmentManifestCreated` (PCS internals)

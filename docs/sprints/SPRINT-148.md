@@ -4670,3 +4670,78 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **Five more hits outside the spec,** read by the Orchestrator, are true as written: each states the route's retirement as history.
 - **Verified by the Orchestrator:** `git diff -U0` shows only comment lines, apart from `init.sql`'s trailing `--` text and the one test title.
 - **GATE (on `9a1b6e8c`): green.** Build 0 errors, 126 warnings. Unit 1848, DemoSeed 180 and Regression non-Docker 148 passed. The shortcut check reports 22 found, 0 bad. The changed vitest file passed (26 tests).
+
+
+**C-1, the register batch, applied 2026-11-25** (draft `.claude/plans/s148/S148-C1-register-draft.md`, `planner`; report `.claude/reviews/S148-C1-register-draft-report.md`). Every replacement was applied by script only after its `old_str` was checked to occur exactly once.
+- **What changed, in plain words:**
+  - The register rows that S148's wave-1 and wave-2 merges owed but never wrote are now written: the closures, interim notes and re-reads of O-2 to O-9.
+  - The candidates the reviews sent "to the register" are registered or recorded.
+  - Rows that already covered a candidate get a dated note instead of a duplicate.
+- **26 edits to 22 existing rows:**
+  - QUAL-202 CLOSED; QUAL-232's interim; SEC-046's note; QUAL-246, QUAL-237 (with the R-23 note), QUAL-240 and QUAL-231's residual FIXED or closed;
+  - QUAL-239's interim, with F-3's refreshed cites; HRP-013's note (R-19); QUAL-236 FIXED;
+  - QUAL-234's rest arm built (the row stays open for the supplement arm);
+  - SEC-061's location refreshed; QUAL-123's note (O-24: no reader of `WeeklyMaxHoursReferencePeriod`; no new row);
+  - F10 DONE (year overview 728 ms → 386 ms); QUAL-182 closed;
+  - dated notes on QUAL-016, QUAL-195 and QUAL-118 (candidates they already cover);
+  - F9's untrue "TASK-14831 corrected the comment" note corrected (the C-1 sweep's S-42 did it);
+  - HRP-024's sentence; the catalog's `OvertimeCompensationApplied` label and the two employee-profile rows' removed `weeklyNormHours`.
+- **New rows:**
+  - **QUAL-271 … QUAL-279** (all Medium):
+    - QUAL-271, QUAL-272: the compensation-choice PUT's lost update and its missing event;
+    - QUAL-273: the projection rebuild that restores typed rows;
+    - QUAL-274: the from-empty rebuild gap, addendum A1's O-31;
+    - QUAL-275: the unread `SourceStintId`;
+    - QUAL-276: the four private interval-parse copies;
+    - QUAL-277: a month-edge limit;
+    - QUAL-278: Skema is silent on a failed compliance check, owed by "final + 9";
+    - QUAL-279: the position-override page's lost update.
+  - **QUAL-BF-011** (AC-5a's month-level limit, an accepted limit).
+  - **F11** (the Regression suite's CI time: about 75 min → 2 h 15 min).
+  - A security "revisit before production" ledger line (the HR-facts PUT's agreement read, the consult's § 3.2).
+- **The Orchestrator's rulings on the drafter's six questions:**
+  - (1) Teamoversigt's per-line live regions are below the floor.
+  - (2) AC-5a is **QUAL-BF-011**, with its `shortcut(QUAL-BF-011):` comment added by the second comment sweep.
+  - (3) QUAL-276 is Medium. The S131 "a copied family alone reaches High" rule was set for families repeated across many sites, and borderline clusters stayed Medium.
+  - (4) F-2 is its own row, QUAL-272, as the log already ruled.
+  - (5) **QUAL-234 is re-rated Critical → High.** The rest arm that made it Critical is built, and the cell's own text already rated the remaining arm H.
+  - (6) The HR-facts consult's § 3.2 goes to the security ledger line.
+- **Brief contradictions recorded:**
+  - QUAL-232's row said the old route "would answer 422"; it was removed and answers 404 or 405.
+  - "Neither screen shows the compliance error": Teamoversigt does (`TeamOversigt.tsx:320-323`), so QUAL-278 covers Skema only.
+  - Plan cites moved: O-24's `RestPeriodRule.cs:586-596` is now `:623-657`; O-30's are `:125-528` and `:782-807`.
+- **Five more stale remarks** (the drafter's below-floor item 24) go to a **second comment-only sweep**, with QUAL-BF-011's shortcut comment.
+
+**Below the registration floor (recorded, not registered).** Each is Low unless marked. They are kept here so that none is lost. Most are wave-6 UI details, below the register's Medium floor.
+
+Worded for the sprint-log paragraph of that name. Each is Low (L) unless marked; sprint-log lines at `6ab643a7`.
+
+1. **Payroll's "previous month not approved" refusal says "Nothing was calculated, written or exported" also when the export transaction's re-check refuses, after the month's calculation proof was written** (`PriorMonthNotApprovedException.cs:35-39`; the export path `Payroll/Program.cs:560-569`; TASK-14801, log :419). The body is behaviour (a fixed response string), so it is not a comment-sweep item; the class doc's "Either way nothing has been written" (`:17-20`) is, and is not yet in the C-1 sweep spec. Optional register correction: A-20.
+2. **Teamoversigt gives each warning line its own `role="status"` live region** (`TeamOversigt.tsx:309`, `:315`, `:321`, `:326`, `:332`), against the house pattern of one always-mounted region (wave-3 adjudication item 8; log :1423). Accessibility; see Part C (the plan says "register row").
+3. **The agreement editor's publish dialog has `role="dialog"` but no `aria-modal`, focus trap or Escape** (`AgreementConfigEditor.tsx:707-714`; the kit's `Drawer.tsx:4-8` has all three). TASK-14838 adjudication § 3 asked that it be weighed against the floor at close (log :4001): judged Low (one GlobalAdmin dialog).
+4. **The customary-days lock-time 403 writes no log line**, while the scope validator's identical refusal does (`CustomaryDayEndpoints.cs:490-494`; house logging, not the audit trail; log :4111).
+5. **A late success after the date was retyped is not announced** on the customary-days editor (`CustomaryDaysEditor.tsx:395-401`; accepted as C2-R1(b) is written; log :4065).
+6. **`confirm()`'s re-check on the customary-days editor is defence in depth and unpinned** (`CustomaryDaysEditor.tsx:379-381`; log :4076). Test gap.
+7. **On the position-override page, after a failed list re-read "Opret" stays disabled with no retry control, and the error banner has no `role="alert"`** (`PositionOverrideManagement.tsx:127`, `:372`; pre-existing; log :4201).
+8. **On the agreement editor, a failed quiet re-read after a late publish success leaves the old draft on screen** `(unproven)` (C4-R2; log :4144).
+9. **FU-4's two accepted side effects** on the position-override page: a create form reopened during a slow create stays key-locked until the old answer arrives; "Opret" is not held back during a quiet re-read (log :4204-4206).
+10. **Actions the list already knows the server refuses ("Aktiver"/"Opret" while another row of the key is ACTIVE) are not disabled**; the 409 is shown (TASK-14838 rulings c2; log :4048).
+11. **The anchor date `0001-01-01` is shown in ISO form with no worded label** ("since always"); a copy question (log :4049).
+12. **The HR-facts date input's `form="pd-hrf-detached"` names no form**, which does not conform though its behaviour is defined (`HrFactsSection.tsx:426`; log :4352). Found while verifying: the QUAL-268 create form uses the same pattern (`CreateProfilePanel.tsx:195`, `:230`, `:256`, `form="pd-cp-detached"`).
+13. **No retry control behind "Prøv igen"** after a failed HR-facts read (`HrFactsSection.tsx:32`, `:295`); HR recovers by changing the date or reopening the drawer (log :4353).
+14. **"gemt" (saved) stays while HR edits the regime or the flex choice**; only a date change clears it (`HrFactsSection.tsx:337-340`, `:396-399`; Fable c3 NOTE 4; log :4354).
+15. **The HR-facts placeholder's loading arm has no test** (Fable c3 NOTE 1; log :4355).
+16. **Not reachable through the drawer today:** a person change without a remount keeps the previous person's recorded block, and a flex refusal focuses "Ja" (Fable c3 NOTEs 2 and 6; log :4356).
+17. **An emptied date field in the person drawer is not blocked** `(unproven: what the server answers to an empty `effectiveFrom`)` (pre-existing; log :4422).
+18. **Every other 400 on the users PUT shows the raw response body**: the shared helper returns the body text as the error (`frontend/src/lib/api.ts:646-647`; pre-existing, usability; log :4423).
+19. **A malformed `nearestValid` would print "Invalid Date"** `(unproven, pre-existing)` (log :4424).
+20. **The QUAL-268 create form's "later of the two dates" floor is not pinned when both dates exist** (Fable c2 N2; log :4539). Test gap.
+21. **A carry-forward into a zero-length row would raise a category notice HR never named** `(unproven)` (Fable c2 N3; the reviewer found no reachable state, `S148-QUAL268-stack-5a-reviewer-c2.md:56`, `:104`; log :4540).
+22. **A reload of the same person during a pending create re-enables "Gem ændringer"** `(unproven)` (Fable c2 N4; log :4540).
+23. **The employee-profile GET reads "today" twice** (the handler `EmployeeProfileEndpoints.cs:195`, the repository's own clock inside `:242`), so across a Copenhagen midnight the 404 body can describe the next day; at worst a create the PUT then refuses with 409 (negligible; builder and consult agree; log :4541).
+24. **Stale remarks for the comment sweep, not in `.claude/plans/s148/C1-comment-sweep-spec.md` yet:** `EmployeeProfileRepository.cs:591` (also `EmployeeProfileSeeder.cs:147`, `EmployeeEntitlementEligibilityRepository.cs:190`) names `EmployeeProfileRepository.InsertLiveRowAsync`, which does not exist (the builder's F3); the `Today()` doc's stale line cites (`EmployeeProfileRepository.cs:555-577`; F4); `PositionOverrideManagement.tsx:152` and the hook's `hasRows` comment and name (`usePositionOverrides.ts:80-82`; log :4203); `ProjectionBackfillService.cs:17-18`, the file header still naming two tables (the class summary at `:132-139` is already true); `PriorMonthNotApprovedException.cs:17-20` (item 1).
+25. **Whether the employee-profile audit rows should carry `employmentCategory`** `(unproven as a defect)`: the events carry it, the mappers do not project it (`EmployeeProfileCreatedAuditMapper.cs:17-24`); the catalog's stale `weeklyNormHours` is A-22.
+26. **`OrganisationDriftGuardTests.ProfileClose_OrganisationChangedUnderTheLock` failed once in a loaded local run**; it passed in CI-W6 (7/7, run 45582399602). Recorded only; no defect found (log :4472, :4580).
+27. **Not registered by choice, recorded neutrally:** whether the year-end close should try a dated configuration row before refusing when the employee's current key has no open row (Fable N-7 of TASK-14842, "a separate question for the register, if the owner wants it"; log :1095). The existing fail-closed choice stands (ADR-033 D10).
+
+Already in the sprint log, so not repeated: `formatDanishNumber`'s half rounding and the engine's host-culture messages (log :1583-1585); the 48-hour average shown half up (log :1699, its cite `RestPeriodRule.cs:594` is now `:648`).

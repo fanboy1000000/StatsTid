@@ -35,7 +35,8 @@ window away from being unrecoverable.
 | F7 | One extra single-row read per admitted manager–employee pair on the my-reports list and Teamoversigt (S147, TASK-14725) | **OPEN — accepted, revisit** (S147 Step 7a fix; Fable's TASK-14725 review, NOTE 6). See below |
 | F8 | The holiday-balance seed's sum runs on every save that touches an entitlement type, even when the balance row exists (S148, TASK-14842) | **OPEN — accepted, revisit** (both TASK-14842 5a lenses: no merge blocker). See below |
 | F9 | A long configuration publish holds the "pay inputs" lock while it lists the worklist rows it reaches, and every other pay-input writer waiting behind it fails after 30 seconds instead of waiting (S148, TASK-14823) | **OPEN — registered, revisit** (TASK-14823 stack Step 5a cycle 1, ruling R6). See below |
-| F10 | Every weekday resolves its own agreement configuration (no reuse across days): about 135 configuration reads for one Skema month read with a position, about 780 for a year overview (S148, TASK-14825) | **OPEN — registered, revisit** (wave-5 batch-A/B brief adjudication B6; TASK-14825 Step 5a cycle-1 ruling R4). See below |
+| F10 | Every weekday resolves its own agreement configuration (no reuse across days): about 135 configuration reads for one Skema month read with a position, about 780 for a year overview (S148, TASK-14825) | **DONE** S148 (TASK-14828, the T14b stack, merged `b5f167aa`, 2026-11-23) — reuse restored per stretch of unchanged days; CI figures: year overview median 728 ms (CI-W5a) → 386 ms (CI-W5); at CI-W5 a Skema month read 113 ms, a save 47 ms. See below |
+| F11 | The Regression suite's CI step grew from about 75 minutes to about 2 h 15 min during S148, almost all of it container start-up for new Docker test classes run one at a time (S148, CI-W1 to CI-W6) | **OPEN — registered, revisit** (CI-W1 and CI-W1b; carried to the close). See below |
 
 ---
 
@@ -336,7 +337,7 @@ audit row per listed month, all under the lock). Every other taker of `(148, 1)`
 (TASK-14821) and, from TASK-14831, payroll's exports and corrections. But the lock statement
 (`PayInputsLock.AcquireExclusiveAsync`) runs under Npgsql's default 30-second command timeout (no `CommandTimeout` is set
 anywhere in `src`), so a waiter behind a holder longer than 30 seconds fails with a 500 and writes nothing, rather than
-waiting its turn. `PayInputsLock.cs:38-46` says "Blocks until granted"; TASK-14831 corrects that remark (carried).
+waiting its turn. `PayInputsLock.cs:38-46` says "Blocks until granted"; TASK-14831 corrects that remark (carried). *2026-11-25:* TASK-14831 did not correct it: `PayInputsLock.cs:38` still says "Blocks until granted" (at `6ab643a7`); the S148 C-1 comment sweep corrects it to state the timeout (`.claude/plans/s148/C1-comment-sweep-spec.md`, block S-42). CI-W5 (run 45280970629) measured a 1,200-row publish answering 2,046 ms after the release, with five waiting exports answering at 2,137–2,157 ms, far from the 30-second cliff (lock figure (1); ADR-034's D4 note of 2026-11-23). Disposition unchanged.
 
 **Size.** Measured locally only (TASK-14823-T, `ConfigPublishTimingTests`; PostgreSQL 16.14 on the development machine,
 `fsync=off`, Debug build, one measured publish after one warm-up): 300 people with four exported months each, 1,200 rows,
@@ -370,7 +371,27 @@ The Teamoversigt "before" figure from the same run (N-3; the comparison is TASK-
 TASK-14828 restores reuse per stretch of days with no dated change in agreement, OK version, position, organisation or
 any layer's applies-from date, and the reuse covers every repeated caller in a request (ruling R4, carried into its
 plan row); TASK-14828-T measures a complete Skema month read and save beside the year overview. This row closes when
-that lands and the figures fall.
+that lands and the figures fall. **Disposition (2026-11-25): DONE (plan O-16; the T14b stack, ruling R4).** TASK-14828 (`f68ed12a`, merged in the T14b stack `b5f167aa`, 2026-11-23) makes `DailyNormCalculator` resolve a configuration once per stretch of days whose key and every layer's applies-from date are unchanged, shared by every caller in one HTTP request (`DailyNormCalculator.cs:43-60`, `:137`), and removed the `shortcut(F10)` comment (no match at `6ab643a7`). A stretch never serves a day outside it, so the correctness that removed the old cache (ruling B6) holds. **Reads** (TASK-14828's local measurement, not CI): a Skema month read 90 (135 with a position) → 14, with a mid-month version change; a year overview about 526 → 30 (the "about 780" above was traced, not measured). **Time** (CI, GitHub's runner): the year overview's median 728 ms at CI-W5a (run 44728481380, before) → 386 ms at CI-W5 (run 45280970629, after); at CI-W5 a Skema month read took 113 ms and a Skema save 47 ms (no CI "before" figure exists for those two). Teamoversigt's 300-person March median moved 1,024 → 958 ms, which refuted N-3 (no new F-row).
+## F11 — the Regression suite's CI time (S148, recorded 2026-11-25)
+
+**What it is.** Each Docker-gated Regression class starts its own PostgreSQL container (Testcontainers), and many
+boot a whole Backend host. The Regression assembly runs its test collections one at a time
+(`tests/StatsTid.Tests.Regression/xunit.runner.json`, `parallelizeTestCollections: false`, the S64 override recorded in
+`docs/operations/s64-regression-debt-census.md`), so every new class adds its start-up cost in series. S148 added 99
+Docker-gated test files (319 at the S147 close `e553777e`, 416 at `6ab643a7`).
+
+**Size (CI figures, GitHub's runner).** Before S148 the regression step took about 75 minutes. CI-W1 (run 43011040973):
+117 minutes, of which the tests themselves summed to 554 s. CI-W1b (run 43027618243, with `--blame-hang-timeout 15m`):
+about 120 minutes (13:18 → 15:18 UTC), no hang dump, so the time is steady start-up, not a hang. CI-W4 (run 44352425811):
+started 16:53 UTC, Regression finished 19:01 UTC. CI-W5 (run 45280970629): build-and-test 2 h 16 min. CI-W6 (run
+45582399602): build-and-test 2 h 17 min, Regression alone 2 h 15 min, 2,969 facts (CI-W0b: 2,444).
+
+**Disposition: registered, revisit.** Not a correctness defect: the cost is feedback time (each evidence run blocks a
+wave for over two hours) and runner minutes. `.github/workflows/ci.yml` sets no `timeout-minutes`. Known options: one
+container per collection shared across classes (an xUnit collection fixture); resource-isolated collections that can
+run in parallel (the S64 override's own revisit condition); or the Docker suite split across jobs. Revisit when the step
+passes 3 hours, or at S149's refinement if stage 1 adds a comparable number of Docker classes.
+
 ## Standing convention
 
 Any future performance analysis is written HERE as it is produced, with each finding carrying a
