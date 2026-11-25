@@ -15,7 +15,11 @@ namespace StatsTid.Tests.Regression.PayPin;
 /// <b>It cannot pass on an empty world</b> (R-2, A-7, NR-14): before the golden step each fact fails, naming the
 /// employee-month and what happened, when an APPROVED month is refused, when fewer months were calculated than the
 /// loader approved, when the world holds fewer than three APPROVED months, when an APPROVED month yields no pay line, or
-/// when the loader's approved count differs from the generator's plan or it reports an outcome failure (FAIL-006).
+/// when the loader's approved count differs from the generator's plan or it reports an outcome failure (FAIL-006); and
+/// (f), checked right after the world's SQL is applied, when the database does not hold the generated local profiles,
+/// customary days and HR facts, counted by the dataset's own ids (12, 6 and 31 in both worlds), so a dropped section
+/// cannot let the pay text pass for the wrong reason. Arm (f) is kind F (CI): on the base of S148's demo rows the world
+/// holds none of them and the arm fails naming the table; argued, not run locally (Testcontainers).
 /// </para>
 ///
 /// <para>

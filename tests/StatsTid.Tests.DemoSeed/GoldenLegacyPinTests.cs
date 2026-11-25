@@ -25,6 +25,13 @@ namespace StatsTid.Tests.DemoSeed;
 /// the CURRENT output — minus exactly the S127 additions — against the untouched PRE-S127 bytes
 /// (<c>Golden/pre-s127-legacy-smoke.*</c>, sha256 202edbb5… / 8705ee87…, the same artifacts this
 /// class pinned before the regeneration). Those two files are the S114 golden, kept.</para>
+///
+/// <para><b>S148 / TASK-14839-T — DELIBERATE REGENERATION of the SQL golden.</b> S148 adds three sections to the emitted
+/// SQL (local agreement profiles, customary days, employee HR facts), so <c>golden-legacy-smoke.sql</c> was regenerated
+/// again, by the generator and never by hand; its diff against the previous bytes is additions only. Neither assertion
+/// changed, and the manifest golden did not move. The evidence that the sections are the only change is
+/// <see cref="LegacyUnchangedByS148Tests"/>, which removes them and compares the rest with
+/// <c>Golden/pre-s148-legacy-smoke.sql</c>, the previous bytes kept.</para>
 /// </summary>
 public sealed class GoldenLegacyPinTests
 {

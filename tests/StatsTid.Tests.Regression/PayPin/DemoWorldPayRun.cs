@@ -73,6 +73,12 @@ internal static class DemoWorldPayRun
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(connectionString);
         await ApplySqlAsync(connectionString, SqlEmitter.Emit(dataset));
 
+        // (f) the world carries the S148 config-stage rows: the database, counted by the dataset's own ids, against counts
+        // derived from the input (FAIL-006: an independent oracle). Before the host boots and the golden step, so a section
+        // that was dropped or swallowed by ON CONFLICT DO NOTHING cannot let the pay text pass for the wrong reason.
+        // S148 W7-15: (profiles = orgs x 3 agreements x 2 OK versions, customs = orgs x 3, HR facts = users + demo_admin).
+        await AssertConfigStageRowsAsync(world, connectionString, dataset);
+
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
         DemoLoader.LoadResult load;
         await using (var backendBase = new StatsTidWebApplicationFactory(connectionString, withoutLeaverJob: true))
@@ -202,6 +208,40 @@ internal static class DemoWorldPayRun
             $"expected: {(i < expectedLines.Length ? expectedLines[i] : "<end of golden>")}\n" +
             $"actual:   {(i < actualLines.Length ? actualLines[i] : "<end of text>")}\n" +
             $"=====BEGIN ACTUAL {world.File}=====\n{text}=====END ACTUAL {world.File}=====");
+    }
+
+    private static async Task AssertConfigStageRowsAsync(PinnedWorld world, string connectionString, StatsTid.Tools.DemoSeed.Model.DemoDataset dataset)
+    {
+        var orgIds = dataset.Orgs.Select(o => o.OrgId).ToArray();
+        var employeeIds = dataset.Users.Select(u => u.UserId).Append("demo_admin").ToArray();
+
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+
+        async Task<long> CountAsync(string sql, string[] ids)
+        {
+            // CA2100-justified (QUAL-073 ratchet): the three statements are the literals below, ids travel as a parameter.
+#pragma warning disable CA2100
+            await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
+            cmd.Parameters.AddWithValue("ids", ids);
+            return (long)(await cmd.ExecuteScalarAsync())!;
+        }
+
+        var checks = new (string Table, long Expected, long Actual)[]
+        {
+            ("local_agreement_profiles", orgIds.Length * 6L,
+                await CountAsync("SELECT count(*) FROM local_agreement_profiles WHERE org_id = ANY(@ids)", orgIds)),
+            ("customary_days", orgIds.Length * 3L,
+                await CountAsync("SELECT count(*) FROM customary_days WHERE org_id = ANY(@ids)", orgIds)),
+            ("employee_hr_facts", employeeIds.Length,
+                await CountAsync("SELECT count(*) FROM employee_hr_facts WHERE employee_id = ANY(@ids)", employeeIds)),
+        };
+
+        foreach (var (table, expected, actual) in checks)
+            if (expected != actual)
+                Assert.Fail($"{world.File}: non-vacuity (f) broken: {table} holds {actual} rows for this world's ids; " +
+                            $"the generated world has {expected}.");
     }
 
     private static async Task ApplySqlAsync(string connectionString, string sql)

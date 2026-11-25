@@ -35,4 +35,10 @@
     <None Include="Golden\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- S148 / TASK-14839-T: the COMMITTED demo seed the demo stack loads, linked into the test output so
+       CommittedDemoSeedTests can compare it with the generator at the pinned defaults. -->
+  <ItemGroup>
+    <None Include="..\..\docker\postgres\99-demo-seed.sql" Link="Committed\99-demo-seed.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

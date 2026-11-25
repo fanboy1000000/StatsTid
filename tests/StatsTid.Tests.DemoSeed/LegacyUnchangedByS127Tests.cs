@@ -30,9 +30,10 @@ namespace StatsTid.Tests.DemoSeed;
 /// call site's placement as a post-pass, and the fact that
 /// <see cref="AllocatedMonthBuilder"/> holds no <see cref="Random"/> reference at all.</para>
 ///
-/// <para>These pins must NOT be regenerated. If a future sprint changes the generated world on
-/// purpose, delete them and capture a fresh pair against that sprint's own baseline — a
-/// regenerated "unchanged" pin is a contradiction.</para>
+/// <para>The reference bytes of these pins must NOT be regenerated. A later change that only ADDS sections to the
+/// emitted SQL extends the strip to remove them, by name, and pins its own baseline beside these
+/// (<see cref="LegacyUnchangedByS148Tests"/>). A change that moves an existing byte on purpose deletes these pins and
+/// captures a fresh pair against its own baseline: a regenerated "unchanged" pin is a contradiction.</para>
 /// </summary>
 public sealed class LegacyUnchangedByS127Tests
 {
@@ -43,7 +44,9 @@ public sealed class LegacyUnchangedByS127Tests
     {
         var dataset = new DemoGenerator(GoldenLegacyPinTests.LegacySmokeClone(), 42, Ref).Generate();
         var current = GoldenLegacyPinTests.Normalize(SqlEmitter.Emit(dataset));
-        var stripped = StripProjectsSection(current);
+        // S148 W7-14: the three S148 sections are added rows too; remove them when present (no presence assertion
+        // here, LegacyUnchangedByS148Tests asserts it) so this pin keeps testifying that the S114 bytes are untouched.
+        var stripped = LegacyUnchangedByS148Tests.StripS148Sections(StripProjectsSection(current), requireEachSection: false);
 
         var preS127 = GoldenLegacyPinTests.Normalize(
             File.ReadAllText(GoldenLegacyPinTests.GoldenPath("pre-s127-legacy-smoke.sql")));
