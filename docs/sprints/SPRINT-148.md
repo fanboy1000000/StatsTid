@@ -4497,3 +4497,5 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 6. the QUAL-268 repair stack.
 
 **CI-W6 is next:** evidence only, on a `ci/s148-w6` branch with a draft PR, closed unmerged when judged. Wave 6 has no CI mutation run (ruling 40).
+
+**CI-W6 started** (run 45582399602, draft PR #69 on `ci/s148-w6` at `b75c3fb0`, headSha confirmed). It is evidence only and is closed unmerged when judged. Wave 7 (TASK-14839 + -T) is dispatched after CI-W6 is judged green.
