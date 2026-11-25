@@ -4545,3 +4545,16 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - **QUAL-BF-010's register row** names only `init.sql`'s 19 users. The demo rows now apply the same interim limit (everyone on flex) to every demo person.
   - **Brief contradictions (harmless census drifts):** one prior `employee_hr_facts` hit, a comment in `tools/check_endpoint_contracts.py:105`; `DELETE FROM users` in tests is now 33 lines in 27 files.
 - **TASK-14839-T dispatched** (`test-qa`, on `fdc0ec52`; report header `## S148 TASK-14839-T report`). Then 5α, Codex and Fable over the union, the merge, the GATE, C-1 and C-2.
+
+**TASK-14839-T returned** `a4ceb310` on `fdc0ec52` (`test-qa`; report `.claude/reviews/S148-TASK-14839-T-report.md`). It changes only `tests/**`: 11 files, +666/−5.
+- **What it proves, in plain words.** Removing the three new sections from the generated file gives back the old reference file exactly. The committed demo file equals what the generator produces. Each new row is the one the rulings name. PIN-1 now also fails if the new rows never reached the database (arm (f)). Its golden is untouched.
+- **The facts:**
+  - `LegacyUnchangedByS148Tests` (with the shared strip routine, which the S127 pin now also uses);
+  - `ConfigStageSeedingTests`, with five facts: HR facts per user, profiles per organisation × agreement × OK version, the three customs, the January year rule, and seed independence;
+  - `CommittedDemoSeedTests`, kind R;
+  - Regression `DemoHrFactsAllowedSetTests` (AC-C12c, non-Docker, through `EmployeeHrFactsRules`);
+  - arm (f) in `DemoWorldPayRun`, kind F (CI).
+- **RED first, at `7e388931` with the tests checked out:** DemoSeed 10 failed of 180, each for the stated reason; the Regression fact red at section presence.
+- **Gate at `a4ceb310`:** build 0 errors, 126 warnings, CA2100 114. Unit 1848, DemoSeed 180 of 180, Regression non-Docker 148 of 148.
+- **Brief contradictions (minor):** AC-C12c's red lands at section presence, before the brief's "at least one row" assertion. The S127 pin's pre-change red is quoted from the builder's report rather than re-run.
+- **The pair's review is dispatched** over `7e388931..a4ceb310`: 5α (`constraint-validator`), Fable (`reviewer`) and Codex (`codex-14839-run.ps1` → `S148-TASK-14839-5a-codex-c1.raw.md`).
