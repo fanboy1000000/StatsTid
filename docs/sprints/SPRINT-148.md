@@ -4760,3 +4760,23 @@ Already in the sprint log, so not repeated: `formatDanishNumber`'s half rounding
   - **Shortcut check: 23 found, 0 bad** (22 + QUAL-BF-011).
   - Frontend: `tsc` clean; ESLint has no finding on the two files.
 - **Carried to their next touch:** three more mentions of the non-existent `InsertLiveRowAsync`, at `docker/postgres/init.sql:5050-5052`, `ProfileCategoryDatingTests.cs` (`:20`, `:86`, `:174`, `:214`, `:234`) and `UserAgreementCodeRepositoryTests.cs:33`. The sentences around them have drifted since S143 (creates go through `CreateAsync`; the category now comes from the predecessor first), so a rename alone would not make them true. They need a careful rewrite.
+
+
+**C-1, the C2-R4 census, run and registered 2026-11-25** (a `trace`, read-only; report `.claude/reviews/S148-C2R4-census-report.md`). It was owed since TASK-14845's Step 5a cycle-2 ruling C2-R4, and "final + 25" added a second shape.
+- **What it asked, in plain words.** QUAL-257 was a route that checked a decision's status before its transaction, then wrote by id alone, so two simultaneous decisions could both pass. Do other routes have the same weakness (shape 1)? And can a version number that restarts at 1 after a supersession let a stale edit through (shape 2, QUAL-261)?
+- **Shape 1:**
+  - About 80 write routes were enumerated, in 38 classified rows; 33 are protected (a guarded update, a row lock, a version check, or the pay-inputs lock).
+  - **Two are vulnerable, now registered:**
+    - **QUAL-280:** two simultaneous revokes of one role assignment both answer 200 and record two revocations.
+    - **QUAL-281:** an organisation rename racing its deletion answers 200 and records an "updated" event for a deleted organisation.
+  - **QUAL-271**, the compensation-choice write-back already registered, is confirmed latent: nothing writes `accumulated` today.
+  - Two are unproven: a role grant racing an organisation delete, and a re-grant after a revoke, which hits a unique key the handler does not catch.
+- **Shape 2:**
+  - Of 14 families, the version restart also reaches the **wage-type mapping**. It is registered as **QUAL-282** (Medium): a stale `If-Match: "1"` passes after any same-day supersession and overwrites another admin's change, on a table payroll reads.
+  - It also reaches, weakly, a reporting line removed and re-created.
+  - Entitlement config restarts too, but its URL-id cross-check protects it.
+  - Notes were added to QUAL-257 (its "(unproven)" census sentence is answered) and QUAL-261 (decide the fix with QUAL-282).
+- **Found beside the census: SEC-070 (Medium, A01 Broken Access Control), confirmed by the Orchestrator's reading.**
+  - `PUT` and `DELETE /api/projects/{orgId}/{projectId}` check the caller's LocalAdmin scope against the URL's organisation, then change the project by `project_id` alone (`ProjectRepository.cs:46-66`).
+  - So an admin of organisation A can rename or deactivate organisation B's project, with no audit row.
+  - It is pre-existing (Sprints 7–9, `b0ae6523`). The fix is one line per statement. **The fix timing goes to the owner.**
