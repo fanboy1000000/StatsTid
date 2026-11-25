@@ -17,7 +17,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// own project still works, including a repeated deactivation (204 again).
 ///
 /// <para><b>Seed discipline (FAIL-002):</b> a fresh testcontainer per test. Two organisations
-/// (<c>S148PRA</c>, <c>S148PRB</c>), one project each, inserted by SQL; the actors are JWT-only. Docker-gated:
+/// (<c>S148PRA</c>, <c>S148PRB</c>), one active project each plus an inactive project in A, inserted by SQL; the actors are JWT-only. Docker-gated:
 /// CI-pending until a checkpoint run shows it green.</para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -155,7 +155,7 @@ public sealed class ProjectOrgBindingTests : IAsyncLifetime
     /// What it proves: the scope check still comes first for a plain LocalAdmin. An administrator of A who puts
     /// B in the address, with B's project, is refused 403 and B's row is unchanged.
     /// <b>Kind R</b> (guard). Red conditions: none on <c>45b86bcc</c>, where it is green too (the scope check was
-    /// already first and unchanged); it goes red if the binding replaced or reordered the scope check.
+    /// already first and unchanged); it goes red if the scope check were removed, or moved after the write (B's row would then change). It does not detect a read-only binding check moved ahead of the scope check: B's project matches B's address here, so that needs a caller without the address and a mismatched project.
     /// </summary>
     [Fact]
     public async Task LocalAdminOfA_AddressingB_403_AndNothingChanges()

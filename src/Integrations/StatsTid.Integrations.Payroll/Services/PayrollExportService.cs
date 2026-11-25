@@ -574,7 +574,7 @@ public sealed class PayrollExportService
         // day) — before its status or approver means anything. A period merely inside the month (a legacy WEEKLY
         // approval of 6–12 April for April's lines) is not the month: calculating exports take only whole months
         // (ADR-034 D3 amendment 2; /calculate-and-export refuses any other period before reading an approval,
-        // Program.cs:296).
+        // RefusePeriodNotAMonth in Payroll Program.cs).
         var monthStart = new DateOnly(key.Year, key.Month, 1);
         var monthEnd = new DateOnly(key.Year, key.Month, DateTime.DaysInMonth(key.Year, key.Month));
         if (!string.Equals(employeeId, key.EmployeeId, StringComparison.Ordinal)
