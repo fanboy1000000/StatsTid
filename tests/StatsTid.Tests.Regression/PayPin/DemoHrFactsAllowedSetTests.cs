@@ -22,7 +22,8 @@ namespace StatsTid.Tests.Regression.PayPin;
 ///
 /// <para><b>Kind: F</b> (Regression, non-Docker). <b>Product code between the readings:</b> the generator, the emitter and
 /// <see cref="EmployeeHrFactsRules"/>. <b>Red conditions:</b> on the base of TASK-14839 no HR-facts section exists, so the
-/// at-least-one-row assertion fails; afterwards a regime outside the user's agreement's set, an employee id that is not a
+/// section-presence assertion fails (the at-least-one-row assertion after it is not reached); afterwards a regime
+/// outside the user's agreement's set, an employee id that is not a
 /// user of the dataset, or a user without a row fails.</para>
 /// </summary>
 public sealed class DemoHrFactsAllowedSetTests

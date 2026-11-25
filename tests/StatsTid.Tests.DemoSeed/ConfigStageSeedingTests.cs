@@ -142,8 +142,9 @@ public sealed class ConfigStageSeedingTests
         Assert.Equal(expectedRows, ds.Orgs.Count * 3);
         Assert.Equal(expectedRows, rows.Count);
 
-        // A row is "(<custom_id expression>, <rest>)". The id's text is not pinned (ruling 8 asks only for a pure
-        // function of the organisation and the day), so it is split off; the rest is compared literally.
+        // A row is "(<custom_id expression>, <rest>)". This fact does not compare the id's text (ruling 8 asks only for a
+        // pure function of the organisation and the day), so it is split off and the rest is compared literally. The text
+        // itself is pinned by golden-legacy-smoke.sql and CommittedDemoSeedTests.
         var parsed = rows.Select(r =>
         {
             var rest = r.IndexOf(", '", StringComparison.Ordinal);
