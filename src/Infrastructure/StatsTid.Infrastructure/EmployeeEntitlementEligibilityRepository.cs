@@ -187,7 +187,7 @@ public sealed class EmployeeEntitlementEligibilityRepository
     ///     <c>effective_from</c>. Close the predecessor end-exclusive
     ///     (<c>effective_to = event.EffectiveFrom</c>; version unchanged), then INSERT a new
     ///     live row at <c>predecessor.version + 1</c> (ETag monotonicity across supersession,
-    ///     mirroring EmployeeProfileRepository.InsertLiveRowAsync).</description></item>
+    ///     mirroring the employee-profile writer's Case C', <c>EmployeeProfileRepository.ExecuteSplitAsync</c>).</description></item>
     /// </list>
     /// The table-level <c>employee_entitlement_eligibility_audit</c> row is written in the
     /// same <c>(conn, tx)</c> with <c>previous_data</c>/<c>new_data</c> JSONB snapshots and
