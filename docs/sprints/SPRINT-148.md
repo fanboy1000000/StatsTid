@@ -4589,3 +4589,12 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - The emitted comments say "nothing reads customs / these facts yet" (`SqlEmitter.cs:202`, `:230`). Their own editors do; "nothing reads them for pay yet" is the exact form. Fixing it regenerates two goldens and the committed file, so it waits until the emitter is next touched.
   - Three assertions in `ConfigStageSeedingTests` check only the weekdays of constants. They are harmless, because the row literals carry the real pin.
 - **Still CI-pending until C-2:** AC-C12a (the DemoSeed golden in CI), **AC-C12b (PIN-1 on the reseeded worlds, with arm (f) at 12, 6 and 31)**, AC-C12c and `CommittedDemoSeedTests`. Nothing is marked CI-verified before C-2's run id exists.
+
+**TASK-14839 pair merge GATE, 2026-11-25 (on `f5c28e03`, plus this commit's register fix): green.**
+- Backend: build 0 errors (126 warnings), `--no-incremental`; CA2100 114 distinct (unchanged); **no CA5351 warning**, so BC-9's removal of the suppression is proven clean. Unit 1848, DemoSeed 180 and Regression non-Docker 148 all passed.
+- **The shortcut check first reported 1 bad**, from the merge commit's own register edit: the merge had put two files in QUAL-BF-010's location cell. `check_docs.py` (and its Node mirror) require a QUAL-BF row's location to be exactly the one file holding its `shortcut(QUAL-BF-nnn):` comment. CI's docs job would have failed.
+  - **Fixed in this commit:** the location is `docker/postgres/init.sql` again, and the widening stays in the row's text, which names the demo generator's file. The check now reports 22 found, 0 bad.
+  - **Lesson:** widen a QUAL-BF row in its text, never in its location cell.
+- No frontend file changed, so there are no frontend checks.
+- The two wave-7 worktrees are pruned after this commit.
+- **Next: C-1 (commit K) and C-2,** the checkpoint on K (branch `s148-ci-k`, all seven jobs). PIN-1 runs final on the reseeded worlds (AC-C12b with arm (f)), with AC-C12a, AC-C12c and `CommittedDemoSeedTests`.
