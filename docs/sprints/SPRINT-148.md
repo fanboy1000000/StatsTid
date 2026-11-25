@@ -4384,3 +4384,14 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - F2: after a create across a future cancelled change, the drawer will show a "scheduled" change that changes nothing (for TASK-14852);
   - F3–F5: stale remarks and catalog columns.
 - **The security consult and TASK-14851-T were dispatched together** on `c99e52a7`. Both carry the port-5432 rule.
+
+**TASK-14850 merge GATE, 2026-11-25 (on `65b4c340`): green.** It is frontend only; the backend is unchanged since `319f8b68`'s green GATE. `tsc`, lint, `typecheck:e2e` and the build are clean. Shortcut check 22, 0 bad. **The full vitest run, done alone, passed: 121 files, 1386 tests.** The two TASK-14850 worktrees were pruned.
+
+**TASK-14851 security consult** (`.claude/reviews/S148-TASK-14851-security-consult.md`): **RESIDUALS, nothing blocking.** It confirms the create reaches exactly whom the edit reaches; the self refusal is unconditional, before any read or lock; there is no state-inferred create; nothing is written on any refusal; the drift guard covers the chain; and the 404 body is HR-only and date-free.
+- **Residuals:**
+  - R-1: the create's 409 and 400 come before the drift guard, a small widening of SEC-062's accepted residual;
+  - R-2: the first write's kind is not asserted (defence in depth);
+  - R-3: the builder's F1, an integrity matter (register);
+  - R-4: the employment category is free text, pre-existing (register);
+  - R-5: no lower date bound with no history.
+- **Its 18 added negatives were sent to TASK-14851-T as contract.**
