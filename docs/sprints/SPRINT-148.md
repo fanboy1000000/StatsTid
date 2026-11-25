@@ -4558,3 +4558,34 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **Gate at `a4ceb310`:** build 0 errors, 126 warnings, CA2100 114. Unit 1848, DemoSeed 180 of 180, Regression non-Docker 148 of 148.
 - **Brief contradictions (minor):** AC-C12c's red lands at section presence, before the brief's "at least one row" assertion. The S127 pin's pre-change red is quoted from the builder's report rather than re-run.
 - **The pair's review is dispatched** over `7e388931..a4ceb310`: 5α (`constraint-validator`), Fable (`reviewer`) and Codex (`codex-14839-run.ps1` → `S148-TASK-14839-5a-codex-c1.raw.md`).
+
+**The TASK-14839 pair, reviewed (cycle 1) and merged, 2026-11-25.**
+
+| Lens | Verdict | Findings |
+|---|---|---|
+| 5α c1 (`S148-TASK-14839-5alpha-c1.md`) | **PASS**, after the Orchestrator's ruling | Check 15 failed `a4ceb310`'s trailer (Sonnet 5.5). The check was mis-specified by the Orchestrator: a trailer names the model that wrote the commit, and `test-qa` runs on Sonnet 5.5, so the trailer is truthful. Ruled PASS, with the ruling appended to the saved report. |
+| Codex c1 (`S148-TASK-14839-5a-codex-c1.raw.md`) | **APPROVED** | One NOTE (unproven): unchanged payslips still need C-2. |
+| Fable c1 (`S148-TASK-14839-5a-reviewer-c1.md`) | **APPROVED-WITH-WARNINGS** | W: QUAL-BF-010's row covers 19 people while the code cites it for every demo person (fixed below). NOTEs: "no payslip moves" is argued until C-2; the committed demo's May 2026 holds its closure day (O-21, below); BC-9; the AC-C12c docstring names the wrong red line; small test wording points. |
+
+- **No adjudication was needed.** Both lenses approved the code. Fable's one WARNING is register paperwork the Orchestrator owes at the merge. Cycles used: 1 of 5.
+- **What Fable checked, in plain words:**
+  - Every reader of the three tables in `src/**` was traced. A profile carrying only the plus cap gives the same configuration as no profile (all 41 config members compared).
+  - The three reads that turn a profile start into a month split are strictly "after the period's first day", so a row dated year 1 is never a boundary.
+  - Nothing in Payroll, the RuleEngine or the Orchestrator reads customs, HR facts or the plus cap.
+  - All 3,351 regimes in the committed demo file were recomputed independently: 0 mismatches.
+- **The Orchestrator's commit `c186e2b1`** (Small Tasks Exception, 7 lines):
+  - the AC-C12c docstring now names the section-presence assertion as the red one;
+  - `ConfigStageSeedingTests`'s comment says where the custom id's text is pinned (the golden and `CommittedDemoSeedTests`);
+  - **BC-9 disposed (O-35 (2)):** `CA5351` is no longer suppressed in `StatsTid.DemoSeed.csproj`. The tool makes no MD5 call, so the reason the suppression gave was untrue; the customary-day key is computed by `md5()` inside the emitted SQL. The GATE build proves the analyzer stays quiet.
+- **Merged** `--no-ff` (this commit): TASK-14839 `fdc0ec52`, TASK-14839-T `a4ceb310`, and the Orchestrator's `c186e2b1`.
+- **In the merge commit:**
+  - **QUAL-BF-010 widened** (Fable's W): its location adds `ConfigStageSeed.cs` and the generated demo file, and its text says the demo generator records every demo person as on flex, so resolving the row means changing both places. HRP-026's wording matches.
+- **O-21 (the sprint-log note): S149 re-pins PIN-1** at the recorded seeds (47 at 15 January 2026; 45 at 15 July 2026). Each pinned world now holds a custom inside its measured month: 24 December 2025 in the December 2025 world, 5 June 2026 in the June 2026 world.
+  - **Added from Fable's NOTE:** the committed full-scale world, the demo the owner opens, also holds one. Its activity month is May 2026, and its closure day is Friday 15 May 2026. Generated hours do not honour customs, so the Skema shows a normal worked day on a day the organisation's "Kutymefridage" tab lists as a closure day.
+  - S149's demo work decides whether generated hours honour customs before the re-pin.
+- **O-35 (1), Found, not fixed:** `LocalAgreementProfileMigrator`'s all-NULL assertion (`src/Infrastructure/StatsTid.Infrastructure/LocalAgreementProfileMigrator.cs:390-409`, unchanged since `53530807`). It refuses a profile row whose four legacy columns are all NULL. Since C-4, a row carrying only the new settings (such as the plus cap) is a valid profile, for product-written rows and demo rows alike. The assertion is reachable only from tests (`ProfileMigrationTests`), never at start-up, so it cannot touch PIN-1. NOTE, unproven as a defect; no trace ordered.
+- **O-35 (2), BC-9:** fixed, as above.
+- **Carried (record, not block):**
+  - The emitted comments say "nothing reads customs / these facts yet" (`SqlEmitter.cs:202`, `:230`). Their own editors do; "nothing reads them for pay yet" is the exact form. Fixing it regenerates two goldens and the committed file, so it waits until the emitter is next touched.
+  - Three assertions in `ConfigStageSeedingTests` check only the weekdays of constants. They are harmless, because the row literals carry the real pin.
+- **Still CI-pending until C-2:** AC-C12a (the DemoSeed golden in CI), **AC-C12b (PIN-1 on the reseeded worlds, with arm (f) at 12, 6 and 31)**, AC-C12c and `CommittedDemoSeedTests`. Nothing is marked CI-verified before C-2's run id exists.

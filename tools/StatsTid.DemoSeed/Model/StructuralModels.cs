@@ -109,6 +109,64 @@ public sealed class DemoProject
     public required int SortOrder { get; init; }
 }
 
+/// <summary>
+/// A generated <c>local_agreement_profiles</c> row (ADR-043 D6). It carries only the flex plus cap;
+/// the emitter writes the four legacy columns that reach pay (weekly norm, flex cap, overtime ceiling,
+/// pre-approval) as NULL, so the config lookup keeps the central values. <c>profile_id</c> and
+/// <c>version</c> take their column defaults.
+/// </summary>
+public sealed class DemoLocalProfile
+{
+    public required string OrgId { get; init; }
+    public required string AgreementCode { get; init; }
+    public required string OkVersion { get; init; }
+
+    /// <summary>ISO yyyy-MM-dd.</summary>
+    public required string EffectiveFrom { get; init; }
+
+    public required decimal FlexPlusCapHours { get; init; }
+}
+
+/// <summary>
+/// A generated <c>customary_days</c> row (ADR-043 D9): one day form, either recurring
+/// (<see cref="RecurringMonth"/>, <see cref="RecurringDay"/>) or <see cref="SingleDate"/>; every
+/// agreement (<c>agreement_code</c> NULL). The emitter derives <c>custom_id</c> from the org and the
+/// day, so the key does not depend on the seed or on row order.
+/// </summary>
+public sealed class DemoCustomaryDay
+{
+    public required string OrgId { get; init; }
+    public int? RecurringMonth { get; init; }
+    public int? RecurringDay { get; init; }
+
+    /// <summary>ISO yyyy-MM-dd, or null for a recurring day.</summary>
+    public string? SingleDate { get; init; }
+
+    /// <summary>PAID_DAY_OFF | CLOSURE_DAY.</summary>
+    public required string Kind { get; init; }
+
+    /// <summary>WHOLE_DAY (the only part the demo seeds).</summary>
+    public required string Part { get; init; }
+
+    /// <summary>GIVEN_TO_ALL for a paid day off; null for a closure day (the table's CHECK).</summary>
+    public required string? PaidMode { get; init; }
+
+    /// <summary>ISO yyyy-MM-dd.</summary>
+    public required string ValidFrom { get; init; }
+}
+
+/// <summary>A generated <c>employee_hr_facts</c> row (ADR-043 D4): the overtime regime (null = not
+/// recorded) and flex-scheme membership, one open row per person.</summary>
+public sealed class DemoHrFacts
+{
+    public required string EmployeeId { get; init; }
+    public required string? OvertimeRegime { get; init; }
+    public required bool OnFlexScheme { get; init; }
+
+    /// <summary>ISO yyyy-MM-dd.</summary>
+    public required string EffectiveFrom { get; init; }
+}
+
 /// <summary>The full generated dataset (the SQL artifact + the manifest are both derived from this).</summary>
 public sealed class DemoDataset
 {
@@ -117,6 +175,15 @@ public sealed class DemoDataset
 
     /// <summary>S127 — the per-org project catalogue (every org, MAO included; see <see cref="DemoProject"/>).</summary>
     public required List<DemoProject> Projects { get; init; }
+
+    /// <summary>One local profile per org × agreement (AC, HK, PROSA) × OK version (OK24, OK26).</summary>
+    public required List<DemoLocalProfile> LocalProfiles { get; init; }
+
+    /// <summary>Three customary days per org.</summary>
+    public required List<DemoCustomaryDay> CustomaryDays { get; init; }
+
+    /// <summary>One HR-facts row per user the file inserts, <c>demo_admin</c> first.</summary>
+    public required List<DemoHrFacts> HrFacts { get; init; }
 
     /// <summary>Bulk EMPLOYEE rows (every demo user).</summary>
     public required List<DemoRoleRow> EmployeeRoles { get; init; }

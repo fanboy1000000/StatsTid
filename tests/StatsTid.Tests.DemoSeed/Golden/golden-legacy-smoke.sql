@@ -127,6 +127,85 @@ INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by
     ('STYX1', 'PROJ-01', 'Tvaergaaende projekt', 4, 'DEMO_SEED')
 ON CONFLICT DO NOTHING;
 
+-- ── Local agreement profiles (ADR-043 D6): one per org × agreement (AC, HK, PROSA) × OK version
+--    (OK24, OK26), setting only the flex plus cap, 37 h (as SDU and DTU, ADR-043 D6). No payslip
+--    moves: the four legacy columns that reach pay (weekly norm, flex cap, overtime ceiling,
+--    pre-approval) are written out as NULL, so the config lookup keeps the central values; nothing
+--    in pay reads the plus cap yet (its first reader decides its effect); and every row starts at
+--    the history anchor 0001-01-01, so no profile starts inside a month the demo calculates and
+--    every month stays whole. ──
+INSERT INTO local_agreement_profiles (org_id, agreement_code, ok_version, effective_from, weekly_norm_hours, max_flex_balance, max_overtime_hours_per_period, overtime_requires_pre_approval, flex_plus_cap_hours, created_by) VALUES
+    ('MINX', 'AC', 'OK24', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('MINX', 'AC', 'OK26', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('MINX', 'HK', 'OK24', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('MINX', 'HK', 'OK26', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('MINX', 'PROSA', 'OK24', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('MINX', 'PROSA', 'OK26', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('STYX1', 'AC', 'OK24', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('STYX1', 'AC', 'OK26', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('STYX1', 'HK', 'OK24', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('STYX1', 'HK', 'OK26', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('STYX1', 'PROSA', 'OK24', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED'),
+    ('STYX1', 'PROSA', 'OK26', DATE '0001-01-01', NULL, NULL, NULL, NULL, 37, 'DEMO_SEED')
+ON CONFLICT DO NOTHING;
+
+-- ── Customary days (ADR-043 D9): three per org, each on its own day: 5 June and 24 December every
+--    year as a paid day off given to all, and the Friday after Ascension Day as a closure day;
+--    whole days, every agreement, valid from 1 January of the activity month's year. custom_id is
+--    md5('demo-custom|<org>|<day>')::uuid, a pure function of the org and the day, so re-applying
+--    this file adds no second custom (the table has no other unique key). No payslip moves:
+--    nothing reads customs yet; the first reader decides how a custom shapes hours and pay (the
+--    generated hours do not honour them). ──
+INSERT INTO customary_days (custom_id, org_id, agreement_code, recurring_month, recurring_day, single_date, kind, part, paid_mode, valid_from, created_by) VALUES
+    (md5('demo-custom|MINX|06-05')::uuid, 'MINX', NULL, 6, 5, NULL, 'PAID_DAY_OFF', 'WHOLE_DAY', 'GIVEN_TO_ALL', DATE '2026-01-01', 'DEMO_SEED'),
+    (md5('demo-custom|MINX|12-24')::uuid, 'MINX', NULL, 12, 24, NULL, 'PAID_DAY_OFF', 'WHOLE_DAY', 'GIVEN_TO_ALL', DATE '2026-01-01', 'DEMO_SEED'),
+    (md5('demo-custom|MINX|2026-05-15')::uuid, 'MINX', NULL, NULL, NULL, DATE '2026-05-15', 'CLOSURE_DAY', 'WHOLE_DAY', NULL, DATE '2026-01-01', 'DEMO_SEED'),
+    (md5('demo-custom|STYX1|06-05')::uuid, 'STYX1', NULL, 6, 5, NULL, 'PAID_DAY_OFF', 'WHOLE_DAY', 'GIVEN_TO_ALL', DATE '2026-01-01', 'DEMO_SEED'),
+    (md5('demo-custom|STYX1|12-24')::uuid, 'STYX1', NULL, 12, 24, NULL, 'PAID_DAY_OFF', 'WHOLE_DAY', 'GIVEN_TO_ALL', DATE '2026-01-01', 'DEMO_SEED'),
+    (md5('demo-custom|STYX1|2026-05-15')::uuid, 'STYX1', NULL, NULL, NULL, DATE '2026-05-15', 'CLOSURE_DAY', 'WHOLE_DAY', NULL, DATE '2026-01-01', 'DEMO_SEED')
+ON CONFLICT DO NOTHING;
+
+-- ── Employee HR facts (ADR-043 D4): one row per user this file inserts, demo_admin first, leavers
+--    included; on the flex scheme, from the history anchor 0001-01-01. The overtime regime: HK and
+--    PROSA OVERTIME; AC by employment category, copying init.sql's role_config_overrides rows
+--    (ADR-024; the demo spells Fuldmaegtig in ASCII): Fuldmaegtig CONTRACTUAL, Specialkonsulent
+--    DISCRETIONARY, Chefkonsulent and Kontorchef NONE; NULL ("missing" in the editor) for Standard.
+--    The values are provisional (ADR-043 provisional item 5); everyone on flex is the interim limit
+--    R-17 (QUAL-BF-010). No payslip moves: nothing reads these facts yet. ──
+INSERT INTO employee_hr_facts (employee_id, overtime_regime, on_flex_scheme, effective_from) VALUES
+    ('demo_admin', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0001', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0002', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0003', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0004', 'DISCRETIONARY', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0005', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0006', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0007', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0008', 'CONTRACTUAL', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0009', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0010', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0011', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0012', 'CONTRACTUAL', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0013', NULL, TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0014', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0015', 'CONTRACTUAL', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0016', NULL, TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0017', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0018', NULL, TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0019', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0020', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0021', 'DISCRETIONARY', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0022', 'DISCRETIONARY', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0023', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0024', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0025', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0026', 'NONE', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0027', NULL, TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0028', 'OVERTIME', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0029', 'CONTRACTUAL', TRUE, DATE '0001-01-01'),
+    ('demo_styx1_0030', 'NONE', TRUE, DATE '0001-01-01')
+ON CONFLICT DO NOTHING;
+
 -- ============================================================================
 -- End of generated demo seed.
 -- ============================================================================

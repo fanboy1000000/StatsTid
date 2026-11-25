@@ -24,6 +24,13 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// projects are structural reference data the loader's activity stage already depends on: the
 /// allocations it posts name project CODES, so the rows must exist before the first skema save.
 ///
+/// ADR-043's config stage: after the projects, three more sections in a fixed order and shape
+/// (comment lines, one INSERT line, the rows, <c>ON CONFLICT DO NOTHING;</c>, one blank line) —
+/// local agreement profiles, customary days and HR facts (<see cref="ConfigStageSeed"/>). They are
+/// starting state, event-less with no audit row like every row here; the first edit made in the
+/// product writes the first audit row and event, with the seeded row as its predecessor. Each
+/// section head says why it changes no pay.
+///
 /// Only the reporting TREE + activity are LOADED POST-BOOT via the API (event-emitting; OQ-4)
 /// and so are NOT in this file.
 ///
@@ -33,7 +40,12 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// </summary>
 public static class SqlEmitter
 {
-    private const string DemoAdminId = "demo_admin";
+    internal const string DemoAdminId = "demo_admin";
+
+    /// <summary>demo_admin's agreement and category: its users row, and the input of its HR-facts
+    /// row (<see cref="ConfigStageSeed.HrFacts"/>), so the two cannot drift apart.</summary>
+    internal const string DemoAdminAgreementCode = "AC";
+    internal const string DemoAdminEmploymentCategory = "Kontorchef";
 
     public static string Emit(DemoDataset dataset)
     {
@@ -71,9 +83,9 @@ public static class SqlEmitter
           .Append(Lit("Demo Global Admin")).Append(", ")
           .Append(Lit($"{DemoAdminId}@demo.dk")).Append(", ")
           .Append(Lit(minId)).Append(", ")
-          .Append(Lit("AC")).Append(", ")
+          .Append(Lit(DemoAdminAgreementCode)).Append(", ")
           .Append(Lit("OK24")).Append(", ")
-          .Append(Lit("Kontorchef")).Append(", ")
+          .Append(Lit(DemoAdminEmploymentCategory)).Append(", ")
           .AppendLine("TRUE)");
         sb.AppendLine("ON CONFLICT DO NOTHING;");
         sb.AppendLine();
@@ -158,6 +170,76 @@ public static class SqlEmitter
         sb.AppendLine("ON CONFLICT DO NOTHING;");
         sb.AppendLine();
 
+        // ── 8. Local agreement profiles (ADR-043 D6) ──
+        sb.AppendLine("-- ── Local agreement profiles (ADR-043 D6): one per org × agreement (AC, HK, PROSA) × OK version");
+        sb.AppendLine("--    (OK24, OK26), setting only the flex plus cap, 37 h (as SDU and DTU, ADR-043 D6). No payslip");
+        sb.AppendLine("--    moves: the four legacy columns that reach pay (weekly norm, flex cap, overtime ceiling,");
+        sb.AppendLine("--    pre-approval) are written out as NULL, so the config lookup keeps the central values; nothing");
+        sb.AppendLine("--    in pay reads the plus cap yet (its first reader decides its effect); and every row starts at");
+        sb.AppendLine("--    the history anchor 0001-01-01, so no profile starts inside a month the demo calculates and");
+        sb.AppendLine("--    every month stays whole. ──");
+        sb.AppendLine("INSERT INTO local_agreement_profiles (org_id, agreement_code, ok_version, effective_from, weekly_norm_hours, max_flex_balance, max_overtime_hours_per_period, overtime_requires_pre_approval, flex_plus_cap_hours, created_by) VALUES");
+        AppendRows(sb, dataset.LocalProfiles, (rb, p) =>
+        {
+            rb.Append('(')
+              .Append(Lit(p.OrgId)).Append(", ")
+              .Append(Lit(p.AgreementCode)).Append(", ")
+              .Append(Lit(p.OkVersion)).Append(", ")
+              .Append("DATE ").Append(Lit(p.EffectiveFrom)).Append(", ")
+              .Append("NULL, NULL, NULL, NULL, ")
+              .Append(Num(p.FlexPlusCapHours)).Append(", ")
+              .Append(Lit("DEMO_SEED")).Append(')');
+        });
+        sb.AppendLine("ON CONFLICT DO NOTHING;");
+        sb.AppendLine();
+
+        // ── 9. Customary days (ADR-043 D9) ──
+        sb.AppendLine("-- ── Customary days (ADR-043 D9): three per org, each on its own day: 5 June and 24 December every");
+        sb.AppendLine("--    year as a paid day off given to all, and the Friday after Ascension Day as a closure day;");
+        sb.AppendLine("--    whole days, every agreement, valid from 1 January of the activity month's year. custom_id is");
+        sb.AppendLine("--    md5('demo-custom|<org>|<day>')::uuid, a pure function of the org and the day, so re-applying");
+        sb.AppendLine("--    this file adds no second custom (the table has no other unique key). No payslip moves:");
+        sb.AppendLine("--    nothing reads customs yet; the first reader decides how a custom shapes hours and pay (the");
+        sb.AppendLine("--    generated hours do not honour them). ──");
+        sb.AppendLine("INSERT INTO customary_days (custom_id, org_id, agreement_code, recurring_month, recurring_day, single_date, kind, part, paid_mode, valid_from, created_by) VALUES");
+        AppendRows(sb, dataset.CustomaryDays, (rb, c) =>
+        {
+            var day = c.SingleDate ?? string.Create(CultureInfo.InvariantCulture, $"{c.RecurringMonth:00}-{c.RecurringDay:00}");
+            rb.Append("(md5(").Append(Lit($"demo-custom|{c.OrgId}|{day}")).Append(")::uuid, ")
+              .Append(Lit(c.OrgId)).Append(", ")
+              .Append("NULL, ")
+              .Append(c.RecurringMonth is { } m ? m.ToString(CultureInfo.InvariantCulture) : "NULL").Append(", ")
+              .Append(c.RecurringDay is { } d ? d.ToString(CultureInfo.InvariantCulture) : "NULL").Append(", ")
+              .Append(c.SingleDate is null ? "NULL" : "DATE " + Lit(c.SingleDate)).Append(", ")
+              .Append(Lit(c.Kind)).Append(", ")
+              .Append(Lit(c.Part)).Append(", ")
+              .Append(c.PaidMode is null ? "NULL" : Lit(c.PaidMode)).Append(", ")
+              .Append("DATE ").Append(Lit(c.ValidFrom)).Append(", ")
+              .Append(Lit("DEMO_SEED")).Append(')');
+        });
+        sb.AppendLine("ON CONFLICT DO NOTHING;");
+        sb.AppendLine();
+
+        // ── 10. Employee HR facts (ADR-043 D4) ──
+        sb.AppendLine("-- ── Employee HR facts (ADR-043 D4): one row per user this file inserts, demo_admin first, leavers");
+        sb.AppendLine("--    included; on the flex scheme, from the history anchor 0001-01-01. The overtime regime: HK and");
+        sb.AppendLine("--    PROSA OVERTIME; AC by employment category, copying init.sql's role_config_overrides rows");
+        sb.AppendLine("--    (ADR-024; the demo spells Fuldmaegtig in ASCII): Fuldmaegtig CONTRACTUAL, Specialkonsulent");
+        sb.AppendLine("--    DISCRETIONARY, Chefkonsulent and Kontorchef NONE; NULL (\"missing\" in the editor) for Standard.");
+        sb.AppendLine("--    The values are provisional (ADR-043 provisional item 5); everyone on flex is the interim limit");
+        sb.AppendLine("--    R-17 (QUAL-BF-010). No payslip moves: nothing reads these facts yet. ──");
+        sb.AppendLine("INSERT INTO employee_hr_facts (employee_id, overtime_regime, on_flex_scheme, effective_from) VALUES");
+        AppendRows(sb, dataset.HrFacts, (rb, f) =>
+        {
+            rb.Append('(')
+              .Append(Lit(f.EmployeeId)).Append(", ")
+              .Append(f.OvertimeRegime is null ? "NULL" : Lit(f.OvertimeRegime)).Append(", ")
+              .Append(f.OnFlexScheme ? "TRUE" : "FALSE").Append(", ")
+              .Append("DATE ").Append(Lit(f.EffectiveFrom)).Append(')');
+        });
+        sb.AppendLine("ON CONFLICT DO NOTHING;");
+        sb.AppendLine();
+
         sb.AppendLine("-- ============================================================================");
         sb.AppendLine("-- End of generated demo seed.");
         sb.AppendLine("-- ============================================================================");
@@ -212,7 +294,6 @@ public static class SqlEmitter
     /// <summary>SQL single-quoted literal with quote-doubling. Invariant culture; no interpolation injection.</summary>
     private static string Lit(string s) => "'" + s.Replace("'", "''", StringComparison.Ordinal) + "'";
 
-    // Defensive: ensure any decimal formatting uses invariant culture (none currently emitted to SQL,
-    // but kept for future numeric columns).
+    // Invariant culture, so a decimal never takes a locale's comma (the profiles' plus cap).
     internal static string Num(decimal d) => d.ToString(CultureInfo.InvariantCulture);
 }
