@@ -86,7 +86,7 @@ is S149.
 | TASK-14850 | DONE | `65b4c340` |  |
 | TASK-14851 | DONE | `ee3c7805` | the QUAL-268 stack, with -T |
 | TASK-14852 | DONE | `ee3c7805` | the QUAL-268 stack |
-| TASK-14853 | DONE | the SEC-070 merge (its SHA is in the GATE line that follows it) | added by owner ruling 2026-11-25 (plan "final + 33"), with -T |
+| TASK-14853 | DONE | `4e94f5dd` | added by owner ruling 2026-11-25 (plan "final + 33"), with -T |
 | TASK-14512 | DROPPED | none | Not an S148 task: S145's id, cited once as history. Listed only because the close guard collects every id the log names. |
 
 ## Refinement record (Steps 1–4)
@@ -4875,3 +4875,18 @@ Reports: `.claude/reviews/S148-C1-adr-kb-draft-report.md` and `S148-C1-docs-reco
   - the Task ledger gains TASK-14853.
 - **What the owner gets, in plain words.** An administrator can no longer change another organisation's project. A request that names another organisation's project, or one that does not exist, gets the same "Project not found", and nothing is written. Editing and deactivating one's own projects works as before.
 - **The next CI run (C-2) must show:** the 8 `ProjectOrgBindingTests` facts green, and `S119ProjectSpecRuntimeTests` and `MixedRoleScopeLeakTests`' project facts still green.
+
+
+**The TASK-14853 pair's merge GATE (on `4e94f5dd`): green.**
+- Backend: build 0 errors, 126 warnings (`--no-incremental`); CA2100 114 (unchanged). Unit 1848, DemoSeed 180 and Regression non-Docker 148 all passed.
+- The shortcut check: 23 found, 0 bad.
+- **The plan's pre-Step-7a grep** (`git grep -nE "shortcut\s*\(\s*pending" …`, PLAN C-2) first printed one hit: a test docstring that quoted the phrase (`YearOverviewTimingTests.cs:20`). The docstring was also stale: it called the calculator's per-day lookup an open shortcut, but TASK-14828 restored the reuse and F10 is DONE. It is rewritten in K itself (comment-only; the Regression project builds), and the grep now prints nothing.
+- No frontend file changed.
+
+**C-1: commit K.** This commit is the close candidate K. It holds:
+- all seven waves;
+- the SEC-070 fix;
+- both comment sweeps;
+- every register, KB and docs record of the close.
+
+The review verdicts, CI run ids and close SHAs are marked placeholders (‹…›), filled at C-2 … C-5. Next: **C-2, the checkpoint on K** (`s148-ci-k`, all seven jobs). PIN-1 runs final on the reseeded worlds (AC-C12b with arm (f)), with AC-C12a, AC-C12c, `CommittedDemoSeedTests` and the 8 `ProjectOrgBindingTests` facts.

@@ -16,8 +16,8 @@ namespace StatsTid.Tests.Regression.Balance;
 ///
 /// <para>
 /// <b>Why, in plain language.</b> TASK-14825 asks the configuration lookup once per weekday (about 780 reads for one
-/// year overview of a full-time employee) and registers that as a known limit
-/// (<c>DailyNormCalculator</c>'s <c>shortcut(pending)</c>). This fact gives the limit a figure: it reads one
+/// year overview of a full-time employee) and registered that as a known limit (performance register F10;
+/// TASK-14828 later restored the reuse, and F10 is DONE). This fact gives the limit a figure: it reads one
 /// employee's <c>GET /api/balance/{id}/year-overview?year=2026</c> once as a warm-up and then five timed times and
 /// prints the median, so the performance register's row for it (O-16) has a number to point at.
 /// </para>
