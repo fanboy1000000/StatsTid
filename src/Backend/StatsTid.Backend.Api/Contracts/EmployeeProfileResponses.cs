@@ -80,10 +80,11 @@ public sealed record ScheduledProfileChange(
 /// <paramref name="CanCreate"/> is true when no profile is scheduled (no non-zero-length row starts
 /// after today), i.e. the PUT's re-create (<c>If-None-Match: *</c>) is possible; it answers for the
 /// person's rows, never for the actor (a self re-create is refused by the PUT).
-/// <paramref name="UncoveredSince"/> is the day the last real profile ended, the earliest date a
-/// re-create may take, and the HR "cannot register" list's "Mangler dækning siden" for the profile
-/// side; <c>null</c> when the person has no such row. <paramref name="ScheduledFrom"/> is the start
-/// of the earliest scheduled profile, the list's "Planlagt fra"; that gap heals on its date.
+/// <paramref name="UncoveredSince"/> is the day the last real profile ended; a re-create may not be
+/// dated before it (the employment start can be later). It is the HR "cannot register" list's
+/// "Mangler dækning siden" for the profile side; <c>null</c> when the person has no such row.
+/// <paramref name="ScheduledFrom"/> is the start of the earliest scheduled profile, the list's
+/// "Planlagt fra"; that gap heals on its date.
 /// <paramref name="LastPartTimeFraction"/> and <paramref name="LastPosition"/> are the last real
 /// profile's values, for the screen's pre-fill. A zero-length row (the trace a close leaves of a
 /// cancelled change) counts for none of these.

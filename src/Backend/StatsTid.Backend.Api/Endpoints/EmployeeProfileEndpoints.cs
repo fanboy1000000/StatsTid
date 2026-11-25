@@ -565,6 +565,27 @@ public static class EmployeeProfileEndpoints
                     return Results.NotFound(new { error = "Employee profile not found" });
                 }
 
+                // ── SEC-062 — the re-create's early organisation compare ──
+                // The re-create's two refusals below name state of the person's rows: the 409 carries
+                // users.version and the 400 carries L, a profile end date. So before either answers,
+                // the organisation `auditUser` was read with (after both advisory locks, not under the
+                // users row lock) must be the one the scope check authorised; a null authorisation
+                // fails closed. Otherwise a transfer committed since the scope check: roll back and
+                // answer the drift guard's 409, which names nothing. This is an unlocked read, so the
+                // guard after the writer stays the binding check. The edit's 404 and 412 are not
+                // behind it; they stay SEC-062's registered residual.
+                if (isCreate
+                    && (authorisedOrgId is null
+                        || !string.Equals(auditUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal)))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole,
+                        "PUT /api/admin/employee-profiles/{employeeId}", actor.CorrelationId);
+                    return Results.Conflict(new { error = OrgScopeValidator.OrganisationDriftReason });
+                }
+
                 if (isCreate && (coversToday || profileScheduled))
                 {
                     // Create-only: a profile is there, or one is scheduled. The sibling's shape (the
@@ -676,8 +697,12 @@ public static class EmployeeProfileEndpoints
                 // rows below under its institution. Otherwise a transfer committed in between: roll
                 // back (undoing the write) and answer 409. Checked here, after the writer, because the
                 // repository takes the users lock after the timeline lock and locking users earlier
-                // would invert that order. Refusals the writer throws (412, 404, the 422s, the
-                // concurrent-seed 409) have already answered; P-26's 403 comes after this.
+                // would invert that order. What answered before this point: a re-create's 409 (a
+                // profile covers today or is scheduled) and its 400 (dated before L) come after the
+                // early organisation compare above, so neither reaches an actor whose authorisation a
+                // transfer committed before that unlocked read has outdated; the edit's 404 and 412
+                // have no such compare and stay SEC-062's registered residual; the writer's 422s and
+                // concurrent-seed 409 have also answered. P-26's 403 comes after this.
                 var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
                 if (authorisedOrgId is null
                     || lockedSubject is null
@@ -1055,15 +1080,23 @@ public static class EmployeeProfileEndpoints
                         triggeringProfileEventId = createdEvent.EventId;
                     }
 
-                    // S138 — the change predicates, taken against the COVERING row (recon discovery 8).
-                    // A backdate whose values equal TODAY's but differ from the covering row IS a change;
-                    // a value equal to the covering row is the real no-op and never reaches here.
-                    // A gap fill (covering null) is a change by construction — there was nothing there.
-                    var fractionChanged = covering is null || covering.PartTimeFraction != partTimeFraction;
-                    var positionChanged = covering is null
-                        || !string.Equals(covering.Position, position, StringComparison.Ordinal);
+                    // The change predicates, taken against the COVERING row's pre-image (S138, recon
+                    // discovery 8). A backdate whose values equal TODAY's but differ from the covering
+                    // row IS a change; a value equal to a covering row that covered days is the real
+                    // no-op and never reaches here. Two pre-images are changes by construction, because
+                    // no day had this profile before the write: a null one (a gap fill) and a
+                    // zero-length one [f, f), the trace a close leaves of a cancelled change or of a
+                    // row created that day, which any write dated on it reopens: a re-create, its
+                    // chain, an edit (ADR-020 D2 Case C; QUAL-268).
+                    // So revaluation and the PROFILE_CHANGE trigger run for every such write, whatever
+                    // its values; `previous_data` above still records the zero-length pre-image. The
+                    // category trigger still needs a category the request named (`requestedCategory`),
+                    // so a body without one never raises it.
+                    var coveredNothing = covering is null || covering.EffectiveTo == covering.EffectiveFrom;
+                    var fractionChanged = coveredNothing || covering!.PartTimeFraction != partTimeFraction;
+                    var positionChanged = coveredNothing || !string.Equals(covering!.Position, position, StringComparison.Ordinal);
                     var categoryChanged = requestedCategory is not null
-                        && !string.Equals(covering?.EmploymentCategory, requestedCategory, StringComparison.Ordinal);
+                        && (coveredNothing || !string.Equals(covering!.EmploymentCategory, requestedCategory, StringComparison.Ordinal));
 
                     // ── S66 / TASK-6604 (ADR-032 D4), re-windowed by S138 / TASK-13802 — revaluation ──
                     // Trigger: ANY fullDayHours-affecting field changed — part_time_fraction OR position
