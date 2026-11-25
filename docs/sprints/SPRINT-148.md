@@ -4835,3 +4835,16 @@ Reports: `.claude/reviews/S148-C1-adr-kb-draft-report.md` and `S148-C1-docs-reco
   - D-43: INDEX's freshness marker; moving it would hide INDEX's backfill debt.
 - **Placeholders** to fill at C-2 … C-5: `‹C-2 run id›`, `‹C-2 Regression n›`, `‹Step 7a verdicts›`, `‹K sha›`, `‹close date›`, `‹close sha›`, `‹C-5 record›`.
 - **Carried:** `PayrollExportService.cs:576-577` cites `Program.cs:296` (now `:313`). It is a code comment, fixed in TASK-14853's merge commit.
+
+**TASK-14853 returned** `ab01495c` on `45b86bcc` (`backend-infrastructure`; report `.claude/reviews/S148-TASK-14853-report.md`).
+- **What it does, in plain words.** The project edit and deactivation change only a project that belongs to the organisation in the address. Anything else answers the same 404 "Project not found", so a probe cannot tell "no such project" from "another organisation's project". Nothing changes for an administrator working on their own organisation's projects.
+- **Files:** `ProjectRepository.cs` (`UpdateAsync` and `DeactivateAsync` take the organisation, add `AND org_id = @orgId`, and return whether a row matched) and `ProjectEndpoints.cs` (the 404 path). The scope check is unchanged and still first.
+- **Behaviour kept:** deactivating an already-inactive project of one's own organisation still answers 204.
+- **Behaviour narrowed, declared:** a multi-organisation administrator must use the project's own organisation in the address. No screen sends any other pairing.
+- **Gate:** build 0 errors, 126 warnings, CA2100 114; Unit 1848, DemoSeed 180, Regression non-Docker 148; shortcuts 23 / 0 bad. **Docker (argued):** the five existing facts that call the routes all use their own organisation, or are refused at the unchanged scope check, so none is expected red.
+- **The census of `ValidateOrgAccessAsync`'s 36 call sites:** no other route checks the address's organisation and then writes a child row by its id alone.
+- **Registered from "Found, not fixed":**
+  - **QUAL-283** (M): project writes leave no audit trail.
+  - **SEC-071** (Low, intent unproven): a role grant can name a user of another organisation.
+  - **SEC-072** (Low): the role revoke and the unit routes say whether another organisation's record exists, before checking scope.
+- **TASK-14853-T dispatched** (`test-qa`, on `ab01495c`; brief `.claude/plans/s148/TASK-14853-T.md`).
