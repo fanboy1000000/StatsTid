@@ -3080,6 +3080,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmployeeProfileNotFoundResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -7456,6 +7466,37 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmployeeProfileNotFoundResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "canCreate": {
+            "type": "boolean"
+          },
+          "uncoveredSince": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "scheduledFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "lastPartTimeFraction": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "lastPosition": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
