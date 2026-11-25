@@ -39,6 +39,7 @@ public sealed class ProfileRecreatePayrollTests : DatedConfigDockerFixture, IDis
     private static readonly DateOnly Mar01 = new(2026, 3, 1);
     private static readonly DateOnly Mar16 = new(2026, 3, 16);   // a Monday
     private static readonly DateOnly Mar25 = new(2026, 3, 25);   // a Wednesday
+    private static readonly DateOnly Mar30 = new(2026, 3, 30);   // a Monday
     private static readonly DateOnly Mar31 = new(2026, 3, 31);
     private static readonly DateOnly Apr01 = new(2026, 4, 1);
     private static readonly DateOnly Apr10 = new(2026, 4, 10);   // a Friday
@@ -127,6 +128,8 @@ public sealed class ProfileRecreatePayrollTests : DatedConfigDockerFixture, IDis
             var onNewProfile = pieces.Where(p => p.To >= Mar25).ToList();
             Assert.NotEmpty(onNewProfile);
             Assert.All(onNewProfile, p => Assert.Equal(0.800m, p.Fraction));
+            // April's opening week: one piece covers Monday 30 and Tuesday 31 March at 0.800.
+            Assert.Contains(pieces, p => p.From <= Mar30 && p.To >= Mar31 && p.Fraction == 0.800m);
         }
 
         // 5. the gap filled by an ordinary edit dated 16 March

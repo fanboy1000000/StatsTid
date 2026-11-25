@@ -11,6 +11,7 @@ using StatsTid.Tests.Regression.Config;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Security;
 using static StatsTid.Tests.Regression.Organisation.TransferWriteTests;
+using Kit = StatsTid.Tests.Regression.Concurrency.PayInputsLockTestKit;
 
 namespace StatsTid.Tests.Regression.EmployeeProfile;
 
@@ -567,7 +568,7 @@ public sealed class ProfileRecreateRouteTests : DatedConfigDockerFixture, IDispo
         Assert.Equal(before, await SnapshotAsync(anna));
     }
 
-    /// <summary><b>R (CI).</b> Consult row 19 (a zero-length row must not move the last profile's end). Two people, each with rows seeded
+    /// <summary><b>F (CI).</b> Consult row 19 (a zero-length row must not move the last profile's end). Two people, each with rows seeded
     /// by SQL: <c>[0001-01-01, 2026-03-16)</c> and a zero-length <c>[2026-04-01, 2026-04-01)</c>. On Friday 10 April 2026 the one dated
     /// Friday 13 March 2026 is refused 400 <c>BEFORE_LAST_PROFILE_END</c> naming 2026-03-16 (not 2026-04-01); the one dated Friday 20 March
     /// 2026 (after the last real end, before the zero-length row) answers 200.
@@ -946,6 +947,61 @@ public sealed class ProfileRecreateRouteTests : DatedConfigDockerFixture, IDispo
         }
     }
 
+    /// <summary>The re-create sent while a side connection holds the person's <c>employee-</c> advisory lock; once the request waits on it,
+    /// the person is moved to STY02 (committed, version + 1) and the lock released. The request's scope check has already authorised
+    /// STY01, so what it reads after the lock is the changed organisation. Asserts the 409 is the drift sentence and nothing was written.</summary>
+    private async Task<Reply> RecreateAcrossATransferAsync(HttpClient lise, string person, object body, string what)
+    {
+        var versionBefore = await VersionAsync(person);
+        var trailBefore = await SelfChangeRefusalTests.WriteTrailAsync(ConnectionString, person);
+        await using var held = await Kit.HeldLock.AcquireEmployeeAsync(ConnectionString, person);
+
+        var request = RecreateAsync(lise, person, body);
+        var observed = await Payroll.PriorMonthExportRaceTests.WaitUntilAsync(
+            async () => (await Kit.PidsAsync(ConnectionString, Kit.WaitingOnSingleKeySql)).Count >= 1,
+            Kit.WaitBound, () => request.IsCompleted);
+        Assert.True(observed, $"{what}: the re-create never waited on the employee lock (request status: {request.Status}).");
+        Assert.False(request.IsCompleted, $"{what}: the re-create finished while the lock was held.");
+
+        await ExecAsync("UPDATE users SET primary_org_id = 'STY02', version = version + 1 WHERE user_id = @u", ("u", person));
+        await held.ReleaseAsync();
+
+        using var rsp = await request;
+        var reply = await ReadAsync(rsp, HttpStatusCode.Conflict, what);
+        AssertMembers(reply.Json, "error");
+        Assert.Equal(DriftError, reply.Json.GetProperty("error").GetString());
+        Assert.Equal("STY02", await UsersPrimaryOrgAsync(ConnectionString, person));
+        Assert.Equal(versionBefore + 1, await VersionAsync(person));
+        Assert.Equal(trailBefore, await SelfChangeRefusalTests.WriteTrailAsync(ConnectionString, person));
+        return reply;
+    }
+
+    /// <summary><b>F (CI).</b> QUAL-268 / SEC-062, the re-create's two early refusals (5a cycle 1, adjudication ruling 7, fact 7a). Friday 10
+    /// April 2026, Lise of STY01 only. The side connection holds the person's <c>employee-</c> advisory lock instead of the users row: the
+    /// early organisation compare reads the subject without the row lock, so only the advisory lock makes the request wait before that
+    /// read; the person is then moved to STY02 and the lock released. Arm 1: a person closed that day (L = 10 April) and a re-create dated
+    /// Friday 13 March answers 409 with exactly <c>{ "error": &lt;the drift sentence&gt; }</c>, not the 400 that names L. Arm 2: a person a
+    /// profile covers and a re-create dated 10 April answers 409 with the drift sentence and no <c>currentVersion</c> member, not "Employee
+    /// profile already exists". Each arm writes nothing: the write trail is unchanged and <c>users.version</c> is exactly the transfer's + 1.
+    /// <para><b>Red conditions (F).</b> On <c>8d16d3e2</c> arm 1 answers 400 <c>BEFORE_LAST_PROFILE_END</c> naming 2026-04-10 and arm 2
+    /// answers 409 "Employee profile already exists" with <c>currentVersion</c>: both disclose state of a person the actor's cover no longer
+    /// reaches, and each fails the status or the member-set assertion.</para></summary>
+    [Fact]
+    public async Task Recreate_OrganisationChangedBeforeTheProbe_409_NoDateNoVersion()
+    {
+        var host = HostAt(Apr10);
+        var lise = Lise(host);
+        var closed = await PersonAsync();
+        await CloseAsync(lise, closed);
+        var covered = await PersonAsync();
+
+        var dated = await RecreateAcrossATransferAsync(lise, closed, Body("2026-03-13", 0.800m), "arm 1, a create dated before L");
+        Assert.DoesNotMatch(new Regex(@"\d{4}-\d{2}-\d{2}"), dated.Text);
+
+        var existing = await RecreateAcrossATransferAsync(lise, covered, Body("2026-04-10", 0.800m), "arm 2, a person a profile covers");
+        Assert.DoesNotContain("currentVersion", existing.Text, StringComparison.Ordinal);
+    }
+
     // ═══ AC-Q268i / consult row 22: across a retired scheduled change ═══
 
     /// <summary>One person whose close retired a scheduled change: at Monday 16 March 2026 an edit dated 1 April with fraction 0.500 and the
@@ -993,6 +1049,7 @@ public sealed class ProfileRecreateRouteTests : DatedConfigDockerFixture, IDispo
         }
         var before = await VersionAsync(anna);
         var auditMark = await MaxAuditIdAsync(anna);
+        var outboxMark = await MaxOutboxIdAsync(anna);
 
         using var created = await RecreateAsync(lise, anna, Body("2026-03-16", 0.800m, null, null, carry: true));
 
@@ -1010,6 +1067,11 @@ public sealed class ProfileRecreateRouteTests : DatedConfigDockerFixture, IDispo
             (audit[0].Action, Prop(audit[0].NewData, "source").GetString(), audit[0].Before, audit[0].After));
         Assert.Equal(("UPDATED", "ADMIN_PROFILE_CREATE_REOPEN", before + 1, before + 2),
             (audit[1].Action, Prop(audit[1].NewData, "source").GetString(), audit[1].Before, audit[1].After));
+        // The category each write stamped: the first row's, on both audit rows and both events, never the cancelled change's.
+        Assert.All(audit, a => Assert.Equal(firstCategory, Prop(a.NewData, "employmentCategory").GetString()));
+        var events = await EventsAfterAsync(anna, outboxMark);
+        Assert.Equal(new[] { "EmployeeProfileCreated", "EmployeeProfileUpdated" }, events.Select(e => e.Type).ToArray());
+        Assert.All(events, e => Assert.Equal(firstCategory, PayloadValue(e.Payload, "employmentCategory").GetString()));
 
         var triggerKinds = new List<string>();
         foreach (var json in await ReadTriggersAsync(anna))
@@ -1039,6 +1101,240 @@ public sealed class ProfileRecreateRouteTests : DatedConfigDockerFixture, IDispo
         Assert.Equal(retiredBefore, rows.Single(r => r.Id == retiredBefore.Id));
         var created6 = rows.Single(r => r.From == new DateOnly(2026, 4, 6));
         Assert.Equal((new DateOnly(2026, 4, 6), (DateOnly?)null, 0.800m, firstCategory), (created6.From, created6.To, created6.Fraction, created6.Category));
+    }
+
+    // ═══ the worklist hand-off of a write that reopens a row the close left (QUAL-268, ruling 1) ═══
+
+    private sealed record StreamEvent(long OutboxId, string Type, Guid Id, string Payload);
+
+    private async Task<long> MaxOutboxIdAsync(string id) =>
+        await ScalarAsync<long?>("SELECT MAX(outbox_id) FROM outbox_events WHERE stream_id = @s", ("s", $"employee-profile-{id}")) ?? 0;
+
+    /// <summary>The events on the person's profile stream written after <paramref name="afterOutboxId"/>, in write order.</summary>
+    private async Task<List<StreamEvent>> EventsAfterAsync(string id, long afterOutboxId)
+    {
+        await using var conn = new NpgsqlConnection(ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT outbox_id, event_type, event_id, event_payload::text FROM outbox_events WHERE stream_id = @s AND outbox_id > @after ORDER BY outbox_id", conn);
+        cmd.Parameters.AddWithValue("s", $"employee-profile-{id}");
+        cmd.Parameters.AddWithValue("after", afterOutboxId);
+        var events = new List<StreamEvent>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            events.Add(new StreamEvent(reader.GetInt64(0), reader.GetString(1), reader.GetGuid(2), reader.GetString(3)));
+        return events;
+    }
+
+    private static JsonElement PayloadValue(string payload, string name)
+    {
+        using var doc = JsonDocument.Parse(payload);
+        return doc.RootElement.EnumerateObject().First(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)).Value.Clone();
+    }
+
+    /// <summary>The worklist triggers of the person's 2026 rows, by month: (kind, event id).</summary>
+    private async Task<Dictionary<int, List<(string Kind, Guid EventId)>>> TriggersByMonthAsync(string id)
+    {
+        await using var conn = new NpgsqlConnection(ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT month, triggers::text FROM hr_backdate_worklist WHERE employee_id = @e AND year = 2026", conn);
+        cmd.Parameters.AddWithValue("e", id);
+        var byMonth = new Dictionary<int, List<(string Kind, Guid EventId)>>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var month = reader.GetInt32(0);
+            if (!byMonth.TryGetValue(month, out var list))
+                byMonth[month] = list = new List<(string Kind, Guid EventId)>();
+            list.AddRange(WorklistTriggerJson.Deserialize(reader.GetString(1)).Select(t => (t.Kind, t.EventId)));
+        }
+        return byMonth;
+    }
+
+    private static List<string> KindsOf(Dictionary<int, List<(string Kind, Guid EventId)>> triggers, int month, Guid eventId) =>
+        triggers.TryGetValue(month, out var list) ? list.Where(t => t.EventId == eventId).Select(t => t.Kind).ToList() : new List<string>();
+
+    private Task SeedExportedMonthAsync(string id, int month) => ExecAsync(
+        """
+        INSERT INTO payroll_export_records (export_id, period_id, employee_id, year, month, original_lines, current_effective_lines, content_hash)
+        VALUES (gen_random_uuid(), NULL, @e, 2026, @m, '[]'::jsonb, '[]'::jsonb, @h)
+        """, ("e", id), ("m", month), ("h", $"hash-2026-{month}"));
+
+    /// <summary>One person whose first row starts before 16 March 2026; at Monday 16 March an edit dated that day (0.800, "Chefkonsulent")
+    /// splits it, March 2026 is exported, and the close at the same clock leaves the zero-length row <c>[16 Mar, 16 Mar)</c>.</summary>
+    private async Task<(string Id, Guid ZeroLengthId, string FirstCategory)> ZeroLengthRowPersonAsync(WebApplicationFactory<Program> closeHost)
+    {
+        var lise = Lise(closeHost);
+        var anna = await PersonAsync();
+        var firstCategory = (await RowsAsync(anna))[0].Category;
+        using (var edit = await EditAsync(lise, anna, Body("2026-03-16", 0.800m, null, "Chefkonsulent"), await VersionAsync(anna)))
+            await ReadAsync(edit, HttpStatusCode.OK, "the edit dated today that makes the row");
+        await SeedExportedMonthAsync(anna, 3);
+        await CloseAsync(lise, anna);
+        var zero = (await RowsAsync(anna)).Single(r => r.From == Mar16 && r.To == Mar16);
+        return (anna, zero.Id, firstCategory);
+    }
+
+    /// <summary><b>F (CI).</b> QUAL-268 ruling 1, the direct reopen (5a cycle 1, adjudication fact 1a). Anna's first row starts before
+    /// Monday 16 March 2026; at that clock an edit dated 16 March (0.800, "Chefkonsulent") splits it, March 2026 is seeded as exported, and
+    /// the close leaves <c>[16 Mar, 16 Mar)</c>. On Friday 20 March a re-create dated 16 March, 0.800, the same (null) position and no
+    /// category answers 200. One new audit row: <c>UPDATED</c>, source ADMIN_PROFILE_CREATE, on the zero-length row's <c>profile_id</c>;
+    /// the row is <c>[16 Mar, open)</c> with the first row's category; one new event, <c>EmployeeProfileUpdated</c>; March's worklist row
+    /// holds a <c>PROFILE_CHANGE</c> trigger carrying that event's id and no <c>EMPLOYMENT_CATEGORY_CHANGE</c> trigger carries it.
+    /// <para><b>Red conditions (F).</b> On <c>8d16d3e2</c> the write's pre-image is the zero-length row, whose values equal the request's,
+    /// so neither change predicate is true and no trigger carries the event's id: the PROFILE_CHANGE assertion fails. (The days from
+    /// 16 March had no profile, yet the worklist was told nothing.)</para></summary>
+    [Fact]
+    public async Task Recreate_ReopeningARowTheCloseLeft_SameValues_HandsOff()
+    {
+        var h1 = HostAt(Mar16);
+        var h2 = HostAt(Mar20);
+        var (anna, zeroId, firstCategory) = await ZeroLengthRowPersonAsync(h1);
+        var auditMark = await MaxAuditIdAsync(anna);
+        var outboxMark = await MaxOutboxIdAsync(anna);
+
+        using var created = await RecreateAsync(Lise(h2), anna, Body("2026-03-16", 0.800m));
+
+        await ReadAsync(created, HttpStatusCode.OK, "the re-create over the zero-length row");
+        var rows = await RowsAsync(anna);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal((zeroId, Mar16, (DateOnly?)null, 0.800m, firstCategory), (rows[1].Id, rows[1].From, rows[1].To, rows[1].Fraction, rows[1].Category));
+        var audit = Assert.Single(await AuditRowsAsync(anna, auditMark));
+        Assert.Equal("UPDATED", audit.Action);
+        Assert.Equal("ADMIN_PROFILE_CREATE", Prop(audit.NewData, "source").GetString());
+        Assert.Equal(zeroId, await ScalarAsync<Guid>("SELECT profile_id FROM employee_profile_audit WHERE audit_id = @a", ("a", audit.AuditId)));
+        var updated = Assert.Single(await EventsAfterAsync(anna, outboxMark));
+        Assert.Equal("EmployeeProfileUpdated", updated.Type);
+
+        var kinds = KindsOf(await TriggersByMonthAsync(anna), 3, updated.Id);
+        Assert.Contains("PROFILE_CHANGE", kinds);
+        Assert.DoesNotContain("EMPLOYMENT_CATEGORY_CHANGE", kinds);
+    }
+
+    /// <summary><b>F (CI).</b> QUAL-268 ruling 1 (adjudication fact 1b): the same setup as
+    /// <see cref="Recreate_ReopeningARowTheCloseLeft_SameValues_HandsOff"/>, but the re-create names the category "Chefkonsulent", which
+    /// differs from the last real profile's. March's worklist row holds both a <c>PROFILE_CHANGE</c> and an
+    /// <c>EMPLOYMENT_CATEGORY_CHANGE</c> trigger, each carrying the reopen's <c>EmployeeProfileUpdated</c> event id.
+    /// <para><b>Red conditions (F).</b> On <c>8d16d3e2</c> the zero-length row (the cancelled row's own values, category "Chefkonsulent")
+    /// is the pre-image and the named category equals it, so neither trigger is raised and neither assertion holds.</para></summary>
+    [Fact]
+    public async Task Recreate_ReopeningARow_NamingADifferentCategory_RaisesBothTriggers()
+    {
+        var h1 = HostAt(Mar16);
+        var h2 = HostAt(Mar20);
+        var (anna, _, _) = await ZeroLengthRowPersonAsync(h1);
+        var outboxMark = await MaxOutboxIdAsync(anna);
+
+        using var created = await RecreateAsync(Lise(h2), anna, Body("2026-03-16", 0.800m, null, "Chefkonsulent"));
+
+        await ReadAsync(created, HttpStatusCode.OK, "the re-create naming a category");
+        var updated = Assert.Single(await EventsAfterAsync(anna, outboxMark));
+        Assert.Equal("EmployeeProfileUpdated", updated.Type);
+        var kinds = KindsOf(await TriggersByMonthAsync(anna), 3, updated.Id);
+        Assert.Contains("PROFILE_CHANGE", kinds);
+        Assert.Contains("EMPLOYMENT_CATEGORY_CHANGE", kinds);
+    }
+
+    /// <summary><b>F (CI).</b> QUAL-268 ruling 1, the chain (adjudication fact 1c). The retired-change person (closed at Monday 16 March 2026,
+    /// the cancelled change dated 1 April at 0.500, March exported) has April 2026 seeded as exported too. On Friday 10 April (April is then the
+    /// current month, the last an open-ended write's worklist hand-off reaches) a re-create
+    /// dated 16 March, 0.500, no position, no category (the retired row's own values) answers 200: a <c>CREATED</c> write for
+    /// <c>[16 Mar, 1 Apr)</c> and an <c>UPDATED</c> reopen of the retired row. March's worklist row holds <c>PROFILE_CHANGE</c> with the
+    /// <c>EmployeeProfileCreated</c> event's id, April's holds <c>PROFILE_CHANGE</c> with the <c>EmployeeProfileUpdated</c> event's id, and no
+    /// <c>EMPLOYMENT_CATEGORY_CHANGE</c> trigger exists on any month.
+    /// <para><b>Red conditions (F).</b> On <c>8d16d3e2</c> the reopen's pre-image is the retired zero-length row with equal values, so April
+    /// gets no trigger and the April assertion fails (no April worklist row at all).</para></summary>
+    [Fact]
+    public async Task Recreate_ChainedReopen_SameValues_HandsOffEachWrite()
+    {
+        var h1 = HostAt(Mar16);
+        var h2 = HostAt(Apr10);
+        var (anna, _) = await RetiredChangePersonAsync(h1);
+        await SeedExportedMonthAsync(anna, 4);
+        var outboxMark = await MaxOutboxIdAsync(anna);
+
+        using var created = await RecreateAsync(Lise(h2), anna, Body("2026-03-16", 0.500m));
+
+        await ReadAsync(created, HttpStatusCode.OK, "the chained re-create");
+        var events = await EventsAfterAsync(anna, outboxMark);
+        Assert.Equal(new[] { "EmployeeProfileCreated", "EmployeeProfileUpdated" }, events.Select(e => e.Type).ToArray());
+        var triggers = await TriggersByMonthAsync(anna);
+        Assert.Contains("PROFILE_CHANGE", KindsOf(triggers, 3, events[0].Id));
+        Assert.Contains("PROFILE_CHANGE", KindsOf(triggers, 4, events[1].Id));
+        Assert.DoesNotContain("EMPLOYMENT_CATEGORY_CHANGE", triggers.Values.SelectMany(l => l).Select(t => t.Kind));
+    }
+
+    /// <summary><b>F (CI).</b> QUAL-268 ruling 1, the ordinary edit (adjudication fact 1d). The retired-change person with April 2026 seeded as
+    /// exported. On Friday 10 April a re-create dated 6 April at 0.800 answers 200; then an <c>If-Match</c> edit dated 1 April, 0.500, no
+    /// position and no category answers 200 and the retired row becomes <c>[1 Apr, 6 Apr)</c> on its own <c>profile_id</c>. April's worklist
+    /// row holds a <c>PROFILE_CHANGE</c> trigger carrying that edit's <c>EmployeeProfileUpdated</c> event id. (The row's category is not
+    /// asserted: ruling 9's registered question.)
+    /// <para><b>Red conditions (F).</b> On <c>8d16d3e2</c> the edit's pre-image is the retired zero-length row with equal values, so the edit
+    /// raises no trigger and the assertion fails.</para></summary>
+    [Fact]
+    public async Task Edit_DatedOnARetiredRow_SameValues_HandsOff()
+    {
+        var h1 = HostAt(Mar16);
+        var h2 = HostAt(Apr10);
+        var (anna, _) = await RetiredChangePersonAsync(h1);
+        await SeedExportedMonthAsync(anna, 4);
+        var lise = Lise(h2);
+        var retiredId = (await RowsAsync(anna)).Single(r => r.From == new DateOnly(2026, 4, 1) && r.To == new DateOnly(2026, 4, 1)).Id;
+        using (var created = await RecreateAsync(lise, anna, Body("2026-04-06", 0.800m)))
+            await ReadAsync(created, HttpStatusCode.OK, "the re-create dated 6 April");
+        var outboxMark = await MaxOutboxIdAsync(anna);
+
+        using var edit = await EditAsync(lise, anna, Body("2026-04-01", 0.500m), await VersionAsync(anna));
+
+        await ReadAsync(edit, HttpStatusCode.OK, "the edit dated on the retired row");
+        var reopened = (await RowsAsync(anna)).Single(r => r.Id == retiredId);
+        Assert.Equal((new DateOnly(2026, 4, 1), (DateOnly?)new DateOnly(2026, 4, 6), 0.500m), (reopened.From, reopened.To, reopened.Fraction));
+        var updated = Assert.Single(await EventsAfterAsync(anna, outboxMark));
+        Assert.Equal("EmployeeProfileUpdated", updated.Type);
+        Assert.Contains("PROFILE_CHANGE", KindsOf(await TriggersByMonthAsync(anna), 4, updated.Id));
+    }
+
+    /// <summary><b>R (CI), a pin of registered behaviour.</b> QUAL-268 ruling 2 (adjudication fact 2a; the QUAL row of ruling 2, registered at
+    /// the stack's merge; the root fix is a ROADMAP item, owner ruling "C later, A now"). The retired-change person is re-created at Friday
+    /// 20 March 2026 from 16 March at 0.800 with <c>carryForwardToScheduledChange: true</c>: 200, rows <c>[16 Mar, 1 Apr)</c> and the
+    /// retired row <c>[1 Apr, open)</c>, both 0.800. The reopened row is reported as a scheduled change with today's own values: the 200's
+    /// <c>scheduled</c> and a following GET's both say <c>effectiveFrom</c> "2026-04-01", fraction 0.800. At Monday 23 March an edit dated
+    /// that day to 0.600, carry-forward not sent, answers 200 and stops on the retired row's date: rows <c>[23 Mar, 1 Apr)</c> at 0.600 and
+    /// <c>[1 Apr, open)</c> at 0.800.
+    /// <para><b>Discriminating assertion.</b> Both the scheduled report and the 1 April row's untouched 0.800. A fix that hid the row or
+    /// carried the edit into it would fail here and is the owner's choice (A, B or C), not a regression to slip through. Green on
+    /// <c>8d16d3e2</c> by design.</para></summary>
+    [Fact]
+    public async Task Recreate_AcrossARetiredChangeDatedAhead_IsReportedAsScheduled_AndATodayEditStopsThere()
+    {
+        var h1 = HostAt(Mar16);
+        var h2 = HostAt(Mar20);
+        var h3 = HostAt(new DateOnly(2026, 3, 23));   // a Monday
+        var (anna, _) = await RetiredChangePersonAsync(h1);
+        var lise = Lise(h2);
+
+        static void AssertScheduled(JsonElement json, string what)
+        {
+            var scheduled = json.GetProperty("scheduled");
+            Assert.True(scheduled.ValueKind == JsonValueKind.Object, $"{what}: scheduled is {scheduled.ValueKind}");
+            Assert.Equal("2026-04-01", scheduled.GetProperty("effectiveFrom").GetString());
+            Assert.Equal(0.800m, scheduled.GetProperty("partTimeFraction").GetDecimal());
+        }
+
+        using (var created = await RecreateAsync(lise, anna, Body("2026-03-16", 0.800m, null, null, carry: true)))
+            AssertScheduled((await ReadAsync(created, HttpStatusCode.OK, "the re-create")).Json, "the re-create's 200");
+        using (var read = await GetAsync(lise, anna))
+            AssertScheduled((await ReadAsync(read, HttpStatusCode.OK, "the GET after the re-create")).Json, "the GET");
+
+        using var edit = await EditAsync(Lise(h3), anna, Body("2026-03-23", 0.600m), await VersionAsync(anna));
+
+        await ReadAsync(edit, HttpStatusCode.OK, "the edit dated today");
+        var rows = await RowsAsync(anna);
+        var edited = rows.Single(r => r.From == new DateOnly(2026, 3, 23));
+        Assert.Equal((new DateOnly(2026, 4, 1), 0.600m), (edited.To!.Value, edited.Fraction));
+        var retired = rows.Single(r => r.From == new DateOnly(2026, 4, 1));
+        Assert.Equal(((DateOnly?)null, 0.800m), (retired.To, retired.Fraction));
     }
 
     private async Task<List<string>> ReadTriggersAsync(string id)
