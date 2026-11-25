@@ -4395,3 +4395,23 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - R-4: the employment category is free text, pre-existing (register);
   - R-5: no lower date bound with no history.
 - **Its 18 added negatives were sent to TASK-14851-T as contract.**
+
+**TASK-14851-T returned** `54e707d6` on `c99e52a7` (report `.claude/reviews/S148-TASK-14851-T-report.md`).
+- **Tests written:**
+  - 24 route facts (AC-Q268a–e, i, j, and the consult's added rows);
+  - the hand-off (AC-Q268g), payroll (AC-Q268h), contract (AC-Q268k) and lock-census (AC-Q268f) facts;
+  - one rename: the 1.5 pin, now "no domain ceiling".
+- **Gate:** build 0 errors; Unit 1848, DemoSeed 170 and Regression non-Docker 147 passed.
+- **Local evidence, not CI:** a throwaway cluster on port 55433. The ReportingLine 5432 classes were excluded by grep first. 24/24 route facts, the hand-off, payroll and lock-census facts all passed locally.
+- **The contract fact is red until REGEN,** as expected.
+- **Do 5 answers QUAL-266's open question:** a profile edit dated back over the gap fills it.
+- **Brief contradictions, accepted:**
+  - consult rows 5 and 10 are built in their reachable two-role form;
+  - row 14's pre-close token equals the post-close token, because a close does not move `users.version`.
+- **Found, not fixed:** `OrganisationDriftGuardTests.ProfileClose_OrganisationChangedUnderTheLock` failed once in a loaded local run and passed alone. That is likely a race in the existing fact's lock-wait probe; CI settles it.
+
+**The QUAL-268 stack, merged and regenerated:**
+- **Master merged into the stack** `658f6949` (B/C ruling 42). It is clean.
+- **REGEN** `b3d87267` (Orchestrator): `openapi.json` +41, additions only: the employee-profile GET's 404 response and the `EmployeeProfileNotFoundResponse` schema, as predicted.
+- **TASK-14852 dispatched** (`ux`, the drawer's "create profile") on `b3d87267`.
+- **Codex 5a cycle 1** over the backend half (`319f8b68..54e707d6` plus the REGEN) is running.
