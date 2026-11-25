@@ -97,20 +97,26 @@ export type ProfileRead =
 
 type NotFoundWire = components['schemas']['StatsTid.Backend.Api.Contracts.EmployeeProfileNotFoundResponse']
 
-/** The member's value when present: `undefined` and `null` both read as null; a value the check
-    rejects is `'bad'`. (Read through a Record, not an `as` cast on the body: this file is on the S112
-    no-`as` surface.) */
+type Member = { valid: true; value: unknown } | { valid: false }
+
+/** One member of the 404 body, fail-closed: the key must be present (an explicit `null` is a valid
+    "none"; the server writes all five members, so a missing key is a partial body, not "none"), and a
+    value the check rejects is invalid. (Read through a Map, not an `as` cast on the body: this file is
+    on the S112 no-`as` surface.) */
 function member<K extends keyof NotFoundWire>(
   body: object,
   key: K,
   ok: (v: unknown) => boolean,
-): unknown {
-  const v = new Map(Object.entries(body)).get(key)
-  if (v === null || v === undefined) return null
-  return ok(v) ? v : 'bad'
+): Member {
+  const entries = new Map(Object.entries(body))
+  if (!entries.has(key)) return { valid: false }
+  const v = entries.get(key)
+  if (v === null) return { valid: true, value: null }
+  return ok(v) ? { valid: true, value: v } : { valid: false }
 }
 
-/** Narrows the 404's untyped body to the generated schema; null when it does not fit. */
+/** Narrows the 404's untyped body to the generated schema; null when it does not fit, including a body
+    that lacks any of the five members (QUAL-268: a partial answer offers nothing). */
 function toNoProfileOptions(body: unknown): NoProfileOptions | null {
   if (typeof body !== 'object' || body === null || !('canCreate' in body) || typeof body.canCreate !== 'boolean') {
     return null
@@ -120,13 +126,13 @@ function toNoProfileOptions(body: unknown): NoProfileOptions | null {
   const scheduledFrom = member(body, 'scheduledFrom', isDate)
   const fraction = member(body, 'lastPartTimeFraction', (v) => typeof v === 'number' && Number.isFinite(v))
   const position = member(body, 'lastPosition', (v) => typeof v === 'string')
-  if (uncoveredSince === 'bad' || scheduledFrom === 'bad' || fraction === 'bad' || position === 'bad') return null
+  if (!uncoveredSince.valid || !scheduledFrom.valid || !fraction.valid || !position.valid) return null
   return {
     canCreate: body.canCreate,
-    uncoveredSince: typeof uncoveredSince === 'string' ? uncoveredSince : null,
-    scheduledFrom: typeof scheduledFrom === 'string' ? scheduledFrom : null,
-    lastPartTimeFraction: typeof fraction === 'number' ? fraction : null,
-    lastPosition: typeof position === 'string' ? position : null,
+    uncoveredSince: typeof uncoveredSince.value === 'string' ? uncoveredSince.value : null,
+    scheduledFrom: typeof scheduledFrom.value === 'string' ? scheduledFrom.value : null,
+    lastPartTimeFraction: typeof fraction.value === 'number' ? fraction.value : null,
+    lastPosition: typeof position.value === 'string' ? position.value : null,
   }
 }
 

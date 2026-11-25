@@ -78,6 +78,8 @@ interface CreateProfilePanelProps {
   /** The person's first day of employment as the server holds it; '' when none. */
   employmentStart: string
   disabled?: boolean
+  /** True while the create request is in flight (the drawer holds its own save meanwhile). */
+  onPendingChange?: (pending: boolean) => void
   onCreated: (snapshot: EmployeeProfileSnapshot) => void
   onCancel: () => void
 }
@@ -88,6 +90,7 @@ export function CreateProfilePanel({
   today,
   employmentStart,
   disabled = false,
+  onPendingChange,
   onCreated,
   onCancel,
 }: CreateProfilePanelProps) {
@@ -106,6 +109,11 @@ export function CreateProfilePanel({
   useEffect(() => {
     dateRef.current?.focus()
   }, [])
+  // The drawer's "Gem ændringer" waits while a create is pending; unmounting clears it.
+  useEffect(() => {
+    onPendingChange?.(saving)
+    return () => onPendingChange?.(false)
+  }, [saving, onPendingChange])
   // Cleanup runs when the person changes or the panel closes: answers issued before are then stale.
   useEffect(
     () => () => {
@@ -119,6 +127,18 @@ export function CreateProfilePanel({
   const fractionOk = fraction.trim() !== '' && Number.isFinite(fractionNumber) && fractionNumber >= 0.1 && fractionNumber <= 1
   const canSave = dateOk && fractionOk && !saving && !disabled
 
+  // Why the submit is dead, under the field (QUAL-268 ruling 3); the pre-fill is never clamped.
+  const dateError = dateOk
+    ? null
+    : !isCalendarDate(date)
+      ? 'Vælg en dato.'
+      : date > today
+        ? 'Datoen kan ikke ligge efter i dag.'
+        : min === options.uncoveredSince
+          ? `Den nye profil kan tidligst gælde fra ${formatEffectiveDateLong(min ?? '')}, hvor den seneste profil ophørte.`
+          : 'Datoen ligger før medarbejderens første ansættelsesdag.'
+  const fractionError = fractionOk ? null : 'Deltidsfraktionen skal være et tal mellem 0,1 og 1,0.'
+
   const gap = dateOk && min !== null && date > min
   const gapEnd = gap ? dayBefore(date) : null
   const helperText =
@@ -127,7 +147,9 @@ export function CreateProfilePanel({
       : min !== null
         ? `Forudfyldt med ${formatEffectiveDateLong(min)}, medarbejderens første ansættelsesdag. Datoen kan ikke ligge før den dag eller efter i dag.`
         : 'Dagens dato er forvalgt. Datoen kan ikke ligge efter i dag.'
-  const describedBy = ['pd-cp-date-help', gap ? 'pd-cp-gap' : null].filter(Boolean).join(' ')
+  const describedBy = ['pd-cp-date-help', gap ? 'pd-cp-gap' : null, dateError ? 'pd-cp-date-error' : null]
+    .filter(Boolean)
+    .join(' ')
 
   async function save() {
     if (!canSave) return
@@ -155,8 +177,8 @@ export function CreateProfilePanel({
 
       {errors.length > 0 && (
         <div className={styles.sectionError} role="alert" data-testid="pd-cp-error">
-          {errors.map((text) => (
-            <div key={text}>{text}</div>
+          {errors.map((text, i) => (
+            <div key={i}>{text}</div>
           ))}
         </div>
       )}
@@ -177,11 +199,17 @@ export function CreateProfilePanel({
           onChange={(e) => setDate(e.target.value)}
           disabled={saving || disabled}
           aria-describedby={describedBy}
+          aria-invalid={dateError ? true : undefined}
           data-testid="pd-cp-date"
         />
         <div className={styles.helperText} id="pd-cp-date-help">
           {helperText}
         </div>
+        {dateError && (
+          <div className={styles.sectionError} id="pd-cp-date-error" role="status" data-testid="pd-cp-date-error">
+            {dateError}
+          </div>
+        )}
         {gap && gapEnd !== null && min !== null && (
           <div className={styles.scheduledNotice} id="pd-cp-gap" role="status" data-testid="pd-cp-gap">
             {gapEnd === min
@@ -206,8 +234,15 @@ export function CreateProfilePanel({
           value={fraction}
           onChange={(e) => setFraction(e.target.value)}
           disabled={saving || disabled}
+          aria-invalid={fractionError ? true : undefined}
+          aria-describedby={fractionError ? 'pd-cp-part-time-error' : undefined}
           data-testid="pd-cp-part-time"
         />
+        {fractionError && (
+          <div className={styles.sectionError} id="pd-cp-part-time-error" role="status" data-testid="pd-cp-part-time-error">
+            {fractionError}
+          </div>
+        )}
       </div>
 
       <div className={styles.formField}>

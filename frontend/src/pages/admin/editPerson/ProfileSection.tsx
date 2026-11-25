@@ -35,6 +35,8 @@ interface ProfileSectionProps {
   /** The person's first day of employment as the server holds it; '' when none. */
   employmentStart?: string
   onCreated?: (snapshot: EmployeeProfileSnapshot) => void
+  /** True while the create form's request is in flight. */
+  onPendingChange?: (pending: boolean) => void
 }
 
 export function ProfileSection({
@@ -49,16 +51,18 @@ export function ProfileSection({
   today = null,
   employmentStart = '',
   onCreated,
+  onPendingChange,
 }: ProfileSectionProps) {
   // The person the form was opened for: switching person closes it.
   const [openFor, setOpenFor] = useState<string | null>(null)
   const formOpen = openFor === employeeId
   const openButton = useRef<HTMLButtonElement>(null)
   const focusFirstField = useRef(false)
+  const partTimeInput = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (hasProfile && focusFirstField.current) {
       focusFirstField.current = false
-      document.getElementById('ep-part-time')?.focus()
+      partTimeInput.current?.focus()
     }
   }, [hasProfile])
 
@@ -117,6 +121,7 @@ export function ProfileSection({
               today={today}
               employmentStart={employmentStart}
               disabled={disabled}
+              onPendingChange={onPendingChange}
               onCreated={(snapshot) => {
                 focusFirstField.current = true
                 setOpenFor(null)
@@ -150,6 +155,7 @@ export function ProfileSection({
           Deltidsfraktion <span className={styles.required}>*</span>
         </label>
         <input
+          ref={partTimeInput}
           className={styles.input}
           id="ep-partTime"
           type="number"

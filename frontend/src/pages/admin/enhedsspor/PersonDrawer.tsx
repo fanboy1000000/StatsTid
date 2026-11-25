@@ -137,6 +137,8 @@ export function PersonDrawer({
   // What the profile read said when NO profile covers today ('none' with the server's options, or
   // 'unknown'); null when one does or nothing is loaded yet.
   const [noProfile, setNoProfile] = useState<ProfileRead | null>(null)
+  // The profile form's create request is in flight: "Gem ændringer" waits (it names the version the create moves).
+  const [createPending, setCreatePending] = useState(false)
   const [hydrating, setHydrating] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -283,6 +285,7 @@ export function PersonDrawer({
     agreementBaselineRef.current = target.agreementCode
     setProfile(EMPTY_PROFILE)
     setNoProfile(null)
+    setCreatePending(false)
     setEntitlement(EMPTY_ENTITLEMENT)
     setPlacementUnitId(currentUnitId ?? null)
     setApex(lifecycleContext?.isRoot ?? false)
@@ -538,6 +541,7 @@ export function PersonDrawer({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
+    if (createPending) return
     setFormError(null)
     setSaving(true)
     try {
@@ -877,6 +881,7 @@ export function PersonDrawer({
                 today={today}
                 employmentStart={live?.employmentStartInitial ?? ''}
                 onCreated={onProfileCreated}
+                onPendingChange={setCreatePending}
               />
 
               {/* S141 / TASK-14107 — B0 + OQ-6 (a) for the profile fields
@@ -1028,7 +1033,7 @@ export function PersonDrawer({
           <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={busy}>
             Annullér
           </button>
-          <button type="submit" className={styles.submitBtn} disabled={busy || dateBlockedReason !== null}>
+          <button type="submit" className={styles.submitBtn} disabled={busy || createPending || dateBlockedReason !== null}>
             {saving ? 'Gemmer...' : submitLabel}
           </button>
         </div>
