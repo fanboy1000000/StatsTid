@@ -232,8 +232,9 @@ public static class EmployeeProfileEndpoints
             // When no row covers today (after a close, or when the only rows are scheduled) the answer
             // is 404 with a typed body (QUAL-268, owner ruling 2026-11-24), read on the repository's
             // own connection: whether the PUT's re-create (If-None-Match: *) is possible, i.e. no
-            // profile is scheduled; the day the last real profile ended, which is the earliest date a
-            // re-create may take and the HR "cannot register" list's "Mangler dækning siden"; the
+            // profile is scheduled; the day the last real profile ended, before which a re-create may
+            // not be dated (the employment start can be later), and the HR "cannot register" list's
+            // "Mangler dækning siden"; the
             // start of a scheduled profile, the list's "Planlagt fra" (that gap heals on its date, so
             // no create is offered); and the last real profile's fraction and position for the
             // screen's pre-fill. Profile dates only, never an employment date (ADR-040 D7). It
