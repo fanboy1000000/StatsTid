@@ -43,26 +43,41 @@ public sealed class ProjectRepository
         return projectId;
     }
 
-    public async Task UpdateAsync(Guid projectId, string projectName, int sortOrder, CancellationToken ct = default)
+    /// <summary>
+    /// Renames / reorders one project of <paramref name="orgId"/>. The write is bound to the
+    /// organisation as well as the project id, so a caller scope-checked for one organisation
+    /// cannot change another organisation's project by its id (SEC-070). Returns false when no
+    /// row of that organisation has the id; an inactive project of the organisation still matches.
+    /// </summary>
+    public async Task<bool> UpdateAsync(
+        string orgId, Guid projectId, string projectName, int sortOrder, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            "UPDATE projects SET project_name = @projectName, sort_order = @sortOrder WHERE project_id = @projectId", conn);
+            "UPDATE projects SET project_name = @projectName, sort_order = @sortOrder WHERE project_id = @projectId AND org_id = @orgId", conn);
         cmd.Parameters.AddWithValue("projectId", projectId);
+        cmd.Parameters.AddWithValue("orgId", orgId);
         cmd.Parameters.AddWithValue("projectName", projectName);
         cmd.Parameters.AddWithValue("sortOrder", sortOrder);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
-    public async Task DeactivateAsync(Guid projectId, CancellationToken ct = default)
+    /// <summary>
+    /// Soft-deactivates one project of <paramref name="orgId"/>, bound to the organisation as
+    /// well as the project id (SEC-070). Returns false when no row of that organisation has the
+    /// id. An already-inactive project of the organisation still matches, so a repeated
+    /// deactivation succeeds (idempotent).
+    /// </summary>
+    public async Task<bool> DeactivateAsync(string orgId, Guid projectId, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            "UPDATE projects SET is_active = FALSE WHERE project_id = @projectId", conn);
+            "UPDATE projects SET is_active = FALSE WHERE project_id = @projectId AND org_id = @orgId", conn);
         cmd.Parameters.AddWithValue("projectId", projectId);
-        await cmd.ExecuteNonQueryAsync(ct);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
     /// <summary>
