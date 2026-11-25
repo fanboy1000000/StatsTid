@@ -3135,6 +3135,15 @@ export interface paths {
                         "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmployeeProfileResponse"];
                     };
                 };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmployeeProfileNotFoundResponse"];
+                    };
+                };
             };
         };
         put: {
@@ -6011,6 +6020,17 @@ export interface components {
             rejectionReason: string | null;
             /** Format: date-time */
             createdAt: string;
+        };
+        "StatsTid.Backend.Api.Contracts.EmployeeProfileNotFoundResponse": {
+            error?: string;
+            canCreate?: boolean;
+            /** Format: date */
+            uncoveredSince?: string | null;
+            /** Format: date */
+            scheduledFrom?: string | null;
+            /** Format: double */
+            lastPartTimeFraction?: number | null;
+            lastPosition?: string | null;
         };
         "StatsTid.Backend.Api.Contracts.EmployeeProfileResponse": {
             employeeId: string;

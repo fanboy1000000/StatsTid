@@ -70,3 +70,34 @@ public sealed record ScheduledProfileChange(
     decimal PartTimeFraction,
     string? Position,
     string? EmploymentCategory);
+
+/// <summary>
+/// The employee-profile GET's 404 body: no profile row covers today (QUAL-268, owner ruling
+/// 2026-11-24). Plain language: after HR closes a person's profile, the screen asks the server
+/// whether a new one can be created and from when, so it never offers what the server would refuse.
+///
+/// <para>
+/// <paramref name="CanCreate"/> is true when no profile is scheduled (no non-zero-length row starts
+/// after today), i.e. the PUT's re-create (<c>If-None-Match: *</c>) is possible; it answers for the
+/// person's rows, never for the actor (a self re-create is refused by the PUT).
+/// <paramref name="UncoveredSince"/> is the day the last real profile ended; a re-create may not be
+/// dated before it (the employment start can be later). It is the HR "cannot register" list's
+/// "Mangler dækning siden" for the profile side; <c>null</c> when the person has no such row.
+/// <paramref name="ScheduledFrom"/> is the start of the earliest scheduled profile, the list's
+/// "Planlagt fra"; that gap heals on its date.
+/// <paramref name="LastPartTimeFraction"/> and <paramref name="LastPosition"/> are the last real
+/// profile's values, for the screen's pre-fill. A zero-length row (the trace a close leaves of a
+/// cancelled change) counts for none of these.
+/// </para>
+///
+/// <para>
+/// <b>ADR-040 D7:</b> profile dates only, never the employee's hire or leaving date.
+/// </para>
+/// </summary>
+public sealed record EmployeeProfileNotFoundResponse(
+    string Error,
+    bool CanCreate,
+    DateOnly? UncoveredSince,
+    DateOnly? ScheduledFrom,
+    decimal? LastPartTimeFraction,
+    string? LastPosition);

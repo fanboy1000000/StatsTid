@@ -204,3 +204,7 @@ These are explicitly NOT settled by ADR-020:
 **Status flip**: DRAFT → **ACCEPTED**. ADR-020 is binding contract for S29 implementation refinement.
 
 **Cycle-cap respected**: 2 of 2 cycles per lens for in-sprint TASK-2803. Total review trail across S28: 3 cycles per lens at refinement scoping + 2 cycles per lens at TASK-2803 ADR-text review. Convergence achieved.
+
+## Note 2026-11-25 — D2 and cancelled zero-length rows (QUAL-268, QUAL-269, QUAL-270)
+
+A close keeps a cancelled future change as a zero-length row ([d, d)), and the shared timeline writer still treats it as a boundary. On the employee-profile timeline that produces a phantom "planned change" after a repair (QUAL-269) and a gap fill that stops at d (QUAL-270). The owner ruled (2026-11-25) "C later, A now": both stay registered and test-pinned, and the root fix — the writer steps over cancelled rows — is a ROADMAP item that will amend D2. Since S148 a pre-image that covered no day counts as a change for revaluation and the worklist (`.claude/reviews/S148-QUAL268-stack-5a-adjudication-c1.md` ruling 1).

@@ -98,4 +98,12 @@ describe('CannotRegisterList', () => {
     expect(note).toHaveTextContent(/overenskomstkode eller ansættelsesprofil/i)
     expect(note).toHaveTextContent(/planlagt dækning/i)
   })
+
+  // S148 / TASK-14852 — AC-Q268m. F. Red conditions: the note lacks the sentence on the base.
+  it('the action note names the re-create', () => {
+    renderList(response([baseItem()]))
+    expect(screen.getByTestId('list-cannot-register-action-note')).toHaveTextContent(
+      'En manglende ansættelsesprofil opretter du ved at åbne medarbejderen dér og vælge "Opret ny profil".',
+    )
+  })
 })

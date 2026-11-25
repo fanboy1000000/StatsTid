@@ -206,3 +206,7 @@ External Codex review on full sprint diff vs S24 close (`3728ccc`) deferred to S
 - [SPRINT-25.md](../../sprints/SPRINT-25.md) — sprint log; refinement Q1-Q4 + plan-review cycles 1-3.
 - RFC 6585 §4 (Required) — 428 Precondition Required.
 - RFC 7232 — Conditional Requests; If-Match / ETag wire format.
+
+## Note 2026-11-25 — the employee-profile PUT joins the create-only precondition family (QUAL-268)
+
+Since S148 (owner ruling 2026-11-24, "Build repair route now"), `PUT /api/admin/employee-profiles/{employeeId}` takes `If-None-Match: *` as a **re-create** of a closed profile, besides `If-Match` as an edit. A missing, malformed or doubled precondition answers 428; an `If-Match` on a person no row covers still answers 404, so no edit can re-create a profile from state. See `.claude/reviews/S148-QUAL268-briefs-adjudication.md` ruling 1.

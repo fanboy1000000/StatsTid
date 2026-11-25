@@ -3,6 +3,7 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
+using StatsTid.Backend.Api.Validators;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
@@ -54,22 +55,28 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// </para>
 ///
 /// <para>
-/// <b>ADR-019 admin-strict If-Match contract.</b> PUT + DELETE require
-/// <c>If-Match: "&lt;version&gt;"</c> via <see cref="EtagHeaderHelper.TryParseIfMatch"/>
-/// (admin-strict mode rejects <c>If-None-Match: *</c>). 428 on missing/malformed;
-/// 412 on stale (with structured <c>expectedVersion</c> + <c>actualVersion</c> body
-/// per ADR-019 D2); 404 when no live row exists for the employee.
+/// <b>ADR-019 preconditions.</b> The DELETE requires <c>If-Match: "&lt;version&gt;"</c> via
+/// <see cref="EtagHeaderHelper.TryParseIfMatch"/> (admin-strict: <c>If-None-Match: *</c> is refused).
+/// The PUT takes exactly one of two, via <see cref="EtagHeaderHelper.TryParseIfMatchOrIfNoneMatchStar"/>:
+/// <c>If-Match: "&lt;version&gt;"</c> is an edit, <c>If-None-Match: *</c> ("only if nothing is there")
+/// a re-create, the create-only precondition the sibling per-person writes use (QUAL-268, owner
+/// ruling 2026-11-24). 428 on missing, malformed or both; 412 on a stale If-Match (with structured
+/// <c>expectedVersion</c> + <c>actualVersion</c> body per ADR-019 D2); 404 for an edit or a delete
+/// when no row covers today.
 /// </para>
 ///
 /// <para>
-/// <b>Case A 404 pre-check on PUT (Step 0b Reviewer BLOCKER-3 absorption).</b>
-/// PUT is an admin <i>edit</i> surface — it does NOT create net-new profiles. Before
-/// routing through <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>,
-/// the endpoint reads the live row via
-/// <see cref="EmployeeProfileRepository.GetByEmployeeIdAsync(NpgsqlConnection, NpgsqlTransaction?, string, CancellationToken)"/>;
-/// when null, returns 404 immediately. <c>SupersedeAndCreateAsync</c>'s Case A (no-live-row
-/// INSERT) is reachable only from <c>AdminEndpoints</c> POST <c>/api/admin/users</c>
-/// (S31 TASK-3108 4-way atomicity), NEVER from PUT.
+/// <b>Edit or re-create, never inferred from the state (QUAL-268, owner ruling 2026-11-24).</b> An
+/// edit needs a row covering today and answers 404 otherwise, so an edit sent from a stale screen can
+/// never bring back a profile a colleague closed on purpose. A re-create is the repair after a close
+/// (the close ends the profile, not the employment): it is refused with 409 while a row covers today
+/// or a profile is scheduled (a non-zero-length row starting after today, the HR "cannot register"
+/// list's own test), it is dated from the end of the last real profile up to today, and it runs open
+/// from that date, reopening in the same transaction each zero-length row a close left in its way
+/// (ADR-020 D2 Case C). A future-dated re-create is refused by rule, not as a shortcut: it would leave
+/// today uncovered, a state no route can read or edit. The GET's 404 body says whether a re-create is
+/// possible and from when. Both go through the same writer, lock, audit row, event, revaluation and
+/// worklist hand-off.
 /// </para>
 ///
 /// <para>
@@ -179,10 +186,13 @@ public static class EmployeeProfileEndpoints
             string employeeId,
             EmployeeProfileRepository repository,
             OrgScopeValidator scopeValidator,
+            // The server-"today" seam: the 404 body's dates are reckoned from it (PAT-028).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             // Step 0b BLOCKER fix — cross-org binding. HROrAbove alone is not enough;
             // bind the actor's scopes to the target employee's organisation.
@@ -219,14 +229,28 @@ public static class EmployeeProfileEndpoints
             // difference between a requirement and a bolt-on: every present and future consumer
             // gets it, and none can forget to ask.
             //
-            // NOT extended to the "no row covers today" case, deliberately: this read anchors on
-            // the covering row, so an employee whose ONLY row is scheduled still 404s here. That
-            // state is unreachable through the product (create always writes at today, this PUT is
-            // edit-only, and the DELETE retires scheduled rows with the current one) and it is what
-            // S141's B8 detector exists to SURFACE rather than what this payload exists to display.
+            // When no row covers today (after a close, or when the only rows are scheduled) the answer
+            // is 404 with a typed body (QUAL-268, owner ruling 2026-11-24), read on the repository's
+            // own connection: whether the PUT's re-create (If-None-Match: *) is possible, i.e. no
+            // profile is scheduled; the day the last real profile ended, before which a re-create may
+            // not be dated (the employment start can be later), and the HR "cannot register" list's
+            // "Mangler dækning siden"; the
+            // start of a scheduled profile, the list's "Planlagt fra" (that gap heals on its date, so
+            // no create is offered); and the last real profile's fraction and position for the
+            // screen's pre-fill. Profile dates only, never an employment date (ADR-040 D7). It
+            // answers for the person's rows, not for the actor: refusing a self re-create is the PUT's.
             var hit = await repository.GetByEmployeeIdWithScheduledAsync(employeeId, ct);
             if (hit is null)
-                return Results.NotFound(new { error = "Employee profile not found" });
+            {
+                var recreate = await repository.GetRecreateOptionsAsync(employeeId, today, ct);
+                return Results.NotFound(new EmployeeProfileNotFoundResponse(
+                    Error: "Employee profile not found",
+                    CanCreate: recreate.CanCreate,
+                    UncoveredSince: recreate.UncoveredSince,
+                    ScheduledFrom: recreate.ScheduledFrom,
+                    LastPartTimeFraction: recreate.LastPartTimeFraction,
+                    LastPosition: recreate.LastPosition));
+            }
             var (profile, version, scheduled) = hit;
 
             context.Response.Headers.ETag = $"\"{version}\"";
@@ -241,16 +265,20 @@ public static class EmployeeProfileEndpoints
                 version,
                 ToDto(scheduled)));
         }).RequireAuthorization("HROrAbove")
-        .Produces<EmployeeProfileResponse>(StatusCodes.Status200OK);
+        .Produces<EmployeeProfileResponse>(StatusCodes.Status200OK)
+        .Produces<EmployeeProfileNotFoundResponse>(StatusCodes.Status404NotFound);
 
         // ═══════════════════════════════════════════
         // 2. PUT /api/admin/employee-profiles/{employeeId}
         //
         // RBAC: HROrAbove + OrgScopeValidator (Step 0b BLOCKER fix).
-        // Admin-strict If-Match required (ADR-019 D2). Atomic-outbox semantic:
-        // (UPDATE-in-place OR close-predecessor + INSERT-new) + INSERT audit row +
-        // outbox enqueue all happen in one tx (ADR-018 D3). Returns 200 with new ETag
-        // on success.
+        // One precondition, and it decides the meaning (ADR-019; QUAL-268, owner ruling
+        // 2026-11-24): If-Match: "<n>" edits the profile; If-None-Match: * re-creates one when
+        // none covers today and none is scheduled, dated from the last real profile's end up to
+        // today and running open from that date (each zero-length row a close left in its way is
+        // reopened in the same transaction, ADR-020 D2 Case C). Atomic-outbox semantic: every
+        // routed write + its audit row + its outbox event happen in one tx (ADR-018 D3). Returns
+        // 200 with the new ETag on success.
         //
         // S33 / TASK-3308 changes:
         //   • DTO gains required `EffectiveFrom: DateOnly`; validator rejects anything
@@ -276,12 +304,15 @@ public static class EmployeeProfileEndpoints
         // Error mapping:
         //   • 422 — missing EffectiveFrom (presence guard), the writer's employment-start floor,
         //           or InvalidProfileSupersessionException defense-in-depth
-        //   • 428 — missing / malformed If-Match (EtagHeaderHelper)
-        //   • 412 — OptimisticConcurrencyException (stale version, ADR-019 D2)
-        //   • 404 — no row covers today for the employee (pre-check OR KeyNotFoundException)
-        //   • 409 — a concurrent-seed race, or the SEC-062 organisation-drift guard
+        //   • 428 — no precondition, both, or a malformed one (EtagHeaderHelper)
+        //   • 400 — the fraction rule (edit and re-create); a re-create dated after today or
+        //           before the last real profile's end (QUAL-268)
+        //   • 412 — OptimisticConcurrencyException (stale If-Match, ADR-019 D2)
+        //   • 404 — an edit when no row covers today, or the subject is gone
+        //   • 409 — a re-create while a row covers today or a profile is scheduled (QUAL-268), a
+        //           concurrent-seed race, or the SEC-062 organisation-drift guard
         //   • 403 — OrgScopeValidator denial (cross-org guard), or S148 P-26: the actor changing
-        //           their own fraction, position or category
+        //           their own fraction, position or category, or re-creating their own profile
         // ═══════════════════════════════════════════
         app.MapPut("/api/admin/employee-profiles/{employeeId}", async (
             string employeeId,
@@ -350,12 +381,13 @@ public static class EmployeeProfileEndpoints
             // 1 November and being told the date cannot be in the future while every layer beneath
             // accepted it. See the class doc for what the refusal was load-bearing FOR.
             //
-            // `today` survives the refusal's removal and is now used for FOUR things, none of them a
-            // gate on the requested date: the covers-today 404 pre-check below, the AS-OF-TODAY
-            // response body, the scheduled-change lookup B0 returns, and the OQ-6 test for whether
-            // the row that truncated this write is a SCHEDULED change (it starts after today) or
-            // ordinary closed history (it does not). Read ONCE (PAT-028) so all four describe the
-            // same day.
+            // `today` survives the refusal's removal and is used for FOUR things on an edit, none of
+            // them a gate on the requested date: the covers-today 404 pre-check below, the
+            // AS-OF-TODAY response body, the scheduled-change lookup B0 returns, and the OQ-6 test
+            // for whether the row that truncated this write is a SCHEDULED change (it starts after
+            // today) or ordinary closed history (it does not). A re-create (QUAL-268) also uses it as
+            // a gate: its date is today or earlier, and the probe's "scheduled" and "last profile
+            // end" are reckoned from it. Read ONCE (PAT-028) so all of them describe the same day.
             //
             // ── S142 / TASK-14205 (census row 15) — THE COPENHAGEN BUSINESS DAY ──
             // Every user of this system is Danish, and Denmark is UTC+1 (CET) / UTC+2 (CEST), so
@@ -379,11 +411,38 @@ public static class EmployeeProfileEndpoints
             // routed through this helper (see CopenhagenBusinessDate's class remarks).
             var today = CopenhagenBusinessDate.Today(timeProvider);
 
-            // Admin-strict If-Match parse — 428 if missing / malformed / If-None-Match: *
-            // (per EtagHeaderHelper.TryParseIfMatch admin-strict mode).
-            if (!EtagHeaderHelper.TryParseIfMatch(
+            // ── The precondition decides edit or re-create (QUAL-268, owner ruling 2026-11-24) ──
+            // If-Match: "<n>" is the edit, exactly as before. If-None-Match: * is the re-create of a
+            // profile when none covers today (expectedVersion null), the create-only precondition the
+            // sibling per-person writes use (ADR-019). Neither, both, or a malformed value → 428. The
+            // server never infers a create from the state: an If-Match request on a person no row
+            // covers still answers 404 below, so an edit cannot bring back a closed profile.
+            if (!EtagHeaderHelper.TryParseIfMatchOrIfNoneMatchStar(
                     context.Request, out var expectedVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
+            var isCreate = expectedVersion is null;
+
+            // ── P-26 for the re-create — nobody re-creates their own profile (A-18; RES-003) ──
+            // The fraction and position decide one's own pay, and a re-create always changes them, so
+            // there is no no-op to exempt: unconditional, every role, GlobalAdmin included, before any
+            // value check, read, lock or write (the close's placement). A departed self has already
+            // had the validator's departed answer above. The edit's P-26 stays after the writer.
+            if (isCreate && ApprovalSelfGuard.IsSelf(actor, employeeId))
+                return AdminEndpoints.SelfChangeRefusal(logger, actor, "PUT /api/admin/employee-profiles/{employeeId}");
+
+            // ── The values, before any transaction (one 400, at most one error per field) ──
+            // A re-create's date is today or earlier: it exists to cover today, and a future one would
+            // leave the person uncovered in a state no route can read or edit (a rule, not a shortcut;
+            // the ordinary edit schedules a change once a profile covers today, ADR-040 D8). The
+            // fraction rule holds on both branches.
+            var valueErrors = new List<FieldValidationError>();
+            if (isCreate
+                && ProfileAlignmentValidator.ValidateEffectiveFromTemporality(body.EffectiveFrom, today) is { } futureDate)
+                valueErrors.Add(futureDate);
+            if (PartTimeFractionError(body.PartTimeFraction) is { } fractionError)
+                valueErrors.Add(fractionError);
+            if (valueErrors.Count > 0)
+                return ValidationFailed(valueErrors);
 
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
@@ -429,73 +488,161 @@ public static class EmployeeProfileEndpoints
                     return Results.NotFound(new { error = "Employee profile not found" });
                 }
 
-                // Step 0b Reviewer BLOCKER-3 absorption — Case A 404 pre-check.
-                // PUT is an admin EDIT surface; it must NOT create a net-new row, and after a
-                // soft-delete it must not RESURRECT a deliberately retired profile (the router's
-                // trailing-gap case T stays a repository-level case — refinement Reviewer c3 NEW-8).
-                // Everything "before"-shaped now comes from the writer's COVERING pre-image, so this
-                // read is reduced to the existence probe it always logically was.
-                //
-                // ── S141 / TASK-14104 (wave-1 finding L) — the probe asks "COVERS TODAY" ──
-                // It used to ask `effective_to IS NULL`, which meant the same thing only while
-                // future-dating was refused. Under scheduling an employee whose ONLY row starts in
-                // November HAS an open row, so the old probe admitted them — and the write then
-                // routed as an insert-BEFORE-the-first-row, which is exactly the net-new creation
-                // this pre-check exists to forbid, reached through the one verb documented as
-                // incapable of it. Asking about coverage of today also puts all three verbs on one
-                // question: the GET returns 404 for that employee, the DELETE's own 404 test is
-                // coverage of today (wave 1), and now so is this. One question, three verbs, one
-                // answer.
-                //
-                // Trade-off, stated because it is a real loss: if such an employee ever existed
-                // (seeded, imported, or legacy), HR can no longer repair them through this PUT —
-                // they get a clean 404 instead of a silent row creation. That is the honest answer
-                // for a surface whose own GET cannot show them either, and the state is what
-                // S141's B8 detector (TASK-14105) exists to surface. A deliberate repair path, if
-                // one is ever wanted, is a decision to take with a ruling rather than a side effect
-                // of an inconsistent probe.
+                // ── The probe: one statement, after the pay-inputs and employee- locks ──
+                // (QUAL-268, owner ruling 2026-11-24.) It reads five facts about the person's rows:
+                //   • whether a row covers today;
+                //   • whether a profile is scheduled: a non-zero-length row starting after today, the
+                //     HR "cannot register" list's own test, so the drawer and the list agree;
+                //   • L, the latest end of a non-zero-length row that has ended by today, the list's
+                //     "Mangler dækning siden". A zero-length row [f, f) is the trace a close leaves of
+                //     a cancelled scheduled change and covers no day, so it does not move L;
+                //   • the category a re-create stamps when the body names none: L's row's, else the
+                //     users row's cached one, never a zero-length row's (a cancelled change's);
+                //   • users.version, for the 409 body and as the re-create's first audit
+                //     version_before fallback.
+                // An edit asks only the first question: no row covers today → 404, so an edit can never
+                // bring back a deliberately closed profile. A re-create needs the opposite: nothing
+                // covering today and nothing scheduled (a scheduled profile heals the gap on its date,
+                // and HR must not "fix" it by hand), and a date not before L, so the new row never
+                // overlaps the old one. With nothing covering today and nothing scheduled, every
+                // non-zero-length row has ended by today, so L is at most today and [L, today] is a
+                // real window.
                 bool coversToday;
+                bool profileScheduled;
+                DateOnly? lastProfileEnd;
+                string defaultCategory;
+                long usersVersion;
                 await using (var preCmd = new NpgsqlCommand(
                     """
-                    SELECT 1
-                    FROM employee_profiles
-                    WHERE employee_id = @employeeId
-                      AND effective_from <= @today
-                      AND (effective_to IS NULL OR effective_to > @today)
+                    SELECT
+                        EXISTS (
+                            SELECT 1 FROM employee_profiles ep
+                            WHERE ep.employee_id = u.user_id
+                              AND ep.effective_from <= @today
+                              AND (ep.effective_to IS NULL OR ep.effective_to > @today)
+                        ) AS covers_today,
+                        EXISTS (
+                            SELECT 1 FROM employee_profiles ep
+                            WHERE ep.employee_id = u.user_id
+                              AND ep.effective_from > @today
+                              AND ep.effective_to IS DISTINCT FROM ep.effective_from
+                        ) AS profile_scheduled,
+                        last_real.effective_to AS last_profile_end,
+                        COALESCE(last_real.employment_category, u.employment_category) AS default_category,
+                        u.version
+                    FROM users u
+                    LEFT JOIN LATERAL (
+                        SELECT ep.effective_to, ep.employment_category
+                        FROM employee_profiles ep
+                        WHERE ep.employee_id = u.user_id
+                          AND ep.effective_to IS NOT NULL
+                          AND ep.effective_to <= @today
+                          AND ep.effective_to <> ep.effective_from
+                        ORDER BY ep.effective_to DESC
+                        LIMIT 1
+                    ) last_real ON TRUE
+                    WHERE u.user_id = @employeeId
                     """, conn, tx))
                 {
                     preCmd.Parameters.AddWithValue("employeeId", employeeId);
                     preCmd.Parameters.AddWithValue("today", today);
-                    coversToday = await preCmd.ExecuteScalarAsync(ct) is not null;
+                    await using var probe = await preCmd.ExecuteReaderAsync(ct);
+                    if (!await probe.ReadAsync(ct))
+                    {
+                        // The subject read above found this users row in the same transaction.
+                        throw new InvalidOperationException(
+                            $"users row for user_id='{employeeId}' not found by the profile PUT's probe.");
+                    }
+                    coversToday = probe.GetBoolean(0);
+                    profileScheduled = probe.GetBoolean(1);
+                    lastProfileEnd = probe.IsDBNull(2) ? null : probe.GetFieldValue<DateOnly>(2);
+                    defaultCategory = probe.GetString(3);
+                    usersVersion = probe.GetInt64(4);
                 }
 
-                if (!coversToday)
+                if (!isCreate && !coversToday)
                 {
-                    // PUT is edit-only; no live row → 404 BEFORE routing through
-                    // SupersedeAndCreateAsync's Case A / case T branches (which would otherwise
-                    // INSERT a fresh open row — but here expectedVersion is non-null from
-                    // admin-strict If-Match, so the writer would actually throw
-                    // OptimisticConcurrencyException with ActualVersion=null mapping to 412. We
-                    // pre-empt with the cleaner 404 contract per Step 0b Reviewer BLOCKER-3).
                     await tx.RollbackAsync(ct);
                     return Results.NotFound(new { error = "Employee profile not found" });
                 }
 
+                // ── SEC-062 — the re-create's early organisation compare ──
+                // The re-create's two refusals below name state of the person's rows: the 409 carries
+                // users.version and the 400 carries L, a profile end date. So before either answers,
+                // the organisation `auditUser` was read with (after both advisory locks, not under the
+                // users row lock) must be the one the scope check authorised; a null authorisation
+                // fails closed. Otherwise a transfer committed since the scope check: roll back and
+                // answer the drift guard's 409, which names nothing. This is an unlocked read, so the
+                // guard after the writer stays the binding check. The edit's 404 and 412 are not
+                // behind it; they stay SEC-062's registered residual.
+                if (isCreate
+                    && (authorisedOrgId is null
+                        || !string.Equals(auditUser.PrimaryOrgId, authorisedOrgId, StringComparison.Ordinal)))
+                {
+                    await tx.RollbackAsync(ct);
+                    logger.LogWarning(
+                        "Conflict ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                        OrgScopeValidator.OrganisationDriftClauseName, actor.ActorId, actor.ActorRole,
+                        "PUT /api/admin/employee-profiles/{employeeId}", actor.CorrelationId);
+                    return Results.Conflict(new { error = OrgScopeValidator.OrganisationDriftReason });
+                }
+
+                if (isCreate && (coversToday || profileScheduled))
+                {
+                    // Create-only: a profile is there, or one is scheduled. The sibling's shape (the
+                    // eligibility PUT), without its hint.
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "Employee profile already exists",
+                        currentVersion = usersVersion,
+                    }, statusCode: 409);
+                }
+
+                if (isCreate && lastProfileEnd is { } lastEnd && body.EffectiveFrom < lastEnd)
+                {
+                    // Before L the new row would overlap the last real profile; L itself leaves no gap.
+                    await tx.RollbackAsync(ct);
+                    return ValidationFailed(new[]
+                    {
+                        new FieldValidationError("EffectiveFrom", "BEFORE_LAST_PROFILE_END", new[] { lastEnd }),
+                    });
+                }
+
+                // The re-create's values, sent to the writer on every write of its chain below. The
+                // category: the body's, else the default the probe read, never a cancelled change's
+                // (QUAL-268). The employment-start floor only when the start is on or before today,
+                // so a person who has not started yet can be repaired, as the user create writes such a
+                // row at today (a started person is still refused a date before their start, with the
+                // writer's date-free 422). `requestedCategoryChange` is what ApplyRoutedWriteAsync's
+                // category predicate sees: the body's category only when it differs from the default,
+                // so a re-create raises an EMPLOYMENT_CATEGORY_CHANGE trigger only when HR named a
+                // different category.
+                var createCategory = body.EmploymentCategory ?? defaultCategory;
+                var requestedCategoryChange =
+                    body.EmploymentCategory is not null
+                    && !string.Equals(body.EmploymentCategory, defaultCategory, StringComparison.Ordinal)
+                        ? body.EmploymentCategory
+                        : null;
+
                 // S138 / TASK-13802 — the generalized dated write (TASK-13801). The repository
                 // locks the WHOLE timeline (open row first), validates the aggregate token against
-                // the open row, routes on the locked snapshot (A / B' / C' / E / G / T) and decides
-                // the same-values no-op INSIDE the lock. The fourth field (`employment_category`,
-                // null = keep the covering row's) and the employment-start floor ride along.
+                // the open row (skipped on a re-create's null token), routes on the locked snapshot
+                // (A / B' / C' / E / G / T) and decides the same-values no-op INSIDE the lock. The
+                // fourth field (`employment_category`, null = keep the covering row's) and the
+                // employment-start floor ride along.
+                var supersedeRequest = new EmployeeProfileSupersedeRequest(
+                    EmployeeId: employeeId,
+                    PartTimeFraction: body.PartTimeFraction,
+                    Position: body.Position,
+                    EffectiveFrom: body.EffectiveFrom,
+                    EmploymentCategory: isCreate ? createCategory : body.EmploymentCategory,
+                    EmploymentStartDate: isCreate && auditUser.EmploymentStartDate is { } start && start > today
+                        ? null
+                        : auditUser.EmploymentStartDate);
                 SaveEmployeeProfileResult result;
                 try
                 {
-                    var supersedeRequest = new EmployeeProfileSupersedeRequest(
-                        EmployeeId: employeeId,
-                        PartTimeFraction: body.PartTimeFraction,
-                        Position: body.Position,
-                        EffectiveFrom: body.EffectiveFrom,
-                        EmploymentCategory: body.EmploymentCategory,
-                        EmploymentStartDate: auditUser.EmploymentStartDate);
                     result = await repository.SupersedeAndCreateAsync(
                         conn, tx, supersedeRequest, expectedVersion, ct);
                 }
@@ -551,8 +698,12 @@ public static class EmployeeProfileEndpoints
                 // rows below under its institution. Otherwise a transfer committed in between: roll
                 // back (undoing the write) and answer 409. Checked here, after the writer, because the
                 // repository takes the users lock after the timeline lock and locking users earlier
-                // would invert that order. Refusals the writer throws (412, 404, the 422s, the
-                // concurrent-seed 409) have already answered; P-26's 403 comes after this.
+                // would invert that order. What answered before this point: a re-create's 409 (a
+                // profile covers today or is scheduled) and its 400 (dated before L) come after the
+                // early organisation compare above, so neither reaches an actor whose authorisation a
+                // transfer committed before that unlocked read has outdated; the edit's 404 and 412
+                // have no such compare and stay SEC-062's registered residual; the writer's 422s and
+                // concurrent-seed 409 have also answered. P-26's 403 comes after this.
                 var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
                 if (authorisedOrgId is null
                     || lockedSubject is null
@@ -579,6 +730,14 @@ public static class EmployeeProfileEndpoints
                     await tx.RollbackAsync(ct);
                     return AdminEndpoints.SelfChangeRefusal(logger, actor, "PUT /api/admin/employee-profiles/{employeeId}");
                 }
+
+                // A re-create always writes: with nothing covering today, nothing scheduled and a date
+                // not before L, no row covers or starts on its date except a zero-length one, whose
+                // reopen is never a no-op. A no-op here would answer 200 having created nothing, so it
+                // is a broken invariant, rolled back by the outer catch (500), never a success.
+                if (isCreate && result.IsNoOp)
+                    throw new InvalidOperationException(
+                        $"The profile re-create for employee_id='{employeeId}' was routed as a no-op.");
 
                 // ── S138 / TASK-13802 — the same-values NO-OP (the S23 shape) ──
                 // The writer decided, inside the lock and AFTER the If-Match check, that the
@@ -639,6 +798,10 @@ public static class EmployeeProfileEndpoints
                 //
                 // Returns the aggregate token AFTER this write, so the caller can chain a second
                 // write's If-Match onto it and stamp the LAST one as the ETag.
+                //
+                // `stampedCategory` (optional) is the category the caller sent the writer when it is
+                // not `requestedCategory`: the re-create resolves one and sends it on every write
+                // (QUAL-268), so the audit row and the events narrate what was stamped.
                 async Task<long> ApplyRoutedWriteAsync(
                     SaveEmployeeProfileResult write,
                     decimal partTimeFraction,
@@ -646,7 +809,8 @@ public static class EmployeeProfileEndpoints
                     string? requestedCategory,
                     DateOnly requestedFrom,
                     long fallbackVersionBefore,
-                    string source)
+                    string source,
+                    string? stampedCategory = null)
                 {
                     var profileId = write.ProfileId;
                     var newVersion = write.Version;
@@ -666,10 +830,12 @@ public static class EmployeeProfileEndpoints
                     var writtenFrom = write.NewEffectiveFrom ?? requestedFrom;
                     var writtenTo = write.NewEffectiveTo;
 
-                    // The category value the writer actually stamped on the row: the request value when
-                    // supplied, else the covering row's, else the live users cache (the writer's own
-                    // COALESCE order — mirrored here only to narrate the audit row + the events).
-                    var writtenCategory = requestedCategory
+                    // The category value the writer actually stamped on the row: the caller's stamped
+                    // value when it sent one (the re-create's), else the request value when supplied,
+                    // else the covering row's, else the live users cache (the writer's own COALESCE
+                    // order — mirrored here only to narrate the audit row + the events).
+                    var writtenCategory = stampedCategory
+                        ?? requestedCategory
                         ?? covering?.EmploymentCategory
                         ?? auditUser.EmploymentCategory;
 
@@ -828,9 +994,9 @@ public static class EmployeeProfileEndpoints
                     //   Inserted   (C' on a HISTORY row)   → EmployeeProfileSuperseded, NewEffectiveTo SET
                     //   InsertedBeforeFirst / InGap / Trailing / Created (nothing closed)
                     //                                      → EmployeeProfileCreated
-                    // The last group is UNREACHABLE through this surface (the covers-today pre-check +
-                    // the admin-strict If-Match make an uncovered timeline a 404/412), but it is mapped
-                    // rather than thrown so the switch is total against the router's kinds.
+                    // The last group is what a re-create writes first (T, A, G or E; QUAL-268, owner
+                    // ruling 2026-11-24) and what an edit writes when it fills a gap (G, E); the
+                    // re-create's chained reopens of zero-length rows are B' (ADR-020 D2 Case C).
                     //
                     // S66 / TASK-6604 — the emitted event's EventId is the revaluation's
                     // TriggeringProfileEventId AND the worklist trigger's causal link.
@@ -915,15 +1081,23 @@ public static class EmployeeProfileEndpoints
                         triggeringProfileEventId = createdEvent.EventId;
                     }
 
-                    // S138 — the change predicates, taken against the COVERING row (recon discovery 8).
-                    // A backdate whose values equal TODAY's but differ from the covering row IS a change;
-                    // a value equal to the covering row is the real no-op and never reaches here.
-                    // A gap fill (covering null) is a change by construction — there was nothing there.
-                    var fractionChanged = covering is null || covering.PartTimeFraction != partTimeFraction;
-                    var positionChanged = covering is null
-                        || !string.Equals(covering.Position, position, StringComparison.Ordinal);
+                    // The change predicates, taken against the COVERING row's pre-image (S138, recon
+                    // discovery 8). A backdate whose values equal TODAY's but differ from the covering
+                    // row IS a change; a value equal to a covering row that covered days is the real
+                    // no-op and never reaches here. Two pre-images are changes by construction, because
+                    // no day had this profile before the write: a null one (a gap fill) and a
+                    // zero-length one [f, f), the trace a close leaves of a cancelled change or of a
+                    // row created that day, which any write dated on it reopens: a re-create, its
+                    // chain, an edit (ADR-020 D2 Case C; QUAL-268).
+                    // So revaluation and the PROFILE_CHANGE trigger run for every such write, whatever
+                    // its values; `previous_data` above still records the zero-length pre-image. The
+                    // category trigger still needs a category the request named (`requestedCategory`),
+                    // so a body without one never raises it.
+                    var coveredNothing = covering is null || covering.EffectiveTo == covering.EffectiveFrom;
+                    var fractionChanged = coveredNothing || covering!.PartTimeFraction != partTimeFraction;
+                    var positionChanged = coveredNothing || !string.Equals(covering!.Position, position, StringComparison.Ordinal);
                     var categoryChanged = requestedCategory is not null
-                        && !string.Equals(covering?.EmploymentCategory, requestedCategory, StringComparison.Ordinal);
+                        && (coveredNothing || !string.Equals(covering!.EmploymentCategory, requestedCategory, StringComparison.Ordinal));
 
                     // ── S66 / TASK-6604 (ADR-032 D4), re-windowed by S138 / TASK-13802 — revaluation ──
                     // Trigger: ANY fullDayHours-affecting field changed — part_time_fraction OR position
@@ -1006,9 +1180,59 @@ public static class EmployeeProfileEndpoints
                 }
 
                 // ── The write HR actually asked for ──
-                var newVersion = await ApplyRoutedWriteAsync(
-                    result, body.PartTimeFraction, body.Position, body.EmploymentCategory,
-                    body.EffectiveFrom, expectedVersion, ProfileAuditSource.AdminEdit);
+                // On a re-create the version-before fallback is the probe's users.version (the writer
+                // reports the one it locked, which wins); the category sent and narrated is the
+                // resolved one.
+                var newVersion = isCreate
+                    ? await ApplyRoutedWriteAsync(
+                        result, body.PartTimeFraction, body.Position, requestedCategoryChange,
+                        body.EffectiveFrom, usersVersion, ProfileAuditSource.AdminCreate, createCategory)
+                    : await ApplyRoutedWriteAsync(
+                        result, body.PartTimeFraction, body.Position, body.EmploymentCategory,
+                        body.EffectiveFrom, expectedVersion!.Value, ProfileAuditSource.AdminEdit);
+
+                // ── The re-create runs open from HR's date (QUAL-268, owner ruling 2026-11-24) ──
+                // A close that cancelled a scheduled change leaves it on the timeline as a zero-length
+                // row [z, z), and the router counts that row as "the next row", so a re-create dated
+                // before z is written as a closed gap row ending at z: a profile that would silently
+                // stop on the cancelled change's date. So while the last written row has an end date z,
+                // write again at z through the same writer, with the same fraction, position and
+                // category and a null token. That write reopens the zero-length row in place (the
+                // router's B', ADR-020 D2 Case C "update and reopen"), up to the next zero-length row
+                // or open. Each write goes through ApplyRoutedWriteAsync, so each has its audit row,
+                // event, projection row, revaluation and worklist hand-off; the version-before
+                // fallback is the running token, and the 200 carries the last one. Lock order is
+                // unchanged: the writer re-locks rows this transaction already holds.
+                //
+                // The guard: each chained write must come back as an in-place update of the
+                // zero-length row starting at z; anything else throws (rolled back by the outer catch,
+                // 500) — a guard, not a path. The loop ends only on an open row: a reopened row ends
+                // at the next row's start, strictly after z, and is no longer zero-length, so each
+                // pass moves forward over a finite timeline. Given up: the repaired profile is stored
+                // as one row per cancelled change's interval, with equal values.
+                if (isCreate)
+                {
+                    var lastWrite = result;
+                    while (lastWrite.NewEffectiveTo is { } reopenFrom)
+                    {
+                        var reopen = await repository.SupersedeAndCreateAsync(
+                            conn, tx, supersedeRequest with { EffectiveFrom = reopenFrom },
+                            expectedVersion: null, ct);
+                        if (reopen.Kind != TemporalWriteKind.Updated
+                            || reopen.Covering is not { } reopened
+                            || reopened.EffectiveFrom != reopenFrom
+                            || reopened.EffectiveTo != reopenFrom)
+                        {
+                            throw new InvalidOperationException(
+                                $"The profile re-create for employee_id='{employeeId}' met a row at " +
+                                $"{reopenFrom:yyyy-MM-dd} that is not a zero-length row to reopen ({reopen.Kind}).");
+                        }
+                        newVersion = await ApplyRoutedWriteAsync(
+                            reopen, body.PartTimeFraction, body.Position, requestedCategoryChange,
+                            reopenFrom, newVersion, ProfileAuditSource.AdminCreateReopen, createCategory);
+                        lastWrite = reopen;
+                    }
+                }
 
                 // ── S141 / TASK-14104 — OQ-6: carry the edited field into the scheduled change ──
                 //
@@ -1040,7 +1264,12 @@ public static class EmployeeProfileEndpoints
                 // behaviour. It bumps the token again — correctly — so the response carries the LAST
                 // token, and the audit trail holds two chained transitions rather than one that skips
                 // a number.
-                var carryForwardTarget = body.CarryForwardToScheduledChange == true
+                //
+                // A re-create skips it, and ignores the flag when sent (QUAL-268): there is no
+                // colleague's scheduled change to carry into (a re-create is refused while one is
+                // scheduled), and the chain above has already run the profile open.
+                var carryForwardTarget = !isCreate
+                    && body.CarryForwardToScheduledChange == true
                     && result.NewEffectiveTo is { } boundary && boundary > today
                         ? boundary
                         : (DateOnly?)null;
@@ -2112,7 +2341,9 @@ public static class EmployeeProfileEndpoints
         /// (TASK-14102) ended by converting every current-state read to as-of-today. The value must
         /// still be PRESENT (an omitted non-nullable <c>DateOnly</c> binds <c>0001-01-01</c> and
         /// would route as a correction covering all recorded history), and the writer still refuses
-        /// a date before the employee's employment start with a DATE-FREE 422.</summary>
+        /// a date before the employee's employment start with a DATE-FREE 422. A re-create
+        /// (<c>If-None-Match: *</c>; QUAL-268) is the exception: today or earlier, and not before the
+        /// last real profile's end.</summary>
         public DateOnly EffectiveFrom { get; init; }
         public decimal PartTimeFraction { get; init; }
         public string? Position { get; init; }
@@ -2149,8 +2380,8 @@ public static class EmployeeProfileEndpoints
         /// <para>
         /// <b>Ignored unless it can mean something.</b> It has an effect only when this write is
         /// actually truncated by a row that starts AFTER today — i.e. a genuine scheduled change.
-        /// Sent on an ordinary edit it does nothing, so a client may set it unconditionally without
-        /// having to reason about the timeline.
+        /// Sent on an ordinary edit it does nothing, and a re-create ignores it (QUAL-268), so a
+        /// client may set it unconditionally without having to reason about the timeline.
         /// </para>
         /// </summary>
         public bool? CarryForwardToScheduledChange { get; init; }
@@ -2184,6 +2415,18 @@ public static class EmployeeProfileEndpoints
         /// <summary>The write HR asked for through the admin profile PUT.</summary>
         public const string AdminEdit = "ADMIN_PROFILE_PUT";
 
+        /// <summary>The re-create HR asked for through the admin profile PUT with
+        /// <c>If-None-Match: *</c>: a new profile when none covers today (QUAL-268, owner ruling
+        /// 2026-11-24). On a zero-length row's reopen its action is UPDATED, so only this says it
+        /// was a re-create.</summary>
+        public const string AdminCreate = "ADMIN_PROFILE_CREATE";
+
+        /// <summary>Each DERIVED write of that re-create: a zero-length row a close left in its way
+        /// (a cancelled scheduled change), reopened with the re-create's values so the new profile
+        /// runs open from HR's date (ADR-020 D2 Case C). Distinguishable from the write HR asked
+        /// for, as the carry-forward is.</summary>
+        public const string AdminCreateReopen = "ADMIN_PROFILE_CREATE_REOPEN";
+
         /// <summary>The second, DERIVED write of an OQ-6 carry-forward: the edited field propagated
         /// into the change that was already scheduled. Distinguishable from the primary write so a
         /// reconstruction can tell what HR typed from what the ruling then did with it.</summary>
@@ -2215,4 +2458,38 @@ public static class EmployeeProfileEndpoints
     /// </summary>
     private const string MissingEffectiveFromError =
         "EffectiveFrom is required and must be a real date.";
+
+    /// <summary>
+    /// The part-time fraction's value rule, on the edit and the re-create alike: above zero, at most
+    /// three decimals, at most the column's own limit; the first failure only. There is no ceiling
+    /// at 1.000: the state agreements know plustid, work above full time, so 1.000 is not a limit
+    /// the server may invent (SEC-033 / OQ-2). 9.999 is <c>NUMERIC(4,3)</c>'s limit, so a larger
+    /// value is a 400 here rather than the column's overflow 500 (QUAL-268).
+    /// </summary>
+    private static FieldValidationError? PartTimeFractionError(decimal fraction)
+    {
+        var code = fraction <= 0 ? "MUST_BE_POSITIVE"
+            : decimal.Round(fraction, 3) != fraction ? "TOO_MANY_DECIMALS"
+            : fraction > PartTimeFractionColumnMax ? "EXCEEDS_STORAGE_LIMIT"
+            : null;
+        return code is null
+            ? null
+            : new FieldValidationError(nameof(UpdateEmployeeProfileRequest.PartTimeFraction), code, null);
+    }
+
+    /// <summary><c>employee_profiles.part_time_fraction</c> is <c>NUMERIC(4,3)</c>.</summary>
+    private const decimal PartTimeFractionColumnMax = 9.999m;
+
+    /// <summary>The house 400: <c>{ error, fields: [ { field, code, nearestValid } ] }</c>, dates
+    /// ISO-8601, at most one error per field.</summary>
+    private static IResult ValidationFailed(IReadOnlyList<FieldValidationError> errors) => Results.BadRequest(new
+    {
+        error = "Employee profile validation failed",
+        fields = errors.Select(e => new
+        {
+            field = e.Field,
+            code = e.Code,
+            nearestValid = e.NearestValid?.Select(d => d.ToString("O")).ToArray(),
+        }).ToArray(),
+    });
 }

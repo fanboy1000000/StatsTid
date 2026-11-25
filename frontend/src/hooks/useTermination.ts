@@ -248,7 +248,8 @@ export function useTermination() {
   )
 
   /** Best-effort context + B0 read — terminated-inclusive but anchored on "a row covers today",
-      so it can still 404 in the (product-unreachable-today) no-covering-row state; swallowed. */
+      so it 404s for a person whose profile was closed (an ordinary state HR repairs in the edit drawer
+      with "Opret ny profil", QUAL-268); swallowed. */
   const fetchProfileContext = useCallback(
     async (employeeId: string): Promise<EmployeeProfileResponse | null> => {
       const result = await apiFetchWithEtag('/api/admin/employee-profiles/{employeeId}', {

@@ -533,7 +533,8 @@ export function CannotRegisterList({
         <>
           Ret den manglende overenskomstkode eller ansættelsesprofil under{' '}
           <Link to="/admin/organisation-medarbejdere">Organisation &amp; medarbejdere</Link> — medmindre
-          rækkens status viser en planlagt dækning: så retter dækningen sig selv, og der skal ikke gøres noget.
+          rækkens status viser en planlagt dækning: så retter dækningen sig selv, og der skal ikke gøres noget.{' '}
+          En manglende ansættelsesprofil opretter du ved at åbne medarbejderen dér og vælge "Opret ny profil".
         </>
       }
     >

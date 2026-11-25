@@ -31,7 +31,7 @@ import type { EditLiveState } from '../../../hooks/useEditPerson'
 import { useCalendarToday } from '../../../contexts/CalendarContext'
 import type { Organization, WithEtag, User } from '../../../hooks/useAdmin'
 import type { ForestMaoNode } from '../../../hooks/useForest'
-import { fetchEmployeeProfile } from '../editPerson/employeeProfileApi'
+import { fetchEmployeeProfileState, type EmployeeProfileSnapshot, type ProfileRead } from '../editPerson/employeeProfileApi'
 import { StamdataSection } from '../editPerson/StamdataSection'
 import { ProfileSection } from '../editPerson/ProfileSection'
 import { EntitlementSection } from '../editPerson/EntitlementSection'
@@ -134,6 +134,11 @@ export function PersonDrawer({
   const [approverClearedByOrgChange, setApproverClearedByOrgChange] = useState(false)
 
   const [live, setLive] = useState<EditLiveState | null>(null)
+  // What the profile read said when NO profile covers today ('none' with the server's options, or
+  // 'unknown'); null when one does or nothing is loaded yet.
+  const [noProfile, setNoProfile] = useState<ProfileRead | null>(null)
+  // The profile form's create request is in flight: "Gem ændringer" waits (it names the version the create moves).
+  const [createPending, setCreatePending] = useState(false)
   const [hydrating, setHydrating] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -279,6 +284,8 @@ export function PersonDrawer({
     // here too (not in `hydrate()`), keeping value and baseline in step for every person opened.
     agreementBaselineRef.current = target.agreementCode
     setProfile(EMPTY_PROFILE)
+    setNoProfile(null)
+    setCreatePending(false)
     setEntitlement(EMPTY_ENTITLEMENT)
     setPlacementUnitId(currentUnitId ?? null)
     setApex(lifecycleContext?.isRoot ?? false)
@@ -287,13 +294,17 @@ export function PersonDrawer({
 
     async function hydrate() {
       try {
-        const [profileSnap, dob, employmentStart, elig] = await Promise.all([
-          isHr ? fetchEmployeeProfile(target.userId).catch(() => null) : Promise.resolve(null),
+        const [profileRead, dob, employmentStart, elig] = await Promise.all([
+          isHr
+            ? fetchEmployeeProfileState(target.userId).catch((): ProfileRead => ({ kind: 'unknown' }))
+            : Promise.resolve(null),
           isHr ? fetchBirthDate(target.userId).catch(() => null) : Promise.resolve(null),
           isHr ? fetchEmploymentStartDate(target.userId).catch(() => null) : Promise.resolve(null),
           isHr ? fetchChildSickEligibility(target.userId).catch(() => null) : Promise.resolve(null),
         ])
         if (cancelled) return
+        const profileSnap = profileRead?.kind === 'profile' ? profileRead.snapshot : null
+        setNoProfile(profileRead !== null && profileRead.kind !== 'profile' ? profileRead : null)
         if (profileSnap) {
           setProfile({
             partTimeFraction: profileSnap.partTimeFraction.toFixed(3),
@@ -339,6 +350,19 @@ export function PersonDrawer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, user])
+
+  // The profile was re-created by the section's own form: it is now the live profile, and its 200 carries the
+  // employee's new one version token, which the next "Gem ændringer" must name (else it answers 412).
+  const onProfileCreated = useCallback((snapshot: EmployeeProfileSnapshot) => {
+    const fields = { partTimeFraction: snapshot.partTimeFraction.toFixed(3), position: snapshot.position ?? '' }
+    setProfile(fields)
+    profileBaselineRef.current = fields
+    setNoProfile(null)
+    setLive((l) =>
+      l ? { ...l, profile: snapshot, user: { ...l.user, etag: snapshot.etag, version: snapshot.version } } : l,
+    )
+    toast({ title: 'Profilen er oprettet.', variant: 'success' })
+  }, [toast])
 
   const patchStamdata = useCallback((patch: Partial<StamdataFields>) => {
     setStamdata((s) => {
@@ -517,6 +541,7 @@ export function PersonDrawer({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
+    if (createPending) return
     setFormError(null)
     setSaving(true)
     try {
@@ -851,6 +876,12 @@ export function PersonDrawer({
                 saveState={INITIAL_SECTION_SAVE}
                 disabled={busy}
                 selfLockNoteId={selfLockNoteId}
+                noProfile={noProfile}
+                employeeId={user.userId}
+                today={today}
+                employmentStart={live?.employmentStartInitial ?? ''}
+                onCreated={onProfileCreated}
+                onPendingChange={setCreatePending}
               />
 
               {/* S141 / TASK-14107 — B0 + OQ-6 (a) for the profile fields
@@ -1002,7 +1033,7 @@ export function PersonDrawer({
           <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={busy}>
             Annullér
           </button>
-          <button type="submit" className={styles.submitBtn} disabled={busy || dateBlockedReason !== null}>
+          <button type="submit" className={styles.submitBtn} disabled={busy || createPending || dateBlockedReason !== null}>
             {saving ? 'Gemmer...' : submitLabel}
           </button>
         </div>

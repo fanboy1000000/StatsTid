@@ -4456,3 +4456,28 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 **FU-1** `6301f525` (`backend-infrastructure`, rulings 1, 7 and 8; Docker facts expected to change: none, argued) and **FU-2** `82a4818d` → `dfad94ba` (`ux`, rulings 3–6 with the facts; 7 of 18 red on `8d16d3e2`) were combined.
 - **Orchestrator comment-only commit** `5fdc3bb1`: the GET's 404 comment, as ruling 8's doc.
 - **FU-3** (`test-qa`, facts 1a–1d, 2a, 7a and ruling 10) and **the ruling-9 trace** are dispatched on `5fdc3bb1`.
+
+**The QUAL-268 stack reviewed, cycle 2, and merged, 2026-11-25.**
+- **FU-3** `c34b32be` (`test-qa`): facts 1a–1d (a reopened zero-length row hands off), 2a (the phantom scheduled change, pinned) and 7a (the early organisation compare); ruling 10. 5 of 6 were red with FU-1 reverted. Fact 1c's clock was moved to 10 April (a brief contradiction, accepted).
+- **The ruling-9 trace** (`.claude/reviews/S148-QUAL268-ruling9-trace.md`): CONFIRMED and widened (any gap-fill edit dated on or after the cancelled date takes its category).
+- **Cycle 2: both lenses APPROVED.** Codex c2 APPROVED (two test-comment NOTEs); Fable c2 APPROVED (four NOTEs); 5α c2 PASS. Cycles used: 2 of 5.
+- **Merged** `--no-ff` (this commit): TASK-14851 + -T, the master merge, REGEN, TASK-14852, FU-1 to FU-3, the security consult, the Orchestrator's two comment commits.
+- **In the merge commit (O-34; adjudication c1 rulings 2, 9, 11; the owner's "C later, A now"):**
+  - QUAL-268 FIXED (CI-pending); QUAL-266's "Not traced" answered (locally; CI confirms at CI-W6).
+  - HRP-015's resolution step and its `:431` re-read corrected.
+  - Dated notes on ADR-019 (the create-only precondition family), ADR-040 D8 (a re-create is dated today or earlier) and ADR-020 D2 (cancelled zero-length rows).
+  - SEC-033's note (no fraction ceiling at 1.000; R-5), SEC-062's note (the re-create's early compare), new **SEC-069** (Low, the employment category is free text, R-4).
+  - New **QUAL-269** (M, the phantom scheduled change) and **QUAL-270** (M, a gap fill that stops at a cancelled row), cross-linked.
+  - The ROADMAP lines: the root fix "C" (the writer steps over cancelled rows; an ADR-020 amendment) and the per-person deep link (QUAL-266).
+  - Two test-comment truths (Codex c2 NOTEs).
+- **What the owner gets, in plain words.** When HR has closed a still-employed person's profile by mistake, the edit drawer now says so and offers "Opret ny profil": a small form dated from the first day without a profile (never after today), pre-filled from the last profile, with Danish refusals. The save goes through every check a profile change has, puts the affected months on HR's worklist, and recalculates absences. Nobody can re-create their own profile.
+- **Told to the owner (O-17; told, not asked):**
+  - (1) The create form offers a fraction of 0.1–1.0 (ruling 18); a person on plustid cannot be restored to their own fraction above 1.0 from this form, and the form says why its button is disabled. The edit field beside it has the same range.
+  - (2) After a repair across a cancelled change dated ahead, the drawer shows a "planned change" with today's values, and a today-dated edit stops at that date unless carry-forward is ticked (QUAL-269).
+- **Carried to the close (register candidates):**
+  - Fable c2 N2: the create form's "later of the two dates" floor is not pinned when both dates exist (Low);
+  - Fable c2 N3 and N4 (unproven): a carry-forward into a zero-length row, a same-person reload during a pending create;
+  - the builder's F3–F5 (stale remarks; catalog columns) and the GET's midnight window;
+  - `OrganisationDriftGuardTests.ProfileClose_…` failed once in a loaded local run (CI settles it).
+- **For the model-routing register:** two cycles plus one adjudication. Both lenses found the same blocker (the hand-off skip) at cycle 1; the adjudicator caught that the obvious fix contradicted ruling 5 and found a sibling defect (ruling 9) that no lens raised.
+- **The next CI run must show:** AC-Q268a–k (Docker), AC-Q268l and -m (vitest), the contract test `Get_NoCurrentProfile_404BodyMatchesSpec`, facts 1a–1d, 2a, 7a, and PIN-1 unchanged.

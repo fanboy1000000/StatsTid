@@ -646,3 +646,7 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
   - `ManuallySwitchedOff_NoEndDate_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:548`).
 
   The Docker facts are CI-verified: C-2 on the final candidate, K‴ (`a3ce6f7f`), ran them all green (run `42036154930`, 2026-11-05; Regression 2436/2436).
+
+## Note 2026-11-25 — D8 and the profile re-create (QUAL-268)
+
+A **re-create** of a closed employee profile (S148, QUAL-268) is dated today or earlier and not before the last real profile's end; every profile **change** stays future-datable as D8 rules. The re-create's GET 404 body names the day coverage ended, an HR-only profile date, never an employment date (D7). See `.claude/reviews/S148-QUAL268-briefs-adjudication.md` ruling 3.

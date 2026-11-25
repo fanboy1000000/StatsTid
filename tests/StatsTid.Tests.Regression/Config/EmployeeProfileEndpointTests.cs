@@ -339,11 +339,13 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     // Validation — schema CHECK constraints surface as HTTP 4xx via the framework.
     // ═════════════════════════════════════════════════════════════════════════
 
-    // S31 validation surface is intentionally minimal — TASK-3107 endpoint does not
-    // perform input-range validation on weekly_norm_hours or part_time_fraction. The
-    // following two tests document current behavior + the contract gap; a future
-    // tightening (input validator on UpdateEmployeeProfileRequest) should flip these
-    // to assert 400 / 422 and bump the version-after pre-condition.
+    // The endpoint does not perform input-range validation on weekly_norm_hours: the first
+    // test below documents that gap; a future validator should flip it to assert 400 / 422.
+    //
+    // S148 QUAL-268 ruling 6: the part_time_fraction half is no longer a gap. The PUT refuses a
+    // fraction that is not > 0, has more than three decimals, or is above 9.999 (the column's
+    // own limit) with 400 (ProfileRecreateRouteTests pins those), and sets no ceiling at 1.000,
+    // because the agreements know plustid (work above full time): the second test below pins that.
 
     [Fact]
     public async Task Put_NegativeWeeklyNormHours_AcceptedToday_DocumentsValidationGap()
@@ -376,8 +378,13 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         //               or HttpStatusCode.UnprocessableEntity);
     }
 
+    /// <summary><b>R (CI).</b> A fraction above 1.000 (1.5) is accepted: 200. Renamed from
+    /// <c>Put_PartTimeFractionAboveOne_AcceptedToday_DocumentsValidationGap</c>; the assertion is unchanged.
+    /// <para><b>Discriminating assertion.</b> The 200 for 1.5, which a ceiling at 1.000 would turn into a 400. Green before and after
+    /// TASK-14851, by design.</para></summary>
+    // S148 QUAL-268 ruling 6: no domain ceiling at 1.000 (plustid); the rule is > 0, at most three decimals, at most 9.999.
     [Fact]
-    public async Task Put_PartTimeFractionAboveOne_AcceptedToday_DocumentsValidationGap()
+    public async Task Put_PartTimeFractionAboveOne_Accepted_NoDomainCeiling()
     {
         var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
@@ -390,8 +397,8 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         var liveToken = await ReadProfileTokenAsync(client, fresh);
 
         // part_time_fraction is NUMERIC(4,3) with no CHECK constraint; 1.5 fits in the
-        // column type and is semantically out of [0, 1] range. Endpoint absorbs without
-        // validation today.
+        // column type and is above full time. The endpoint accepts it on purpose: the
+        // agreements know plustid, so there is no ceiling at 1.000.
         var rsp = await PutAsync(client, fresh,
             weeklyNormHours: 37.0m, partTimeFraction: 1.5m, position: null,
             ifMatchValue: liveToken.ToString());
