@@ -182,6 +182,28 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
             HttpStatusCode.OK, "the employee-profile PUT");
     }
 
+    /// <summary><b>F (CI).</b> AC-Q268f. The profile re-create (<c>PUT /api/admin/employee-profiles/{id}</c> with <c>If-None-Match: *</c>, dated
+    /// Thursday 5 March 2026, the day the profile was closed) waits on the lock first, before the employee lock and before any profile row lock,
+    /// holds nothing else, and answers 200 once the lock is released. The profile is closed through the route at the class clock (204) before the
+    /// test takes the lock.
+    /// <para><b>Red conditions.</b> On <c>319f8b68</c> the re-create answers 428 before its transaction, so the request completes while the test
+    /// still holds the lock and <c>Assert.True(observed)</c> in <see cref="AssertWaitsFirstAsync"/> fails. A re-create that took another lock first
+    /// would fail the granted-locks assertion.</para></summary>
+    [Fact]
+    public async Task EmployeeProfileRecreate_WaitsFirst_HoldsNothingElse()
+    {
+        var person = await SeedPersonAsync(Cs, "STY01");
+        var client = LocalHrClient(_host, ActorId, "STY01");
+        using (var closed = await SendAsync(client, HttpMethod.Delete, $"/api/admin/employee-profiles/{person}",
+                   body: null, await VersionAsync(person)))
+            Assert.True(closed.StatusCode == HttpStatusCode.NoContent, $"the set-up close: {(int)closed.StatusCode}: {await closed.Content.ReadAsStringAsync()}");
+
+        await AssertWaitsFirstAsync(
+            () => SendCreateAsync(client, $"/api/admin/employee-profiles/{person}",
+                new { effectiveFrom = "2026-03-05", partTimeFraction = 0.8m, position = (string?)null, employmentCategory = (string?)null }),
+            HttpStatusCode.OK, "the employee-profile re-create");
+    }
+
     /// <summary><b>F (CI).</b> <c>DELETE /api/admin/employee-profiles/{id}</c> (the profile close) waits on the lock;
     /// the transaction is at explicit READ COMMITTED, so nothing but the virtual transaction id is held.
     /// <para><b>Red conditions.</b> As above.</para></summary>
@@ -863,6 +885,14 @@ public sealed class PayInputsLockCensusTests : IAsyncLifetime
         if (body is not null)
             req.Content = JsonContent.Create(body);
         req.Headers.TryAddWithoutValidation("If-Match", $"\"{ifMatchVersion}\"");
+        return await client.SendAsync(req);
+    }
+
+    /// <summary>A create-only PUT (<c>If-None-Match: *</c>, no <c>If-Match</c>) with a JSON body.</summary>
+    private static async Task<HttpResponseMessage> SendCreateAsync(HttpClient client, string url, object body)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Put, url) { Content = JsonContent.Create(body) };
+        req.Headers.TryAddWithoutValidation("If-None-Match", "*");
         return await client.SendAsync(req);
     }
 
