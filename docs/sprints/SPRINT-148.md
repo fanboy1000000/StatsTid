@@ -86,6 +86,7 @@ is S149.
 | TASK-14850 | DONE | `65b4c340` |  |
 | TASK-14851 | DONE | `ee3c7805` | the QUAL-268 stack, with -T |
 | TASK-14852 | DONE | `ee3c7805` | the QUAL-268 stack |
+| TASK-14853 | DONE | the SEC-070 merge (its SHA is in the GATE line that follows it) | added by owner ruling 2026-11-25 (plan "final + 33"), with -T |
 | TASK-14512 | DROPPED | none | Not an S148 task: S145's id, cited once as history. Listed only because the close guard collects every id the log names. |
 
 ## Refinement record (Steps 1–4)
@@ -4848,3 +4849,29 @@ Reports: `.claude/reviews/S148-C1-adr-kb-draft-report.md` and `S148-C1-docs-reco
   - **SEC-071** (Low, intent unproven): a role grant can name a user of another organisation.
   - **SEC-072** (Low): the role revoke and the unit routes say whether another organisation's record exists, before checking scope.
 - **TASK-14853-T dispatched** (`test-qa`, on `ab01495c`; brief `.claude/plans/s148/TASK-14853-T.md`).
+
+
+**The TASK-14853 pair (SEC-070), reviewed and merged, 2026-11-25.**
+
+| Lens | Cycle 1 (`45b86bcc..956b20b8`) | Cycle 2 (FU-T, `956b20b8..58be148a`) |
+|---|---|---|
+| 5α | PASS (14 checks) | PASS |
+| Codex | APPROVED-WITH-WARNINGS. W: the 404 test checked only the `error` field, so an existence-revealing extra field could pass. | APPROVED. Two NOTEs: the outer whitespace; one docstring overstated what it detects (fixed below). |
+| Fable | APPROVED, six NOTEs. It verified the facts' red against `45b86bcc` itself; the census covers **41** call sites, not 36 (the table was complete). | APPROVED. NOTE: the class header said "one project each" (fixed below). |
+| Security consult | RESIDUALS, none blocking: R-1 the audit gap (QUAL-283), R-2 the organisation-existence 403 reason, R-3 two test gaps. | (not re-run; the delta is tests only) |
+
+- **Rulings c1** (`.claude/reviews/S148-TASK-14853-5a-rulings-c1.md`; no lens disagreement, so no adjudication):
+  - FU-T R1–R4: the exact 404 body; a plain LocalAdmin addressing B gets 403; a multi-organisation admin gets 404 on a mismatch and 200 on a match; one's own inactive project still edits.
+  - R6: SEC-071 reworded. R7: **SEC-073** registered.
+  - R9: **the facts' red on `45b86bcc` is verified by reading** by Fable, Codex and the consult. There is no CI mutation run, as in wave 6.
+- **FU-T** `58be148a` (`test-qa`): 8 facts in `ProjectOrgBindingTests`, all Docker-gated. They compile at both `45b86bcc` and the tip.
+- **The Orchestrator's comment-only commit** `a41afec3`:
+  - the test header and R2's docstring made true;
+  - `PayrollExportService.cs:576-577` now names `RefusePeriodNotAMonth` instead of the stale `Program.cs:296` (carried from the KB draft).
+- **Merged** `--no-ff` (this commit): TASK-14853 `ab01495c`, TASK-14853-T `956b20b8`, FU-T `58be148a`, `a41afec3`. Cycles used: 2 of 5.
+- **In the merge commit:**
+  - SEC-070 marked FIXED, CI-pending until C-2, with the audit gap pointed to QUAL-283;
+  - the INDEX row and QUALITY.md name SEC-070 as fixed and count QUAL-283 and SEC-071 … SEC-073;
+  - the Task ledger gains TASK-14853.
+- **What the owner gets, in plain words.** An administrator can no longer change another organisation's project. A request that names another organisation's project, or one that does not exist, gets the same "Project not found", and nothing is written. Editing and deactivating one's own projects works as before.
+- **The next CI run (C-2) must show:** the 8 `ProjectOrgBindingTests` facts green, and `S119ProjectSpecRuntimeTests` and `MixedRoleScopeLeakTests`' project facts still green.

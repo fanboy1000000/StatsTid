@@ -131,7 +131,12 @@ public static class ProjectEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            await projectRepo.UpdateAsync(projectId, request.ProjectName, request.SortOrder, ct);
+            // SEC-070: the write is bound to the URL's organisation, which the gate above checked,
+            // so an admin of one organisation cannot rename another organisation's project by its
+            // id. "No such project" and "another organisation's project" get the same 404, so the
+            // answer reveals nothing about another organisation's projects.
+            if (!await projectRepo.UpdateAsync(orgId, projectId, request.ProjectName, request.SortOrder, ct))
+                return Results.NotFound(new { error = "Project not found" });
 
             return Results.Ok(new ProjectUpdateResponse(ProjectId: projectId, Updated: true));
         }).RequireAuthorization("LocalAdminOrAbove")
@@ -155,7 +160,11 @@ public static class ProjectEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
-            await projectRepo.DeactivateAsync(projectId, ct);
+            // SEC-070: bound to the URL's organisation, as the PUT above; the same 404 for "no such
+            // project" and "another organisation's project". An already-inactive project of this
+            // organisation still matches, so a repeated deactivation answers 204.
+            if (!await projectRepo.DeactivateAsync(orgId, projectId, ct))
+                return Results.NotFound(new { error = "Project not found" });
 
             return Results.NoContent();
         }).RequireAuthorization("LocalAdminOrAbove")
