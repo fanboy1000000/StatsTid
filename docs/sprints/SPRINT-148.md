@@ -4481,3 +4481,19 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - `OrganisationDriftGuardTests.ProfileClose_…` failed once in a loaded local run (CI settles it).
 - **For the model-routing register:** two cycles plus one adjudication. Both lenses found the same blocker (the hand-off skip) at cycle 1; the adjudicator caught that the obvious fix contradicted ruling 5 and found a sibling defect (ruling 9) that no lens raised.
 - **The next CI run must show:** AC-Q268a–k (Docker), AC-Q268l and -m (vitest), the contract test `Get_NoCurrentProfile_404BodyMatchesSpec`, facts 1a–1d, 2a, 7a, and PIN-1 unchanged.
+
+**QUAL-268 stack merge GATE, 2026-11-25 (on `ee3c7805`): green.**
+- Backend: build 0 errors (126 warnings); Unit 1848, DemoSeed 170 and Regression non-Docker 147 passed.
+- The shortcut check found 22 lines, 0 bad.
+- Frontend: `tsc`, lint, `typecheck:e2e` and the build are clean. **The full vitest run, done alone, passed: 122 files, 1405 tests.**
+- The six QUAL-268 worktrees were pruned. FU-2's original branch was carried by cherry-pick (its patch-id was found in master).
+
+**Wave 6 is fully merged.** In order:
+1. the TASK-14832 stack;
+2. the TASK-14834 stack (customary days);
+3. TASK-14838 (the central editors' dates);
+4. the TASK-14836 stack (HR facts);
+5. TASK-14850 (the drawer's transfer date block);
+6. the QUAL-268 repair stack.
+
+**CI-W6 is next:** evidence only, on a `ci/s148-w6` branch with a draft PR, closed unmerged when judged. Wave 6 has no CI mutation run (ruling 40).
