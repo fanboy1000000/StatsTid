@@ -4745,3 +4745,18 @@ Worded for the sprint-log paragraph of that name. Each is Low (L) unless marked;
 27. **Not registered by choice, recorded neutrally:** whether the year-end close should try a dated configuration row before refusing when the employee's current key has no open row (Fable N-7 of TASK-14842, "a separate question for the register, if the owner wants it"; log :1095). The existing fail-closed choice stands (ADR-033 D10).
 
 Already in the sprint log, so not repeated: `formatDanishNumber`'s half rounding and the engine's host-culture messages (log :1583-1585); the 48-hour average shown half up (log :1699, its cite `RestPeriodRule.cs:594` is now `:648`).
+
+**C-1, the second comment-only sweep, merged 2026-11-25** (`9122a6c0`). The spec `.claude/plans/s148/C1-comment-sweep-2-spec.md` was drafted by the `planner`; the `sweep` agent (Haiku 5.5) applied it as `943d511b`. Reports: `.claude/reviews/S148-C1-comment-sweep-2-spec-report.md` and `S148-C1-comment-sweep-2-report.md`.
+- **What it fixed:** eight remarks the register drafter found, plus QUAL-BF-011's shortcut comment.
+  - Three comments named `EmployeeProfileRepository.InsertLiveRowAsync`, which does not exist. Each now names the real method (`ExecuteOpenInsertAsync`, or `ExecuteSplitAsync`).
+  - The `Today()` doc now names its five call sites by method, not by line.
+  - Two position-override page comments were corrected; the `hasRows` identifier was not renamed.
+  - `ProjectionBackfillService`'s header now names all three rebuilt tables.
+  - `PriorMonthNotApprovedException`'s doc now says the manifest stays when the export re-check refuses. Its 409 message text is behaviour, so it is excluded and stays as below-floor item 1.
+  - The new `// shortcut(QUAL-BF-011): …` comment sits at the Skema month catalogue's month-end anchor (`SkemaEndpoints.cs:343`). QUAL-BF-011's status cell now says so.
+- **Verified by the Orchestrator:** `git diff -U0` shows comment lines only.
+- **GATE (on `9122a6c0` plus the register cell): green.**
+  - Backend: build 0 errors, 126 warnings; Unit 1848, DemoSeed 180 and Regression non-Docker 148 all passed.
+  - **Shortcut check: 23 found, 0 bad** (22 + QUAL-BF-011).
+  - Frontend: `tsc` clean; ESLint has no finding on the two files.
+- **Carried to their next touch:** three more mentions of the non-existent `InsertLiveRowAsync`, at `docker/postgres/init.sql:5050-5052`, `ProfileCategoryDatingTests.cs` (`:20`, `:86`, `:174`, `:214`, `:234`) and `UserAgreementCodeRepositoryTests.cs:33`. The sentences around them have drifted since S143 (creates go through `CreateAsync`; the category now comes from the predecessor first), so a rename alone would not make them true. They need a careful rewrite.
