@@ -4296,3 +4296,102 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - the two test classes that hard-code `localhost:5432`.
 - **For the model-routing register:** the HR-facts stack took three cycles. The server half was approved at cycle 1 apart from one missing test; the long tail was the drawer section's late-answer handling again, as in the 14834 and 14838 stacks. Codex found the cycle-1 date blocker; Fable found the back-dating defect; the copy adjudication caught a ruling of the Orchestrator's that would have re-opened it.
 - **The next CI run must show:** AC-C11a … f (with `SameDateSave_UpdatesInPlace_Audited` and the consult's added negatives), the contract test `HrFacts_Get_SchemaMatchesRuntime`, AC-C11g in the frontend job, `check_endpoint_contracts.py` passing with the new key, `check_docs.py` passing with QUAL-BF-009/010, and PIN-1 unchanged.
+
+**HR-facts merge GATE, 2026-11-25 (on `319f8b68`): green.**
+- Backend: build 0 errors. Unit 1848, DemoSeed 170 and Regression non-Docker 147 passed.
+- The shortcut check found 22 lines, 0 bad; it now includes QUAL-BF-009 and QUAL-BF-010.
+- Frontend: `tsc`, lint, `typecheck:e2e` and the build are clean.
+- **The full vitest run, done alone, passed: 119 files, 1376 tests.**
+- The six HR-facts worktrees were pruned. FU-2's branch was carried by cherry-pick; its patch-id is identical to `460dc54f`.
+
+**Disk watch:** free space on C: fell to 4.7 GB, from about 9 GB, during this run.
+- The worktrees (49 MB), the session temp folders (about 0.6 GB) and the repository (863 MB) do not account for it; the cause was not found in the files this sprint writes.
+- Each new worktree is pruned as soon as it merges. The owner is told.
+
+**Wave-7 briefs at draft 2** (`3bf1f369`): all 24 rulings and the ten "final + 32" plan amendments are applied (`.claude/reviews/S148-wave7-briefs-applied-report.md`). The Orchestrator brought the plan's header, Status row and O-item range to "final + 32".
+
+**TASK-14851 dispatched** (`backend-infrastructure`, the QUAL-268 repair route) on `319f8b68`. It is built early on its own branch, as ruling 43 allows.
+
+**TASK-14850 dispatched** (`ux`, the drawer's transfer date block) on `319f8b68`, after the HR-facts stack's green GATE.
+
+**TASK-14850 returned** `8471e464` (`ux`) on `319f8b68` (report `.claude/reviews/S148-TASK-14850-report.md`).
+- **While the organisation changes,** the drawer offers no date after today: `max` is today, and the ruled NR-P4 block sentence appears with the save disabled.
+- **The two transfer refusals are mapped to ruled Danish,** the earliest date included.
+- **The picker's label, helper and parenthesis are made true** (BC-6).
+- **The self lock (X7) is untouched.**
+- **Tests:** AC-C13j (1) F and (2) R; AC-C13u F (two rows).
+
+**TASK-14850, cycle 1.** The plan's row asks only for Fable; Codex was also run, because the owner has asked that both lenses check work.
+- **Codex c1: APPROVED-WITH-WARNINGS.** W: `BEFORE_CURRENT_ORGANISATION` without `nearestValid` falls back to the raw body.
+- **Fable c1: APPROVED-WITH-WARNINGS.**
+  - W1: the three rewritten date-field texts are pinned by no test.
+  - NOTEs: the merged `aria-describedby` is untested; the base showed the raw response body, not an English sentence; the dateless refusal; the block is not announced; an emptied date (pre-existing); two loose remarks.
+- **5α c1: PASS.**
+- **Rulings c1** (`.claude/reviews/S148-TASK-14850-5a-rulings-c1.md`):
+  - **C1-R1, FU-1 (`ux`):**
+    - the dateless refusal shows the house's ruled "Værdien kunne ikke gemmes.";
+    - the three texts are pinned;
+    - the merged `aria-describedby` gets a fact;
+    - `role="alert"` on the block, as the house pattern;
+    - five comments are made true;
+    - the RED quote.
+  - **C1-R2 accepted, with register candidates for the close:**
+    - an emptied date field;
+    - every other users-PUT 400 shows the raw response body (pre-existing).
+- **FU-1 dispatched.** Cycles used: 1 of 5.
+
+**TASK-14850 reviewed, cycle 2, and merged, 2026-11-25.**
+- **FU-1** `b2185654` (`ux`):
+  - a dateless `BEFORE_CURRENT_ORGANISATION` shows the house's ruled "Værdien kunne ikke gemmes.";
+  - the three date-field texts are pinned;
+  - the merged `aria-describedby` gets a fact;
+  - `role="alert"` on the block;
+  - five comments are made true.
+- **Cycle 2: both lenses APPROVED.** Codex c2 APPROVED (one comment NOTE); Fable c2 APPROVED (four NOTEs); 5α c2 PASS. Cycles used: 2 of 5.
+- **Merged** `--no-ff` (this commit). In the merge commit, the c2 NOTEs:
+  - the catch comment names every path;
+  - the `blockedReason` doc names its three causes;
+  - the new picker test moves to `editPerson/__tests__/`.
+- **What the owner gets, in plain words.** While HR moves a person to another organisation, the edit drawer offers no date after today and says why in Danish.
+  - If the server still refuses a move, HR reads a Danish sentence naming the earliest allowed date, never raw server text.
+  - The date field's label and help text now say what the date governs: the organisation as well as the agreement code and part-time or position.
+  - One's own record stays locked.
+- **O-33 (2), the interim ends:** saving an organisation change with a future date showed the raw response body (TASK-14820 Step 5a cycle-1 adjudication, ruling 7.4). That interim ends at this merge. The ruled Danish refusal shows instead, and the drawer no longer offers such a date.
+- **Carried to the close (register candidates):**
+  - an emptied date field is not blocked (pre-existing; find the server's answer to an empty `effectiveFrom`);
+  - every other 400 on the users PUT shows the raw response body (pre-existing, usability);
+  - a malformed `nearestValid` would print "Invalid Date" (unproven, pre-existing).
+- **The next CI run must show:** the frontend build with AC-C13j and AC-C13u (CI-W6).
+
+**TASK-14851 returned** `c99e52a7` on `319f8b68` (report `.claude/reviews/S148-TASK-14851-report.md`).
+- **The repair, in plain words.** The employee-profile PUT re-creates a closed profile when asked with `If-None-Match: *`.
+  - The re-create is dated today or earlier and not before the last real profile's end.
+  - It runs the full chain: scope check, a self refusal for every role, the pay-inputs lock, the drift guard, audit rows, the event, revaluation and the worklist hand-off.
+  - A cancelled change's zero-length row is reopened in the same save (ruling 3's chain), and the carry-forward is skipped on a create.
+  - The GET's 404 now says whether a create is possible and from when, with the last profile's values for pre-filling.
+  - The fraction rule (> 0, at most 3 decimals, ≤ 9.999, no ceiling at 1.000) now applies to the edit as well. Before, ≤ 0 answered 200, decimals were rounded and > 9.999 gave a 500.
+- **Gate:**
+  - Build 0 errors. The warning sets are identical to the base: 126 / 114.
+  - Unit 1848, DemoSeed 170 and Regression non-Docker 147 passed.
+  - PayInputsLock count 20, unchanged.
+- **Local evidence** (a throwaway cluster on port 55431, and the real API booted from the regression factory): worked example 1, the gap fill, the chain and every refusal.
+- **Declared deviations (6),** for the 5a lenses. Among them:
+  - a create whose first write would be a no-op throws;
+  - a category-trigger edge on the reopen write;
+  - "latest non-zero-length row" read as "ended by today".
+- **Found, not fixed:**
+  - F1: a chained reopen whose values equal the cancelled change's raises no revaluation and no trigger;
+  - F2: after a create across a future cancelled change, the drawer will show a "scheduled" change that changes nothing (for TASK-14852);
+  - F3–F5: stale remarks and catalog columns.
+- **The security consult and TASK-14851-T were dispatched together** on `c99e52a7`. Both carry the port-5432 rule.
+
+**TASK-14850 merge GATE, 2026-11-25 (on `65b4c340`): green.** It is frontend only; the backend is unchanged since `319f8b68`'s green GATE. `tsc`, lint, `typecheck:e2e` and the build are clean. Shortcut check 22, 0 bad. **The full vitest run, done alone, passed: 121 files, 1386 tests.** The two TASK-14850 worktrees were pruned.
+
+**TASK-14851 security consult** (`.claude/reviews/S148-TASK-14851-security-consult.md`): **RESIDUALS, nothing blocking.** It confirms the create reaches exactly whom the edit reaches; the self refusal is unconditional, before any read or lock; there is no state-inferred create; nothing is written on any refusal; the drift guard covers the chain; and the 404 body is HR-only and date-free.
+- **Residuals:**
+  - R-1: the create's 409 and 400 come before the drift guard, a small widening of SEC-062's accepted residual;
+  - R-2: the first write's kind is not asserted (defence in depth);
+  - R-3: the builder's F1, an integrity matter (register);
+  - R-4: the employment category is free text, pre-existing (register);
+  - R-5: no lower date bound with no history.
+- **Its 18 added negatives were sent to TASK-14851-T as contract.**
