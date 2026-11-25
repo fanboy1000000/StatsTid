@@ -4780,3 +4780,16 @@ Already in the sprint log, so not repeated: `formatDanishNumber`'s half rounding
   - `PUT` and `DELETE /api/projects/{orgId}/{projectId}` check the caller's LocalAdmin scope against the URL's organisation, then change the project by `project_id` alone (`ProjectRepository.cs:46-66`).
   - So an admin of organisation A can rename or deactivate organisation B's project, with no audit row.
   - It is pre-existing (Sprints 7–9, `b0ae6523`). The fix is one line per statement. **The fix timing goes to the owner.**
+
+
+**Owner ruling, 2026-11-25 (SEC-070; AskUserQuestion): "Fix it now in S148".** The question was put in plain words, with three options:
+- (a) fix SEC-070 now, before K;
+- (b) the same, with QUAL-280 and QUAL-281's one-line row-count checks;
+- (c) register only, and fix first in S149.
+
+**Adopted: (a), SEC-070 alone.**
+- **The task:** TASK-14853 (`backend-infrastructure`) binds the project update and deactivate to the URL's organisation: `AND org_id = @orgId`, and 404 when no row matches. TASK-14853-T (`test-qa`) adds the cross-organisation facts.
+- **Then:** 5α, both lenses and a security consult; the merge; the GATE; then K.
+- **CI evidence:** C-2's run on K carries the Docker facts' first CI evidence, so no extra CI run is needed.
+- **QUAL-280 and QUAL-281 stay registered,** for a later sprint.
+- Recorded in the plan as "final + 33" (an owner ruling).
