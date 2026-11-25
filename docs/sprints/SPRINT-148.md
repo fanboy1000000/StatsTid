@@ -27,6 +27,67 @@ favour of rules compiled into the code. The test that holds the sprint honest is
 demo payslip must come out the same before and after. The monthly norm itself, where payslips do change,
 is S149.
 
+## Task ledger
+
+*Every task id this log names, with its disposition (the close guard's rule, `docs/WORKFLOW.md:47`). Written at C-1, 2026-11-25, from the C-1 audit (`.claude/reviews/S148-C1-audit-report.md` § 3); every merge SHA was checked as a merge commit on master. Nothing in S148 was cut or deferred: all 53 planned ids are merged. A paired test pass (`-T`) or security pre-pass (`-S`) is merged with its parent, in the same merge commit.*
+
+| Task | Disposition | Merge on master | Note |
+|---|---|---|---|
+| TASK-14800 | DONE | `4e38a682` | wave 0, the pay-unchanged pin (PIN-1) |
+| TASK-14801 | DONE | `c18d525b` | with -T |
+| TASK-14802 | DONE | `e4e6b0ea` | with -T |
+| TASK-14803 | DONE | `fc91e554` | stacked on 14802 |
+| TASK-14804 | DONE | `72f286fe` | with -T |
+| TASK-14805 | DONE | `14521382` | with -T |
+| TASK-14806 | DONE | `81705338` | with -T |
+| TASK-14807 | DONE | `ece51892` |  |
+| TASK-14808 | DONE | `b42b3b23` |  |
+| TASK-14809 | DONE | `540ac9a9` | the 14809 stack, with -T |
+| TASK-14810 | DONE | `540ac9a9` | the 14809 stack |
+| TASK-14811 | DONE | `26065e1a` | the 14811 stack, with -T |
+| TASK-14812 | DONE | `26065e1a` | with the 14811 stack |
+| TASK-14813 | DONE | `40d3e694` | wave 3, with -T and fix-ups |
+| TASK-14814 | DONE | `40d3e694` | wave 3 |
+| TASK-14815 | DONE | `26cab7d8` | with -T |
+| TASK-14816 | DONE | `7b5317d4` | the 14816 stack, with -T |
+| TASK-14817 | DONE | `7b5317d4` | the 14816 stack |
+| TASK-14818 | DONE | `f56dc64e` | with -T |
+| TASK-14819 | DONE | `7703f940` |  |
+| TASK-14820 | DONE | `d7458466` | with -T |
+| TASK-14821 | DONE | `e58df211` | with -S and -T |
+| TASK-14822 | DONE | `6fadd1fe` | with -T |
+| TASK-14823 | DONE | `90828667` | the 14823 stack, with -T |
+| TASK-14824 | DONE | `90828667` | the 14823 stack |
+| TASK-14825 | DONE | `7af9176b` | with -T |
+| TASK-14826 | DONE | `b5f167aa` | the T14b stack, with -T |
+| TASK-14827 | DONE | `b5f167aa` | the T14b stack |
+| TASK-14828 | DONE | `b5f167aa` | the T14b stack, with -T |
+| TASK-14829 | DONE | `b5f167aa` | the T14b stack |
+| TASK-14830 | DONE | `27160f92` | with -T |
+| TASK-14831 | DONE | `b12a3a79` | the 14831 stack, with -T |
+| TASK-14832 | DONE | `1bba25a0` | the 14832 stack, with -T |
+| TASK-14833 | DONE | `1bba25a0` | the 14832 stack |
+| TASK-14834 | DONE | `1cc0cb1d` | the 14834 stack, with -T |
+| TASK-14835 | DONE | `1cc0cb1d` | the 14834 stack |
+| TASK-14836 | DONE | `319f8b68` | the HR-facts stack, with -T |
+| TASK-14837 | DONE | `319f8b68` | the HR-facts stack |
+| TASK-14838 | DONE | `cc261fd5` |  |
+| TASK-14839 | DONE | `f5c28e03` | wave 7, with -T |
+| TASK-14840 | DONE | `a331e452` | the 14840 stack, with -T |
+| TASK-14841 | DONE | `a331e452` | with the 14840 stack |
+| TASK-14842 | DONE | `6bedcf2c` | with -T |
+| TASK-14843 | DONE | `2810ebeb` | the 14843 stack, with -T |
+| TASK-14844 | DONE | `2810ebeb` | the 14843 stack |
+| TASK-14845 | DONE | `53c2793d` | with -T |
+| TASK-14846 | DONE | `aadd2b10` |  |
+| TASK-14847 | DONE | `b12a3a79` | the 14831 stack, with -T |
+| TASK-14848 | DONE | `f5ff8260` | with -T |
+| TASK-14849 | DONE | `dafd68c0` | with -T |
+| TASK-14850 | DONE | `65b4c340` |  |
+| TASK-14851 | DONE | `ee3c7805` | the QUAL-268 stack, with -T |
+| TASK-14852 | DONE | `ee3c7805` | the QUAL-268 stack |
+| TASK-14512 | DROPPED | none | Not an S148 task: S145's id, cited once as history. Listed only because the close guard collects every id the log names. |
+
 ## Refinement record (Steps 1–4)
 
 **Rev 1** (2026-11-09, `planner` Opus 5.5, at `fee2a635`): the build input's 21 stage-0 and config-stage items
