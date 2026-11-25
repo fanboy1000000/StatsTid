@@ -4659,3 +4659,14 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - No frontend file changed, so there are no frontend checks.
 - The two wave-7 worktrees are pruned after this commit.
 - **Next: C-1 (commit K) and C-2,** the checkpoint on K (branch `s148-ci-k`, all seven jobs). PIN-1 runs final on the reseeded worlds (AC-C12b with arm (f)), with AC-C12a, AC-C12c and `CommittedDemoSeedTests`.
+
+**C-1, the close's comment-only sweep, merged 2026-11-25** (`9a1b6e8c`; spec `.claude/plans/s148/C1-comment-sweep-spec.md` by the `planner`, with the Orchestrator's rulings; applied by the `sweep` agent, Haiku 5.5, `4df0fb4f`; reports `.claude/reviews/S148-C1-comment-sweep-spec-report.md` and `S148-C1-comment-sweep-report.md`).
+- **What it is, in plain words.** S148 retired the time-entry POST, the manual hours and several checks. The comments that still described them as live were rewritten to say what is true now (PAT-032). No behaviour changed.
+- **Size:** 48 blocks in 28 files. That covers the log's 23 (21 still stale; 2 already fixed by `af247ca7`), 14 more that the records sent to the sweep, two items ruled in (the phase-pin test title, whose counts were false, and `TeamOverviewAggregateTests.cs:552`), and `init.sql`'s one column comment (comment-only, authorized; the schema generator strips comments).
+- **Not applied, by ruling:**
+  - `SendCheckIntervalOnlyTests.cs:17`: the ADR-028 D4 amendment written at this close makes it true.
+  - `SkemaEndpoints.cs:1043-1045`: true as written.
+  - `SqlEmitter.cs:202/230`: carried; it regenerates the golden and the committed demo file.
+- **Five more hits outside the spec,** read by the Orchestrator, are true as written: each states the route's retirement as history.
+- **Verified by the Orchestrator:** `git diff -U0` shows only comment lines, apart from `init.sql`'s trailing `--` text and the one test title.
+- **GATE (on `9a1b6e8c`): green.** Build 0 errors, 126 warnings. Unit 1848, DemoSeed 180 and Regression non-Docker 148 passed. The shortcut check reports 22 found, 0 bad. The changed vitest file passed (26 tests).
