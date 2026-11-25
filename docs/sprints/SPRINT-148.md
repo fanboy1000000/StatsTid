@@ -4415,3 +4415,28 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
 - **REGEN** `b3d87267` (Orchestrator): `openapi.json` +41, additions only: the employee-profile GET's 404 response and the `EmployeeProfileNotFoundResponse` schema, as predicted.
 - **TASK-14852 dispatched** (`ux`, the drawer's "create profile") on `b3d87267`.
 - **Codex 5a cycle 1** over the backend half (`319f8b68..54e707d6` plus the REGEN) is running.
+
+**TASK-14852 returned** `6f1e8cd0` (gen:api) + `8d16d3e2` on `b3d87267` (report `.claude/reviews/S148-TASK-14852-report.md`).
+- **The drawer's no-profile states:**
+  - (i) unchanged;
+  - (ii) the note plus "Opret ny profil" when `canCreate`;
+  - (iii) the scheduled sentence;
+  - (v) the unreadable sentence.
+- **The create form:** detached inputs; the date bounded by the floor and today; fraction 0.1–1.0 (ruling 18); its own `If-None-Match: *` save; ruled Danish refusals; a generation ref; the `live` etag re-stamp.
+- **HR's list** names the action.
+- **Tests:** 7 of 17 were red on `b3d87267`. **Full vitest, run alone, on `8d16d3e2`: 122 files, 1394 tests passed.**
+
+**The QUAL-268 stack, cycle 1:**
+
+| Lens | Verdict | Findings |
+|---|---|---|
+| Codex, backend | **CHANGES-REQUIRED** | B1: a re-create that reopens a zero-length row with matching values skips revaluation and the worklist hand-off (the builder's F1 and consult R-3, with a concrete case). W1: the probe's 409/400 answer before the drift guard (consult R-1). N1: the payroll fact overstates its proof. |
+| Codex, drawer | **CHANGES-REQUIRED** | B1: a partial 404 body offers a create without a floor. W1: "Gem ændringer" while a create is pending gives 412. W2: the focus id is wrong. W3: the `"bad"` sentinel collides with a real position. |
+| Fable, union | **CHANGES-REQUIRED** | B1: the same hand-off skip. W1: a repair across a future cancelled change leaves a "scheduled change" (F2). W2: the audit category is untested. W3: a dead submit with no explanation. W4: screen branches untested. NOTEs: R-1, the payroll fact, R-2, nits. |
+| 5α c1 | **PASS** | |
+
+- **An adjudicator rules three points before the fix-ups are written:**
+  - the hand-off predicates (ruling 5 did not authorise them; the ordinary edit on a zero-length row shares the skip);
+  - the phantom scheduled change;
+  - the copy for an out-of-range fraction.
+- Cycles used: 1 of 5.
