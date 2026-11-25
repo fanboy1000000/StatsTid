@@ -77,8 +77,9 @@ internal static class DanishHolidays
         => date.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday)
            && !For(date.Year).Contains(date);
 
-    /// <summary>Gregorian Easter Sunday (the anonymous Gauss / Meeus-Butcher algorithm).</summary>
-    private static DateOnly EasterSunday(int year)
+    /// <summary>Gregorian Easter Sunday (the anonymous Gauss / Meeus-Butcher algorithm). Also dates
+    /// the demo's closure day (<see cref="ConfigStageSeed"/>).</summary>
+    internal static DateOnly EasterSunday(int year)
     {
         var a = year % 19;
         var b = year / 100;

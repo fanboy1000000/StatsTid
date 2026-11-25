@@ -122,6 +122,13 @@ public sealed class DemoGenerator
         var projects = ProjectCatalog.ForOrgs(orgs.Select(o => o.OrgId));
         FillAllocatedMonths(manifest, projects);
 
+        // 3d. ADR-043's config-stage rows: local profiles, customary days, HR facts. A POST-PASS
+        //     that, like 3c, consumes no draw at all (pure derivation from the orgs, the users and
+        //     the activity month), so not one pre-existing draw or byte moves (PIN-1).
+        var localProfiles = ConfigStageSeed.LocalProfiles(orgs);
+        var customaryDays = ConfigStageSeed.CustomaryDays(orgs, ActivityMonthStart.Year);
+        var hrFacts = ConfigStageSeed.HrFacts(users);
+
         // 4. Disjointness assertion (NOTE-1 — ON CONFLICT silently drops collisions).
         AssertDisjointFromBaseline(orgs, users, manifest);
         AssertEveryOrgHasProjects(orgs, projects);
@@ -131,6 +138,9 @@ public sealed class DemoGenerator
             Orgs = orgs,
             Users = users,
             Projects = projects,
+            LocalProfiles = localProfiles,
+            CustomaryDays = customaryDays,
+            HrFacts = hrFacts,
             EmployeeRoles = employeeRoles,
             PrivilegedRoles = privilegedRoles,
             Manifest = manifest,
