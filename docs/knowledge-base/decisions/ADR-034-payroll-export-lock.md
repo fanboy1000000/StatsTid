@@ -150,6 +150,8 @@ When `payroll_export_records` has a row for the period's `(employee, year, month
 
 ## Amendment 2026-11-04 — S147: every new export comes from its own approved month (SEC-054; owner rulings OQ-3 = (a) + (i) and R-G9)
 
+*Citations into the payroll host in this section re-verified 2026-11-25 at `bda18b03`: S148's TASK-14801 and TASK-14831 had moved them.*
+
 **Why this exists, in plain words.** In S90 the owner brought the two "raw" routes, `POST /api/payroll/export` and
 `/export-period`, under the lock and the idempotency (OQ-6), without asking whether they should exist. They took pay
 lines the caller had written and sent them to payroll with no approved month behind them and no second person, so one
@@ -162,45 +164,45 @@ recorded flex month (S146 R-14's "case 3a"), which the calculating route refused
 changes is below.
 
 **OQ-6 is superseded.** Both raw routes are deleted and answer 404
-(`src/Integrations/StatsTid.Integrations.Payroll/Program.cs:221-226`; `RawExportRoutesRetiredTests`), with every helper
+(`src/Integrations/StatsTid.Integrations.Payroll/Program.cs:236-241`; `RawExportRoutesRetiredTests`), with every helper
 only they used and the Orchestrator's dead `payroll-export` task type. `/calculate-and-export` is the one route that
 exports; `/recalculate` stays the one way a paid month changes (D5). The D4 note of 2026-10-24 says the ledger lock is
 taken by "all three export routes"; there is now one.
 
 **The approval period is required, and it must be the month's own (D2, D4).**
 - `ExportAsync` refuses a context with no approval period (null or the empty id) by throwing, before any connection
-  opens (`…/Services/PayrollExportService.cs:228-231`; the message `:31-35`). Until S147 the raw routes passed no
+  opens (`…/Services/PayrollExportService.cs:236-239`; the message `:31-35`). Until S147 the raw routes passed no
   period, and D2's in-transaction `FOR UPDATE` re-assert of APPROVED (called "B2" in the code, after S90's Step-0b
-  blocker B2, the export↔reopen race named under Consequences; `:300-304`) was skipped for them. It now runs on every export made since TASK-14716 (`:304`),
+  blocker B2, the export↔reopen race named under Consequences; `:343-347`) was skipped for them. It now runs on every export made since TASK-14716 (`:347`),
   with S147's four-eyes checkpoint (SEC-053).
 - The re-assert first checks that the locked period is this month's own approval: the exported employee's (compared
   Ordinal), starting on the 1st and ending on the last day of the exported month (rulings R-G2, made exact by R-G8;
-  `:524-538`). A period of another employee, of another month, or of only part of the month (a legacy `WEEKLY`
+  `:572-586`). A period of another employee, of another month, or of only part of the month (a legacy `WEEKLY`
   approval) aborts the export with the existing 409 `payroll-export-conflict`, before its status or approver is checked
   (all three are read in the one `SELECT … FOR UPDATE`).
   On `/calculate-and-export` this holds by construction, because the route accepts only a whole month and reads the
-  approval by the request's own employee and dates (`Program.cs:296`, `:310-311`); the check guards any other caller.
+  approval by the request's own employee and dates (`Program.cs:313-314`, `:327-328`); the check guards any other caller.
 
 **D3, as amended.**
 1. **One `(employee, year, month)` per export (owner ruling R-G9, 2026-11-04).** D3's grouping of one call's lines into
    a record per `(employee, year, month)` existed for the raw `/export-period`. With the period required and checked
    as the month's own, a second group could never pass. Both review lenses recommended recording the dead grouping for
    later (R-G5); the owner chose to remove it now. A call whose lines, or whose lines and flex-ledger write, belong to
-   more than one `(employee, year, month)` is refused before any connection opens (`PayrollExportService.cs:204-219`;
-   the message `:44-47`). A line that spans two calendar months is still refused (`:193-202`). D2's step "group lines
+   more than one `(employee, year, month)` is refused before any connection opens (`PayrollExportService.cs:212-227`;
+   the message `:44-47`). A line that spans two calendar months is still refused (`:199-210`). D2's step "group lines
    by `(employee_id, year, month)`" no longer exists.
 2. **D3's zero-line rule, applied to a month before the ledger start (TASK-14715; R-17, the S147 refinement's ruling
    that such a month writes no record).** A case-3a month with no lines
    and no record hands off nothing: no lines, and no closing, because its flex is not tracked. So, by D3's own rule, it
    writes no record. It still runs every check a calculating export runs (the ledger lock, the under-lock recheck, the
    previous month's `FOR SHARE`, this month's APPROVED re-assert with four-eyes), and only the write is skipped
-   (`PayrollExportService.cs:316`; R-F1, the Orchestrator's ruling on TASK-14715's first review that only the write may
+   (`PayrollExportService.cs:349-361`; R-F1, the Orchestrator's ruling on TASK-14715's first review that only the write may
    be skipped). The month stays reopenable, a re-export writes nothing, and `/recalculate`
    refuses it as never exported (422 `payroll-not-exported`).
 3. **A record with no balance also comes from a calculate-and-export now (TASK-14715).** Item 1 of the S146 amendment
    says the raw routes carry no balance. Since S147 such a record, with all three balance columns null, also comes from
    a case-3a `/calculate-and-export` with lines: source `CALCULATE_AND_EXPORT`, its period set, no `FLEX_PAYOUT` line,
-   and the response's note "flex not tracked" (`Program.cs:528`). It is locked and corrections-only, like case 3b. A
+   and the response's note "flex not tracked" (`Program.cs:618-619`). It is locked and corrections-only, like case 3b. A
    re-run answers the "use a correction" 409, because each calculation's manifest id enters the line hash (the S146
    Step 7a note under item 3). Records the raw routes wrote before S147 are the other source, in a database that has
    not been reseeded.
@@ -228,9 +230,9 @@ with them (the files are named in the TASK-14716-T commit `75b463b7`).
   arm, which refuses a month whose employed previous month has a record with no balance and asks for that month to be
   corrected first, can now meet only records written before S147 (`FlexLedgerOpening.cs:359-366`, `:387-390`).
   `ExportAsync` still accepts a context with no flex-ledger write and then records null balances, a path only direct
-  test calls reach (`PayrollExportService.cs:325-330`). One change closes all three, under "reseed, don't migrate".
+  test calls reach (`PayrollExportService.cs:366-369`). One change closes all three, under "reseed, don't migrate".
 - **The conflict message (R-G6).** `/calculate-and-export` copies the export's conflict message into its 409 body
-  (`Program.cs:491-503`). The period-identity message names the approval's employee and dates. It cannot occur on that
+  (`Program.cs:577-595`). The period-identity message names the approval's employee and dates. It cannot occur on that
   route, so a second caller of `ExportAsync` must redact it at its own route (`docs/SECURITY.md` § "Segregation of
   duties").
 - **Corrections stay single-signer, and need no approved month.** `/recalculate` is GlobalAdmin-only with no second

@@ -87,6 +87,8 @@ contract changes or per-row `approval_periods` joins, a materially larger change
 
 > **S146 note (2026-10-24; TASK-14607, merged `88eb3da6`; recorded neutrally, no ruling presumed).** The `flex-balance` route above is deleted, so the open remainder is **8 reads**. Until S146 every flex figure in this census was a meaningless 0, because it was read from an event nothing wrote. Since S146 the **year overview's flex tile** (row 1), and `/summary` for the HR tier (exempt from the S128 leader gate by R1), show a leader the employee's **real latest recorded (paid) flex closing**, labelled with its month, with no submission gate. That figure comes from a month already sent to payroll. The one exception is a GlobalAdmin raw export, which skips approval, followed by a correction; that can put a closing on a month the employee never submitted, through a known-accepted bypass. The leader **team overview** keeps the figure withheld on unsubmitted rows, per the owner's OQ-5 (2026-10-23), the strict reading of S124. This is the RES-002 posture carrying a real value for the first time, which is a revisit trigger under "revisit, not shield". Extending OQ-5's strict reading to the year tile is a possible later ruling.
 
+> **S148 note (2026-11-25; SEC-059 FIXED; the TASK-14813 Step 5a adjudication, ruling 1, widened to two days by wave 3b; recorded neutrally).** The rule now reaches the month edge. The Skema month view (`SkemaEndpoints.cs:558-591`) and the compliance read (`ComplianceEndpoints.cs:188`, `:243-249`) give a leader-tier reader the last two days of the previous month, and on the Skema view the first day of the next, only when that month is submitted, decided by `ApprovalVisibility.IsSubmittedToManager`, the month gate's own predicate. The rest check needs those days because a work end on the 1st is judged on the 24 hours before it (ADR-044). Before: the Skema view served neighbouring days to a leader whatever their status (since S72), and from S148 wave 3 a leader's rest finding dated 31 March told them when the employee stopped work on a day of an unsent March. While the neighbour is withheld, the leader's compliance answer lists the 1st as "not checked" instead of looking compliant. Neither read is new to the census above: both were already gated by their own month, and the gate now also covers the days they borrow from the neighbouring months. The residuals are SEC-059's. Two side facts: the Consequences section's allowlist (SUBMITTED/EMPLOYEE_APPROVED/APPROVED/REJECTED) is out of date since S127, which removed REJECTED (`ApprovalVisibility.cs:26-36`, `:59-60`); and the write-class section's `POST /api/time-entries` was retired in S148 (TASK-14802), so the Skema save is the one write path.
+
 ## Rationale
 Withholding on the display surface removes the leak from the place a manager actually works, at UI
 cost only, and it can ship immediately. A correct endpoint-level gate needs one shared predicate
@@ -102,6 +104,10 @@ scoped gap.
   allowlist — `SUBMITTED`/`EMPLOYEE_APPROVED`/`APPROVED`/`REJECTED`); a future sixth status defaults
   to WITHHELD (fail-closed). The follow-up should lift that predicate into a shared gate rather than
   re-deriving it per endpoint.
+  *Corrected 2026-11-25 (S148 close):* the predicate was lifted into the shared gate
+  `ApprovalVisibility.IsSubmittedToManager` (`src/Backend/StatsTid.Backend.Api/ApprovalVisibility.cs:59`), and its
+  set is now `SUBMITTED`/`EMPLOYEE_APPROVED`/`APPROVED`: a `REJECTED` month is withheld from a leader-tier read too
+  (S127), until the employee re-sends it. The allowlist above is the text as first written.
 - The wire contract for `TeamOverviewEmployeeRow` now has 5 nullable fields
   (`normRegistered`, `overtime`, `hasWarning`, `flexBalance`, `ferieUsed`). Null means WITHHELD, not
   zero — never "fix" a null by defaulting it to 0, which is the lie the change removed.

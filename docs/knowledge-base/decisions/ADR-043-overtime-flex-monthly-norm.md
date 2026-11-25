@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | **ACCEPTED 2026-10-29 (S147, O-10) after the dual-lens review: Codex c1–c3 (`.claude/reviews/S147-ADR-043-codex*.md`), Fable c1–c3 (`.claude/reviews/S147-ADR-043-reviewer*.md`), adjudication `.claude/reviews/S147-ADR-043-adjudication-c1.md`.** Amended 2026-10-29 from the S147 decide track. Drafted in S146 (track D5) to the owner's direction OQ-3 = (b). In S147 the nine forks this ADR left open (F-1 … F-9) and three tender findings (QUAL-232, QUAL-233, QUAL-234) were put to the owner one at a time, each explained first, and answered on 2026-10-29; one of them, the overtime account (D-5), was told with no question, and the owner asked for nothing to be asked. It binds the build from S148 on; none of it is built yet, and each stage's sprint log says what has landed (see "How it is built"). S145's Q2 = A, Q3 = F1 and Q7 (b) stay "superseded in principle by the verified sources; in force in code until the model program replaces them; no new work on F1 machinery" (OQ-2 = (a), S146 refinement "Decisions recorded") |
+| **Status** | **ACCEPTED 2026-10-29 (S147, O-10) after the dual-lens review: Codex c1–c3 (`.claude/reviews/S147-ADR-043-codex*.md`), Fable c1–c3 (`.claude/reviews/S147-ADR-043-reviewer*.md`), adjudication `.claude/reviews/S147-ADR-043-adjudication-c1.md`.** Amended 2026-10-29 from the S147 decide track. Drafted in S146 (track D5) to the owner's direction OQ-3 = (b). In S147 the nine forks this ADR left open (F-1 … F-9) and three tender findings (QUAL-232, QUAL-233, QUAL-234) were put to the owner one at a time, each explained first, and answered on 2026-10-29; one of them, the overtime account (D-5), was told with no question, and the owner asked for nothing to be asked. It binds the build from S148 on; ~~none of it is built yet~~ stage 0 and the config stage were built in S148 (2026-11-25; see the S148 close note under "How it is built"), and each stage's sprint log says what has landed. S145's Q2 = A, Q3 = F1 and Q7 (b) stay "superseded in principle by the verified sources; in force in code until the model program replaces them; no new work on F1 machinery" (OQ-2 = (a), S146 refinement "Decisions recorded") |
 | **Sprint** | S146 (draft) → S147 (rulings, amendment, acceptance) → S148 onward (built in stages; see "How it is built") |
 | **Supersedes / amends (on acceptance)** | **Supersedes** the S145 owner rulings Q3 = F1 and Q7 (b); keeps Q2 = A only as the month norm's building block (D1). **Amends ADR-016 D10** in four places: the evaluation-model marker moves once per stage (the stage map); the read-only contract on Backend tables (`ADR-016:179`) grows from two tables to three with `work_time_projection` (D10), and the decided records of hours (D3) join it in stage 2, the hours digest (`:185`) and the manifest recording both, by value; "freeze what is data, fingerprint what is code" (`:169`) and the fingerprint contract (`:181`) give way to configs frozen as inputs (D12); the frozen pieces (`:171`) gain the overtime regime and flex membership. **Amends ADR-024 D1/D2:** the per-category merarbejde overrides become the seed of the HR-recorded overtime regime, not a second source pay reads (D4). **Amends ADR-024 D7:** from dormant design to the payroll path, its records naming clock spans rather than time entries, with a creator column, decided in Teamoversigt (D3). **Amends ADR-032 D7:** a vacation day on a søgnehelligdag, or on the credited part of a paid customary day, consumes nothing, and the vacation divisor reads the planned-hours figure (D2, D9). **Amends ADR-017:** the local profile gains typed, dated flex columns, a customary-days table sits beside it, and `overtime_requires_pre_approval` retires (D3, D6, D9). **Confirms ADR-014** on the pay path, with an implementation note (D12) |
 | **Closes when built** | QUAL-189; QUAL-216 … QUAL-222; QUAL-223 (resolved into QUAL-227, F-7 and F-8); QUAL-226 (D1's one month-norm function); QUAL-227; QUAL-232 and QUAL-202 (D11); QUAL-233 and QUAL-182 (D12); QUAL-234 (D10); QUAL-231's residual, QUAL-237 and QUAL-240 (D2, stage 0); QUAL-239 (its interim in stage 0; retires with the compensate route, D8). **Answers** QUAL-204: yes, a local profile changes pay (D12). **Designs** QUAL-225, an HR-entered opening flex balance (D6). **Closes in design** SEC-056's creator-not-approver and compensation halves (D3, D8); S147's T9 closes its self part. QUAL-215 is the root cause; its lesson is recorded below |
@@ -178,6 +178,10 @@ Each item says what the model does, the verdict it rests on and the register row
   deficit means for them is an expert question (provisional item 16). Per-group caps, such as AU Foulum's 200 h, are not
   held; that is recorded as a limitation, and per-group rule sets can grow from this fact later.
 - **Closes** QUAL-189 with D3; QUAL-231's residual and QUAL-237.
+- **S148 notes (2026-11-25).**
+  - *The bound supersedes S73 D-A's same-day work clause (owner Q1, 2026-11-10, "D2 governs (Recommended)").* S73's ruling D-A made care days (`CARE_DAY`) and senior days (`SENIOR_DAY`) full-day only, and ratified that "same-day work hours remain legal" (`docs/sprints/SPRINT-73.md:24`). This decision's bound (a day's paid absence ≤ planned minus worked) makes a full care or senior day impossible on any worked day; nobody had shown the owner that interaction. Under the ruling a care or senior day goes only on a day with no work; someone who leaves mid-day records their hours and covers the rest with flex or holiday hours; a day is never worth more than planned. S73 D-A's work clause is retired, and `SkemaFullDayOnlyGuardTests.FullDayPlusSameDayWorkHours_Allowed200` was re-pinned to the 422 (TASK-14804-T). *Not chosen:* a care day covering "the rest of the day" (`docs/sprints/SPRINT-148.md:379-385`).
+  - *The bound as built (TASK-14804, merged `72f286fe`).* It is checked at the Skema save twice: an advisory check before the transaction, and the authoritative one inside the per-employee lock, before any write. A breach answers 422 with `kind: "paid-absence-day-bound"`, `plannedHours` and `workedHours` (`src/Backend/StatsTid.Backend.Api/Endpoints/SkemaEndpoints.cs:2067`, called at `:2412` and `:2859`; the body `:2130`). Worked is the larger of the day's project hours and its interval hours (`:2204`). It reads the § 7 nr. 2 per-day norm, not the configured credit basis, until stage 1 serves the one planned-hours figure (QUAL-BF-001). A day with no dated profile is not bounded (the wave-1 brief adjudication, ruling B3). The refusal shows a precise Danish alert (TASK-14810, AC-S0-7g).
+  - *The bound judges the resulting day (addendum A1, D-8; NR-A6 confirmed (a); TASK-14840, merged `a331e452`).* Since S148 a Skema cell can be cleared (ADR-028 D6, note of this date). A date that carries a posted cell is judged on the day as it will stand after the save, cleared cells removed. A date touched only by clears is not judged by the bound: a clear can only remove paid absence or worked time, so it can never create a breach, and judging it could only refuse the repair of a day that is already over the bound (for example after a backdated profile change lowers the planned hours). This resolves the lock-in cases TASK-14804 found: a sick day recorded by mistake on a worked day, and a day stored over the bound before the bound existed, are repaired by clearing the cell and then saving the work (AC-CL-17, AC-CL-18). The children's-sick-days chain still judges a clear (addendum D-9).
 
 ### D3 — Overtime and merarbejde only for decided hours, outside flex; how hours are decided
 - An hour becomes overtime (HK, PROSA groups 1–2) or counts toward merarbejde (AC; PROSA groups 3–4 when they meet the
@@ -319,7 +323,7 @@ Each item says what the model does, the verdict it rests on and the register row
   `FLEX_PAYOUT` (`FlexBalanceRule.cs:44-48`, `:68-82`) retires; a `FLEX_PAYOUT` line survives only as the configured
   "1:1 cash by agreement" action.
 - **Where the rules live (F-5's storage, R-1).** Typed, dated, audited columns on `local_agreement_profiles`
-  (`init.sql:856-872`; audit `:885-895`), resolved for each day and frozen into the manifest (D12). Not
+  (`init.sql:856-872`; audit `:885-895`; at S148's close `:906-951` and `:964-976`), resolved for each day and frozen into the manifest (D12) *(corrected 2026-11-25: frozen with their first reader, in S149. S148 stores, validates and audits them and freezes none, because nothing reads them yet; the S148 wave-6 batch-A brief adjudication, ruling 9; see the S148 close note under "How it is built")*. Not
   `local_configurations`, which ADR-017 retired (`init.sql:851-852`); not a third table. D9's customary days are a dated
   table beside the profile, because they are a list of days, not a value. The profile's `weekly_norm_hours` override
   (`init.sql:864`) and its Monday alignment rule (ADR-017 D9a) lose their premise under D1's monthly norm, since no
@@ -512,6 +516,13 @@ Each item says what the model does, the verdict it rests on and the register row
   ADR-039's rule for timed entries (S148's refinement). The send check's "ordinary hours that name a project" predicate
   (`ApprovalEndpoints.cs:2241`) is revisited when D11's typed time arrives.
 - **Closes** QUAL-234.
+- **D10 note 2026-11-25 (S148 stage 0, the rest-check half: waves 3 and 3b; TASK-14813 + 14814, merged `40d3e694`; TASK-14843 + 14844, merged `2810ebeb`).** In plain words: the server's 11-hour rest check and Skema's own warning now read the clock times employees type in Skema, and they judge rest the way the law does. **For the daily rest check this decision is superseded by [ADR-044](ADR-044-rest-period-model.md).**
+  - *Built:* the compliance read sends Skema's intervals (`work_time_projection`) to the engine's rest rule, from two days before the month (`src/Backend/StatsTid.Backend.Api/Endpoints/ComplianceEndpoints.cs:188`, `:249`); the rule joins a night shift typed as 22:00–23:59 plus 00:00–06:00 into one shift (`src/RuleEngine/StatsTid.RuleEngine.Api/Rules/RestPeriodRule.cs:693-740`). The hours checks still sum the project entries. Payroll never runs the rest rule, so no payroll marker moved for it.
+  - *Not retired: S147's "not checked" notice (T7) stays, narrowed (R-22, told to the owner).* It lists only the days whose project hours are not all on the clock, in an informational style on Skema and Teamoversigt, because retiring it outright would make those days look checked (`RestPeriodRule.cs:284`). This section's "S147's interim 'not checked' notice (T7) retires" did not happen as written. The list covers the period's own days only (QUAL-277).
+  - *The rule.* Wave 3 first paired shifts by the day they started; owner Q2 (2026-11-13) had wave 3b replace that with the law's 24-hour look-back (ADR-044). The wave-3 interim "a rest belongs to the month in which it ends" is superseded too: a finding is dated the day its work ends (ADR-044 D3).
+  - *Manual hours are retired* (D-2.4; TASK-14809, merged `540ac9a9`), and the send check's worked side is interval hours alone (`src/Backend/StatsTid.Backend.Api/Endpoints/ApprovalEndpoints.cs:2603-2618`; ADR-028 D4, amended 2026-11-25). The first bullet's "today interval hours plus manual hours" is history.
+  - *The legacy route's own clock times* went with `POST /api/time-entries` (TASK-14802). Its voluntary flag still has no writer (ADR-044 D6; QUAL-255).
+  - *"The 11-hour rule then lives in two places":* the build proves they agree with one shared table of 33 scenarios, read by both test runners (`tests/StatsTid.Tests.Unit/TestData/rest-parity-scenarios.json`; `tests/StatsTid.Tests.Unit/Rules/RestParityTableTests.cs`; `frontend/src/hooks/__tests__/restParity.test.ts`; ADR-044 D8).
 
 ### D11 — Which registered time counts as worked time, and how much (QUAL-232)
 - **Refused first, then built on the sourced rule (D-3 (c)).** Stage 0 refuses on-call, call-ins and travel rather than
@@ -530,6 +541,10 @@ Each item says what the model does, the verdict it rests on and the register row
     minimum); on the counted 3/4 for workplace on-call; none for home on-call; § 14 on the counted third for home on-call.
   - *Rest flag:* home on-call is rest unless it defeats rest's purpose (PAV 19.7.1), decided case by case; its default is
     held for a domain expert and never hard-coded as "always rest" (provisional item 13).
+    *S148 note (2026-11-25; the S148 rest-research adjudication, RR-4):* one rest flag per type is not enough. On-call
+    at home counts as daily rest (BEK 606 § 16 stk. 1), but on-call never counts toward the weekly rest day, at home or
+    at the workplace (VEJ 9638 § 4; PAV 19.7.2; `docs/references/rest-period-24h-research.md`, Part 1, correction 13),
+    so the build needs a daily and a weekly flag. No interval carries on-call today, so nothing changes yet (ADR-044 D6).
 - **What retires.** On-call's second payment at 0.33 (`OnCallDutyRule.cs:36-48`; `AgreementRuleConfig.cs:47-48`) and
   the dormant non-working travel rate of 0.5 (`AgreementRuleConfig.cs:58`), which no source supports. SYSTEM_TARGET §C's
   "working vs non-working" travel split (`SYSTEM_TARGET.md:81`, `:229`) is reworded to the sourced rule.
@@ -644,6 +659,55 @@ opening balance; the suspension of flex in peak periods; AC's annual-norm flex.
 **If S148 cannot carry every stage.** The sprint log records which stages landed; each remaining stage carries its
 marker, scope and named limits into the next sprint, and ROADMAP § 1 points there (the deferred-branch pattern).
 
+**S148 close note (2026-11-25): where the stage boundary fell, and what passes to S149.** In plain words: S148 built
+stage 0 and the config stage as the owner scoped them (2026-11-09), plus three things the owner added on the way: the
+dated organisation (owner Q-1), Skema cell clearing (owner Q2, 2026-11-10) and the corrected rest check (owner Q2,
+2026-11-13). No demo payslip changed (PIN-1, the sprint's pay pin). Stage 1, where every HK and PROSA payslip
+moves, is S149.
+- **Stage 0, as built.** D11's refusal: `POST /api/time-entries` retired and payroll refuses a month holding a typed
+  entry (TASK-14802; ADR-028 D5, note of this date). QUAL-236 in full (TASK-14811, 14812). D10's rest-check half, with
+  two departures: T7's notice was narrowed, not retired (R-22), and the rest rule itself was corrected to the law's test
+  (D10's note; ADR-044). Manual hours retired (TASK-14809). D2's bound on the § 7 nr. 2 per-day norm (TASK-14804;
+  QUAL-BF-001), with S73 D-A's work clause retired (D2's notes). D12's editor label (TASK-14807), removed again by
+  TASK-14829 once the editors reached pay. QUAL-239's interim (TASK-14805).
+- **The marker moved in stage 0, not in the config stage.** `weekly-timeline-v3` is the call-home day's credit
+  (TASK-14811; ADR-016 D10, marker footnote 2026-11-25; R-24). The table's proposal "Config: `weekly-timeline-v3`" is
+  overtaken: the config stage changed no arithmetic, and a manifest written before the configs were frozen is refused
+  by `replay-manifest-without-frozen-inputs` (ADR-016 D10, amendment 2026-11-23). Stage 1 opens on v3.
+- **The config stage, as built.** D12 in full: configs and overrides dated (TASK-14818, QUAL-182), resolved per day
+  through one fail-closed lookup, handed to the engine in each request, frozen by value (TASK-14830); the local
+  profile's eighteen settings (TASK-14815, 14832, 14833; ADR-017 D1, note of this date); customary days and their
+  editor (TASK-14834, 14835); the two HR facts and their editor (TASK-14836, 14837); the dated organisation (C-13;
+  ADR-040, note of this date); the pay-inputs lock and the correction worklist's new triggers (TASK-14821, 14823,
+  14831); demo profiles with the 37 h plus cap, demo customs and demo HR facts (TASK-14839). **Not as planned above:**
+  the new local settings and the HR facts are stored, validated and audited, but not frozen into a month's proof; they
+  are frozen with their first reader in S149 (D6's correction; R-21; the wave-6 batch-A brief adjudication, ruling 9).
+- **Named interim limits at the close** are the refinement's list
+  (`.claude/refinements/REFINEMENT-s148-stage0-and-config.md:31-45`); the sprint log records the ones that ended
+  inside the sprint (plan O-33).
+- **Passed on (R-11; `.claude/refinements/REFINEMENT-s148-stage0-and-config.md:630-642`).** None is read by stage 0 or
+  the config stage, so each goes to the refinement of the stage that first needs it:
+  - QUAL-225's HR-entered opening flex balance → S149's refinement (it receives stage 1's monthly flex);
+  - how AC's annual-norm variants settle flex → S149's refinement;
+  - whether HRP-024 (approve the previous month first) retires or is re-stated → S149's refinement;
+  - the customary-days and HR-facts writers (C-10, C-11) joining the pay-inputs lock and the worklist → S149's
+    refinement (S1-6, S1-9), when they become pay inputs;
+  - where the overtime movements are stored (D8) → stage 2's refinement;
+  - R-C, a leaver's owed time off and saved days → stage 2's refinement (provisional item 9 holds until then);
+  - saved days → stage 2's refinement, after research cell R-A.
+  - From S148 itself: the eighteen settings and the HR facts are frozen with their first reader, and a manifest
+    without them reads as "not set" (ROADMAP's "For S149 (stage 1)" backlog line).
+- **Ruling 6's governing-day evidence, for stage 1 (the wave-4 batch-C brief adjudication, ruling 6).** The weekly core
+  judges a whole week by the regime of its latest evaluated day, so a week that holds a mid-week OK transition
+  (1 April 2026 is a Wednesday) takes the new version's `HasOvertime`, `HasMerarbejde` and `NormModel` for all its
+  days. That is wrong only if a seeded agreement's three values differ between OK24 and OK26. **They do not.** In
+  `docker/postgres/init.sql` at `bda18b03` each OK24/OK26 pair differs only in `ok_version` and its description: AC
+  (`:1628`, `:1634`) `WEEKLY_HOURS`, no overtime, merarbejde; HK (`:1640`, `:1646`) and PROSA (`:1652`, `:1658`)
+  `WEEKLY_HOURS`, overtime, no merarbejde; AC_RESEARCH (`:1664`, `:1670`) and AC_TEACHING (`:1676`, `:1682`)
+  `ANNUAL_ACTIVITY`, no overtime, merarbejde. So on the seeded configs the governing-day choice changes no result. It
+  stays an `(unproven)` NOTE for one case only: a GlobalAdmin publishing an OK26 config whose regime differs from OK24's,
+  whose transition week would then be judged on the OK26 regime. Stage 1's monthly core retires the weekly judgement.
+
 ## Provisional items (owner defaults pending a qualified expert)
 
 *In plain words.* Where the sources leave a value open, StatsTid still has to compute something. A **default** is
@@ -668,7 +732,7 @@ ADR's one list of such items.
 15. *Expert question.* How a part-day customary credit scales by fraction, and what working on a paid customary day earns. — D9; D-12.P3, D-12.P5.
 16. *Expert question.* What a deficit means for someone off the flex scheme (the proposal: nothing carried, nothing deducted). — D2; D-8a.
 17. *Expert question.* Whether PROSA groups 3–4 who do not literally meet § 8 stk. 3 fall back to overtime; under D4 a value HR sets. — D4; C3.
-18. *Expert question.* Retiring the local profile's `weekly_norm_hours` override and its Monday alignment rule (ADR-017 D9a), whose premise D1 removes. — D6; D-8 "Premises made moot".
+18. *Expert question.* Retiring the local profile's `weekly_norm_hours` override and its Monday alignment rule (ADR-017 D9a), whose premise D1 removes. — D6; D-8 "Premises made moot". *S148 note (2026-11-25; the S148 wave-4 batch-C brief adjudication, ruling 6):* S148 extends the profile's Monday rule for `WeeklyNormHours` to the central agreement config and the position override, for the same field and on the same unretired premise (`NORM_CHECK_WEEKLY` is still an aligned window; `src/Infrastructure/StatsTid.Infrastructure/AgreementConfigRepository.cs:710-731`, `:1018-1038`; `src/Infrastructure/StatsTid.Infrastructure/PositionOverrideRepository.cs:698-702`; QUAL-BF-007). When this item is ruled, it lifts the rule for all three layers. The central config's `HasOvertime`, `HasMerarbejde` and `NormModel` are Monday-only for a different reason, which stage 1 removes: the weekly core judges a whole week by its latest evaluated day.
 19. *Expert question.* Settlement-period values other than `month`, and the mechanics of suspending flex in peak periods. — D6; R-2.
 20. *Expert question.* Fixed days off for part-timers (V1's exception) while the fraction is spread over five weekdays. — "What this ADR does not decide".
 
@@ -855,6 +919,11 @@ each institution's configuration.
 - Registers: `docs/operations/quality-finding-register.md` QUAL-189 (`:413`), QUAL-215 … QUAL-227 (`:439-451`),
   QUAL-231 … QUAL-239 (`:455-463`); `docs/operations/security-finding-register.md` SEC-056 (`:216`);
   `docs/operations/hr-follow-up-process-register.md` HRP-001b (`:98`), HRP-021 (`:131`).
+- S148 (the notes of 2026-11-25): [ADR-044](ADR-044-rest-period-model.md), the rest model, with its dossier
+  `docs/references/rest-period-24h-research.md`; the refinement `.claude/refinements/REFINEMENT-s148-stage0-and-config.md`
+  rev 5.1; the brief adjudications `.claude/reviews/S148-wave4C-briefs-adjudication.md` (ruling 6) and
+  `.claude/reviews/S148-wave6A-briefs-adjudication.md` (ruling 9); addendum A1
+  `.claude/plans/s148/ADDENDUM-A1-cell-clearing.md` (D-8); `docs/sprints/SPRINT-148.md`.
 
 ## Revision history
 
@@ -926,3 +995,9 @@ each institution's configuration.
   Two factual edits at acceptance, no decision changed: "Closes when built" gains QUAL-240 beside QUAL-237 (its row
   already routed it to stage 0 with R-7 as widened; `O-10-DOCS-OWED.md` X4), and the stage map's "S148 will open on
   `weekly-timeline-v2` once TASK-14708 merges" now reads in the past tense, because TASK-14708 merged (`7cc6e65e`).
+- **S148 C-1 notes (2026-11-25).** Drafted by the Planning Drafter (Opus 5.5), applied by the Orchestrator; no decision
+  changed. The Status field's "none of it is built yet" struck; D2's notes (owner Q1 of 2026-11-10 superseding S73 D-A's
+  work clause; the bound as built; the bound on a clear, addendum A1 D-8); D6's correction (frozen with the first
+  reader, ruling 9); D10's note and its pointer to ADR-044; D11's sentence (RR-4); provisional item 18's note
+  (ruling 6); the S148 close note under "How it is built" (the stage boundary, the items passed on, ruling 6's
+  governing-day evidence); References. Citations in the added text opened at `bda18b03`.

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | accepted — owner-ratified 2026-08-20 |
+| **Status** | accepted — owner-ratified 2026-08-20. **For the daily rest check, D5 and D5b are superseded by [ADR-044](ADR-044-rest-period-model.md) (S148, 2026-11-25); see their notes** |
 | **Sprint** | S132 (fix-next remediation; QUAL-001 day-attribution, owner ruled "full fix" OQ-2b) |
 | **Domains** | Data Model, Backend, Rule Engine, Payroll Integration, Infrastructure |
 | **Tags** | day-attribution, midnight-crossing, time-entry, projection, event-sourcing, ok-version, segmentation, working-time, arbejdstidsloven |
@@ -60,6 +60,10 @@ The two projected halves carry a shared **source-stint identity** (the source ev
 the instant-based rest checks would misread the halves as two separate work periods. `TimeEntry` has no such
 field today (`TimeEntry.cs`) — this ADR adds one to the projection row / consumed model.
 
+> **Note 2026-11-25 (S148):** the link is still set (`ComplianceEndpoints.cs:211`, `PeriodCalculationService.cs:3781`)
+> and copied to both halves by the normalizer, but since S148 wave 3 nothing reads it: the rest checks build their
+> stints from Skema's clock intervals, which carry no source id (ADR-043 D10; ADR-044). Registered as QUAL-275.
+
 ### D5 — The four checks consume different shapes (they do NOT all want the split)
 - **Hours-summing checks** — `CheckMaxDailyHours`, and `CheckWeeklyMaxHours` at segment edges — consume the
   **per-day normalized rows** (so post-midnight hours count on D+1 and route to the correct OK segment).
@@ -76,6 +80,16 @@ field today (`TimeEntry.cs`) — this ADR adds one to the projection row / consu
   still informs its stint's true start day (Step-5a BLOCKER — else weekly-rest falsely marks the period's
   first day as worked). The normalizer must also emit **rejoinable** halves even when the source
   `SourceStintId` is null (a deterministic shared id), else a caller-supplied crossing cannot be rejoined.
+
+> **S148 note (2026-11-25): the rest checks' input and the daily rule have changed; superseded for the daily rest
+> check by [ADR-044](ADR-044-rest-period-model.md).** Since S148 wave 3 the two rest checks no longer read time entries:
+> they measure the clock intervals employees type in Skema (`work_time_projection`), joined across midnight inside the
+> rule (`RestPeriodRule.cs:693-740`; ADR-043 D10). The hours-summing checks keep the per-day entries as above. Since
+> wave 3b (owner Q2, 2026-11-13) the daily check judges every work end on the 24 elapsed hours before it and dates a
+> finding the day the work ends, instead of measuring the gap between start-day stints (ADR-044 D1, D3). **What still
+> holds:** the rationale-of-record correction (payroll never runs the rest checks; they run only on the unsegmented
+> monthly compliance path, `RestPeriodRule.cs:36-48`), and the weekly check still counts a stint under its start day
+> (`:560-616`), which is registered as wrong in both directions (QUAL-256).
 
 ### D5a — Scope: normalize on the calculation/rule INPUT path, not the display surfaces
 `time_entries_projection` is shared by **display** surfaces (Skema-month grid, the Time-entries list,
@@ -117,6 +131,11 @@ entries cannot cover `periodStart-1`).
 > opening week's Monday, which is never later than the previous month's last day). So the widen this
 > paragraph required of "any assembler" is now payroll's own read, and the last-day-of-period drop it warned
 > of no longer exists. The two projection reads share one read-only REPEATABLE READ snapshot (QUAL-200).
+
+> **Pointer (S148, 2026-11-25):** for the rest checks the boundary fetch is now two days, not one. The compliance read
+> starts at `monthStart − 2`, because a work end on the 1st looks back 24 elapsed hours and the day before the 1st can
+> be 23 hours long (`ComplianceEndpoints.cs:188`; ADR-044 D3). A manager's read takes those days only when the previous
+> month is submitted (SEC-059; ADR-044 D7). Superseded for the daily rest check by ADR-044.
 
 ### D6 — ONE shared normalization implementation, at the calc/compliance INPUT boundary
 **As delivered (Step-7a reconciliation):** the one shared `MidnightCrossingNormalizer.Normalize` runs at each

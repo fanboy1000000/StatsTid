@@ -645,6 +645,8 @@ In English, it covers civil servants and staff under agreements made by the Fina
 
 **A separate question.** For the EU working-time limits (the 48-hour average and the 11-hour rest rule) a different definition applies, and PAV treats on-call at home as rest for the 11-hour rule unless the on-call is so demanding that the rest is lost. StatsTid's rest check therefore needs its own classification, not § 7's fractions.
 
+*S148 pointer (2026-11-25):* the rest rule's own definition is now verified in `docs/references/rest-period-24h-research.md` (the 24 hours before each work end) and decided in ADR-044; on-call never counts toward the weekly rest day (that dossier's correction 13).
+
 ### Claims and quotes
 
 **R3-1. The agreement text** (identical in OK24's 014-21 and OK26's 022-26, PDF pp. 14–15 in both; CIR1H 9551 PDF p. 9):

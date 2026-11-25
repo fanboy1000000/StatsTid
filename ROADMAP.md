@@ -25,7 +25,7 @@
 
 ## 1. Path to production (the arc)
 
-Loosely sequenced buckets between where we are (S148) and a system we would consider production-ready.
+Loosely sequenced buckets between where we are (S148 closed, S149 next) and a system we would consider production-ready.
 Not commitments or dates — direction.
 
 1. **Docs & governance cleanup** — *in progress.* Tracked in
@@ -37,12 +37,13 @@ Not commitments or dates — direction.
 3. **Employment lifecycle time-control** — *RUNNING.* Owner-raised 2026-08-25; refined, ruled, and
    governed by **ADR-040 "Employee timeline & as-of resolution"** (ratified 2026-08-25, S135).
    The four-increment program plan lives in `SPRINT-135.md` §Program Plan (Increment 1 =
-   enforcement core, next up); named follow-ups: org/unit membership history, re-hire spells,
+   enforcement core, next up); named follow-ups: org/unit membership history (the organisation half dated in S148,
+   C-13; unit membership still undated), re-hire spells,
    the OQ-4 IMMEDIATE-pro-rating Phase-B question.
 4. **Domain completeness** — the pre-launch agreement-correctness program: real domain-expert
    engagement (Phase B) for the ~80 still-unsourced agreement cells
    ([phase-b-handoff-package](docs/references/phase-b-handoff-package.md)).
-   **The overtime/flex model program: ADR-043 ACCEPTED 2026-10-29 (S147); S148 opens on its stage map.**
+   **The overtime/flex model program: ADR-043 ACCEPTED 2026-10-29 (S147); S148 built stage 0 and the config stage; S149 builds stage 1.**
    Two verified research dossiers (`docs/references/overtime-flex-model-research.md`,
    `docs/references/agreement-cells-reverification-research.md`) showed the overtime model wrong in kind; in S147 the
    owner decided all nine of ADR-043's forks and three tender findings (QUAL-232..234), each on the recommended
@@ -52,21 +53,34 @@ Not commitments or dates — direction.
    the child's-sick-day quotas fixed; the rest check reads Skema's clock times); the **config stage** makes the
    editors' values reach pay, dated and frozen; **stage 1** brings the monthly norm and flex by default, the holiday
    calendar split and recorded forfeiture; **stage 2** decided hours, +50 % overtime, the +25 % supplement and § 14,
-   and the overtime account; **stage 3** AC extra-work claims. S148's refinement starts from the build input
-   (`.claude/plans/s147/S148-BUILD-INPUT.md`) and decides how many stages S148 carries; a stage it cannot carry is
-   pointed to here. **Owner scope ruling 2026-11-09: S148 carries stage 0 and the config stage** (no demo payslip changes, so
+   and the overtime account; **stage 3** AC extra-work claims. S148's refinement started from the build input
+   (`.claude/plans/s147/S148-BUILD-INPUT.md`). **Owner scope ruling 2026-11-09: S148 carries stage 0 and the config stage** (no demo payslip changes, so
    the sprint's acceptance pin is identical demo pay lines; the one arithmetic change, QUAL-236's new credited
    call-home day, has no demo row); stage 1, where every HK and PROSA payslip moves, gets its own sprint (S149), then
-   stage 2 and stage 3. Closes QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232..234 and QUAL-237 when built;
-   retires S145's weekly settlement machinery (frozen by OQ-2, with QUAL-209/210/212/213).
+   stage 2 and stage 3.
+   **S148 built stage 0 and the config stage, and no demo payslip moved** (PIN-1; closed ‹close date›, detail in
+   `docs/sprints/SPRINT-148.md`). In plain words: on-call, call-ins and travel can no longer be registered, and payroll
+   refuses a stored one rather than paying it as ordinary work (QUAL-202; QUAL-232's interim); the child's sick days
+   follow the agreements (QUAL-236); a day's paid absence is worth at most its planned hours minus the hours worked
+   (QUAL-237; ADR-043 D2); the 11-hour rest check reads Skema's clock times and applies the law's 24-hour look-back
+   (QUAL-253; ADR-044); a Skema cell can be emptied (QUAL-248); and payroll computes only with the published, dated
+   agreement configuration, position override and local profile in force on each day, frozen into the month's proof
+   (QUAL-233, QUAL-204). S147's six tidy inputs were built in stage 0. The employee's organisation is dated (owner
+   Q-1; QUAL-206), and the editors gained an institution's customary days, the local profile's eighteen new
+   settings and two HR facts per person, recorded now and read by pay from S149 or stage 2.
+   **Next: S149, stage 1** — the monthly norm and flex by default. Every HK and PROSA payslip moves, so S149 re-pins
+   PIN-1 at the recorded seeds (47 and 45). **Passed on to S149's refinement** (the S148 refinement's "Items ADR-043
+   assigned to this refinement, passed on", ruling R-11; ADR-043's S148 notes): QUAL-225's HR-entered opening flex
+   balance; how AC's annual-norm variants settle flex; whether HRP-024 ("approve the previous month first") retires
+   or is re-stated; the customary-day and HR-facts writers joining the pay-inputs lock and the correction worklist
+   with their first reader (S1-6, S1-9); the local profile's eighteen settings frozen with their first reader (§ 2,
+   Correctness / domain); and whether the demo's generated hours honour customary days, decided before the re-pin
+   (the demo worlds now hold customary days in their measured months). **Passed on to stage 2's refinement:** where
+   the overtime movements are stored (D8); a leaver's owed time off and saved days (R-C); saved days, after
+   research cell R-A. Still to close when built: QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232 and QUAL-234
+   (QUAL-233 and QUAL-237 closed in S148); retires S145's weekly settlement machinery (frozen by OQ-2, with
+   QUAL-209/210/212/213).
    The source register's unreliable citations (QUAL-215) make the Phase-B engagement above more urgent.
-   **S147's tidy pass handed S148 stage 0 six small inputs** (recorded at S147's C-1; detail in
-   `docs/sprints/SPRINT-147.md`, "C-1 — the close candidate's records"): two optional Docker pins, a særlige
-   feriedage config ending mid-month and the April 2026 OK-transition month; a repository pin for the four-eyes SQL
-   predicate's legacy `submitted_by` half; payroll's four-eyes refusal getting a kind of its own (QUAL-246); which
-   compliance items are announced to screen readers, and a neutral style for the "not checked" notice, both with
-   D10's rest-check half, which replaces the notice; and the HRP-013 orphan roll-up counting a manager in the 5-day
-   grace as covering. S148's refinement places each.
 5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
    **The dependency part no longer waits for this pass** (owner-raised 2026-10-26): see §2 "Tooling / infra /
@@ -469,8 +483,8 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
     day rule checked the same way is just as easy to get around. Rules 1 to 3 must judge the day's
     *resulting* state (stored rows plus the posted ones, absence and work time), read inside the
     per-employee lock. The grid copy of the rules is for instant feedback only.
-  - It needs **Clearing a Skema cell** (Usability, below): rule 2's warning asks the user to remove the first
-    absence, which cannot be done today.
+  - It needed **Clearing a Skema cell**, which shipped in S148 (TASK-14840/14841, QUAL-248; the row left the
+    Usability list at S148's close): rule 2's warning asks the user to remove the first absence, which is now possible.
   - The grid copy of the rules needs a test comparing it with the server's, over every pair of types
     (same-type pairs and work+absence included), per the S125 mirror lesson.
   - Rule 4 must apply while typing, not when the user leaves the cell. The grid autosaves after 1 s, so a
@@ -483,6 +497,14 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
     clearing a cell.
   [owner UI testing 2026-10-28; working notes in `.claude/refinements/REFINEMENT-absence-day-rules.md`
   (gitignored, so this entry carries the rulings)]
+  **S148 note (2026-11-25).** Two prerequisites shipped in S148. **QUAL-237 is fixed** (TASK-14804): the Skema save
+  judges the day as it will stand, inside the per-employee lock, and a day's credit-class paid absence may not exceed
+  its planned hours minus the hours worked (ADR-043 D2), which is rule 3's server half for paid absence.
+  **Clearing a Skema cell shipped** (TASK-14840/14841, QUAL-248). Still open: rules 1, 2 and 4, and the grid's own
+  copy of the bound. The grid's advisory check counts a day's absence hours only, never its work
+  (`frontend/src/components/SkemaGrid.tsx:338-366`), so it gives no warning before the server's bound refuses a save;
+  the employee learns from the refusal's message, which since S148 says exactly why (TASK-14810;
+  `docs/sprints/SPRINT-148.md:763`, `:826`).
 - **Working-time rules: what the tenders add to ADR-043 (tender epic E1; owner, 2026-11-13).** Most of the tenders'
   working-time requirements are §1 item 4's program. The rest: VD 45's flex capping (a −10 h floor, yearly or
   quarterly cut dates, conversion to særlige omsorgstimer 2:1 up to 74 h, HR approval, advance notice; the owner:
@@ -648,20 +670,6 @@ EM B1). Every row here waits on those specifications, except the machine login E
 ### Usability / accessibility
 
 - **Backdate worklist: a "show resolved rows" toggle** (S144 Step-0b ruling R7, 2026-09-29). From S144 every resolution records the block set that was in force when the claim was made (event `BlockedBy`, row `resolution_blocked_by`, GET `resolutionBlockedBy`) — but the screen lists open rows only and re-fetches after each resolve, so HR never sees a resolved row and the display of that audit fact was cut as unreachable UI. The honest way to surface it is a toggle that lists resolved rows too (a query flag the API already accepts, `BackdateWorklistEndpoints.cs:71` defaults to open). Small UX task; source: `.claude/plans/PLAN-s144.md` R7.
-- **Clearing a Skema cell (S72 R17 — still open; kept out of S145 by the Fable seat's ruling R24, owner informed
-  2026-10-01).** **→ Promoted into S148 (TASK-14840/14841, addendum A1); this row leaves at S148's close, once its two riders below are confirmed placed.** Today an emptied cell is never sent (`useSkema.ts:203`), so a booked hour or absence cannot be
-  taken back from the timesheet. S145 makes a re-save replace the cell (QUAL-192..194) and refuses a save of
-  0 hours with a 400, so a cell can be corrected but not emptied. The right design is a *retraction*: mark the
-  current row superseded and insert nothing. A 0-hour booking would be wrong, for three reasons. The strand
-  check would count it (`EmploymentWindowStrandCheck.cs:64-70`). `GET /api/time-entries` would return it. And
-  the norm rule would emit a 0-hour `NORMAL_HOURS` line (`NormCheckRule.cs:179-186`). Full-day-only absence
-  types also need their clear rule stated. S145's storage design leaves room for this. A small UX + backend
-  task; source: the S145 refinement, ruling R24.
-  **Now also needed by the absence day rules** (Correctness / domain, owner 2026-10-28): their warning
-  asks the user to remove the first absence, which this item makes possible.
-  When it is designed, two items from S145's Step 5a review of TASK-14507 come with it:
-  - the team overview's "away today" filter (`ApprovalEndpoints.cs:1003`) gets its pin, since a retraction is the first change that can make it matter;
-  - QUAL-196 is revisited: a missing balance row is seeded at `used = 0`.
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
   production; not enforced today. [CONVENTIONS.md] For a public-sector system it is a legal requirement (the
   webtilgængelighedslov: WCAG 2.1 AA and an accessibility statement); it is one row of the conformance register
@@ -672,6 +680,16 @@ EM B1). Every row here waits on those specifications, except the machine login E
   or an HR user a month they sent on the employee's behalf (SEC-053, since S147). The server's reasons are English,
   so this needs a Danish mapping, as HR's leaver list already has for the four-eyes case
   (`frontend/src/pages/admin/opfoelgning/FollowUpLists.tsx:191`). A small UX task.
+- **Child's sick days: two small follow-ups from S148** (TASK-14811 Step 5a, Fable cycle-2 NOTEs; owed at S148's close).
+  (1) **The refusal names the wrong day (Low; rare and safe).** When a child's first sick day is posted on the day
+  before one already stored, the refusal names the stored day as the one that cannot be registered: saving Monday
+  8 June next to a stored Tuesday 9 June reads "Barns 1. sygedag den 09-06-2026 kan ikke registreres: dagen før
+  (08-06-2026) er registreret som barns sygdom …" (`SkemaEndpoints.cs:2374`; the call-home twin at `:2384`). A
+  wording pass names the posted date when the conflict comes from a row posted before a stored one.
+  (2) **The entry order for a call-home day (`(unproven)`; an e2e check).** The call-home day is refused unless the
+  day's work is stored or posted in the same save (`kind` `child-sick-call-home-without-work`,
+  `SkemaEndpoints.cs:2405`). If the grid ever saves the absence cell before the day's work periods, the user gets
+  that refusal and must enter the work first. An e2e fact settles which order the grid sends.
 - **Mobile access, error messages and the user manual (tender epic E12; owner, 2026-11-13).** Responsive pages and an
   installable web app (PWA) first, a native app only if the PWA fails a requirement (EM A21, VD 27, which also wants
   shift planning on the phone); Danish error messages that say what to do (QUAL-058) and Danish labels throughout; a

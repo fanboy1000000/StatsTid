@@ -204,6 +204,26 @@ These are the 4 candidate bugs from `agreement-ruleset-audit.md` § Candidate Bu
 
 ---
 
+## S148 additions — rest-rule questions the sources leave silent (2026-11-25)
+
+*Added at S148's close from the S148 rest-rule research and its adjudication (ruling RR-6). The expert review has not started (the dashboard below is unchanged since S36), so these wait with the rest of the package. Unlike the candidate bugs above, they are not about a seeded value: they are points where Danish law and the state agreement say nothing, so StatsTid must either take a stated default or leave the rule unmodelled.*
+
+**Background, in plain words.** Since S148 StatsTid checks the 11-hour daily rest the way Arbejdstilsynet applies the law: at the end of every piece of work, the 24 hours before it must hold 11 unbroken hours of rest (`docs/references/rest-period-24h-research.md`; ADR-044; `danish-agreements.md`, "Rest Periods"). A sixth silent point, what to assume before the first record in the data, was given a default for that build: time with no registered work is rest. These five need an expert:
+
+| # | Question for the expert | Why StatsTid needs it | What waits on it |
+|---|-------------------------|-----------------------|------------------|
+| (a) | The 7-day ("7 døgn") period of the rest rules: where does it start, and does it roll? | Counting how often a rest may be cut, and the weekly rest day | QUAL-254, QUAL-256 |
+| (b) | What does "døgn" mean in the state agreement's "ikke 2 døgn i træk" (a cut to 8 hours may not be used two days in a row), and in VEJ 9638's "det normale arbejdsdøgn"? | The "not two days in a row" check | QUAL-254 |
+| (c) | Is CIR 9807/1983 (central administration, deadline tasks: cut or postpone the rest, up to 22 hours of work in a row) still a valid derogation under BEK 606, and how does its "arbejdsdøgn" map onto the rolling 24-hour test? | Whether StatsTid must model postponement at all; today it does not | Nothing is built on it |
+| (d) | Are the compensatory hours after a cut added on top of the next 11-hour rest, or part of it? | The compensatory-rest check; if built before an answer, StatsTid takes "on top", the stricter reading | QUAL-254 |
+| (e) | How does a night shift count toward the state agreement's § 12 stk. 3 "arbejdsdage" (at most 10 working days between two days off)? | The weekly rest-day check | QUAL-256 |
+
+### S148 addition — a wage type to name (2026-11-25)
+
+Since S148 the OK26 call-home day (the rest of the working day on which a child falls ill after the parent has arrived at work) is credited toward the norm and exported under the child's first sick day's code, `SLS_0530`, for all five agreements. That code is StatsTid's provisional choice, not the payroll experts' (S148 refinement ruling R-16). **Question:** which SLS wage type should carry the call-home hours? When answered, the five `wage_type_mappings` rows are replaced (QUAL-249; `danish-agreements.md`, the shared-code note; register rows SR-AC-OK26-003, SR-HK-OK26-003, SR-PROSA-OK26-003, SR-AC_RESEARCH-OK26-003, SR-AC_TEACHING-OK26-001..004).
+
+---
+
 ## Engagement Protocol
 
 Per PROGRAM L94–99:

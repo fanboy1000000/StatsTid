@@ -22,7 +22,7 @@
 - **OK24**: Effective 2024-04-01
 - **OK26**: Effective 2026-04-01
 - Version resolved by **entry date**, not current date (ADR-003)
-- OK26 configs are currently placeholders identical to OK24 values
+- OK26 configs are currently placeholders identical to OK24 values, with two exceptions since S148: the child's sick days per illness (2 under OK24, 3 under OK26) and the call-home day's wage-type rows (OK26 only); see "Entitlement Quotas" and "Wage Type Mappings" below
 
 ## Key Behavioral Differences (RES-001)
 
@@ -49,6 +49,8 @@
 > - **`MaxFlexBalance` and `FlexCarryoverMax`** (D6). There is no central state flex agreement (PAV 19.5.1), so a flex cap is each institution's own local setting, unset unless the institution sets it. Built in S148's config stage; the pay effect comes in stage 1.
 > - **`NormPeriodWeeks`** (D1). The norm period is the calendar month. Built in S148 stage 1.
 > - **`OnCallDutyRate` 0.33 and `NonWorkingTravelRate` 0.5** (D11). Each time type gets three facts per agreement instead: a worked-time fraction, a supplement basis and a rest flag. For AC-agreement staff, travel is the only special time type. Built with D11's later stage, S148 stage 2 or later.
+
+> **S148 note (2026-11-25).** **`FlexCarryoverMax` is retired:** no calculation ever read it, and S148 removed it from the code, the schema and the editors (C-6/C-7, TASK-14816). Its row above and the Position Overrides table's `FlexCarryoverMax` column below are history. `MaxFlexBalance` keeps the values above in the central configuration. An institution's own flex settings (plus and minus caps, settlement and test periods, the actions above the cap and on leaving) are recorded and validated in the local profile since S148, and no calculation reads them until S149 (stage 1).
 
 ### Supplement Time Windows (HK/PROSA only)
 
@@ -149,6 +151,36 @@ See ROADMAP Phase 4e "S35 domain-correctness discovery (LAUNCH-BLOCKING)" for th
 
 Per-cell full citation + confidence level (HIGH/MEDIUM/LOW) + interpretation authority (Personalestyrelsen / Akademikerne / negotiated / contested) + verification date now lives in [`docs/references/agreement-source-register.md`](agreement-source-register.md) (created S36 TASK-3601 + populated through TASK-3605). The SR row references inline above point to specific entries. Phase B sign-off cycles will fill `last_verified_by` + `decision_date` per cell.
 
+## Rest Periods (S148)
+
+> **In plain words.** Since S148 the 11-hour daily rest is checked the way the authority (Arbejdstilsynet) applies
+> the law: at the end of every piece of work, look back 24 hours; those 24 hours must hold at least 11 unbroken
+> hours of rest. So nobody may still be working more than 13 hours after their last full rest ended. Before S148
+> StatsTid grouped work by the day it started and measured only between days, so one shift over 13 hours, a day
+> shift followed by a night shift, or a split day over 13 hours showed no finding (QUAL-253, fixed in S148 wave 3b
+> by owner Q2, 2026-11-13). The verified research is `docs/references/rest-period-24h-research.md`; the model is
+> ADR-044. The checks read the clock times typed in Skema.
+
+| Rule | In StatsTid since S148 | Source and register |
+|------|------------------------|---------------------|
+| Daily rest | At least `MinimumRestHours` unbroken hours inside the 24 elapsed hours before each work end. Exactly the minimum passes; short rests are never added together | Arbejdsmiljøloven § 50, BEK nr. 606 § 3; QUAL-253 (fixed) |
+| The minimum | 11.0 hours for every agreement and OK version (seed) | |
+| "13 hours" | Not a setting: 24 minus the minimum | |
+| Time | Elapsed hours in Europe/Copenhagen, the zone passed in by the host, so the clock-change nights are 23 and 25 hours long | |
+| Dating | A finding is dated the day its work ends and belongs to that day's month; one finding per day, the lowest value | |
+| Read window | From two days before the month | |
+| Shown value | Rounded down to one decimal, so 10 h 59 min shows 10.9, never "11.0" | |
+| Permitted cut (HK, PROSA) | Where the agreement allows derogation (`RestPeriodDerogationAllowed`: HK and PROSA), a rest of at least 8 hours is a warning and a shorter one a violation. The warning says what StatsTid does not check: at most once per 7 days (twice by local agreement), never two days in a row, and equal compensatory rest straight after | BEK 606 § 19; Statens arbejdstidsaftale § 12; QUAL-254 (frequency and compensatory rest not modelled) |
+| AC staff | No derogation flag (the AC agreement has no rest clause). AC staff and managers are checked like everyone else, although some may be exempt person by person | BEK 606 § 6, never per group (PAV 19.8); QUAL-255 |
+| Weekly rest | Simplified: a 7-day block, counted from the month's first day, in which every day has a work start is flagged. The legal test (35 unbroken hours, at most 6 days apart; 10 working days under the state agreement § 12 stk. 3; on-call never counts toward it) is not built | QUAL-256 (High) |
+| 48-hour average | Average weekly hours over the checked period above 48.0 is a violation; the configured reference period (17 weeks in every seed) is not read | QUAL-123 |
+| Days not on the clock | A day whose hours are not all typed as clock times is listed once a month as "Hviletid ikke kontrolleret for N dage", as information, not as a breach | Owner ruling R-22; QUAL-234 |
+
+**Open legal questions.** Five points the sources leave silent are in `phase-b-handoff-package.md`, "S148
+additions": the 7-day anchor, "døgn" in "not two days in a row", CIR 9807/1983, where compensatory rest sits, and
+how a night shift counts toward the 10 working days. A sixth, what to assume before the first record, has a default:
+time with no registered work is rest.
+
 ## Entitlement Quotas
 
 Source: `DefaultEntitlementConfigs.cs` and `entitlement_configs` seed data.
@@ -158,9 +190,7 @@ Source: `DefaultEntitlementConfigs.cs` and `entitlement_configs` seed data.
 | VACATION | 25 days | September (9) | No | No (day-count flat per Ferieloven §5; ADR-031) | 5 days | -- | Ferie (ferieaar) | SR-AC-OK24-013 (quota, HIGH per Ferieloven) + SR-AC-OK24-032 (sub-fields) |
 | SPECIAL_HOLIDAY | 5 days | January (1) | No | No (day-count flat per Ferieloven §5; ADR-031) | 0 | -- | Saerlige feriedage (calendar-year cycle, reset 1 Jan — corrected from a pre-S80 September defect per QUAL-010; both cited SR sources state January) | SR-AC-OK24-031 (quota) + SR-AC-OK24-036 (sub-fields) |
 | CARE_DAY | 2 days | January (1) | No | No | 0 | -- | Omsorgsdage | SR-AC-OK24-014 (quota) + SR-AC-OK24-033 (sub-fields) |
-| CHILD_SICK (AC) | 1 day | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-AC-OK24-016 + SR-AC-OK24-034 |
-| CHILD_SICK (HK) | 2 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-HK-OK24-028 |
-| CHILD_SICK (PROSA) | 3 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-PROSA-OK24-005 (divergent quota) |
+| CHILD_SICK (all five agreements) | **Per illness:** 2 days under OK24; 3 days under OK26, plus the call-home day (AC and its two variants provisional, pending the AC circular) | January (1) (stored; no yearly cap since S148) | Yes (day 2 follows day 1, day 3 day 2; a day with no planned hours is skipped) | No | 0 | -- | Barns sygedag. Corrected in S148 (QUAL-236, TASK-14811); before, AC had 1 day, HK 2 and PROSA 3, counted against the calendar year | SR-AC-OK24-016 + SR-AC-OK24-034 / SR-HK-OK24-028 / SR-PROSA-OK24-005 (these SR rows still record the pre-S148 values) |
 | SENIOR_DAY | 2 days | January (1) | No | No | 0 | 62 | Seniordage — RESOLVED S37 TASK-3703 (was 0 + 60, paired-bug; user-corrected to 2 + 62 uniform across all 5 agreements). | SR-AC-OK24-015 + SR-AC-OK24-035 + SR-HK-OK24-029 + SR-PROSA-OK24-006 |
 
 VACATION and SPECIAL_HOLIDAY use the **MONTHLY_ACCRUAL** model (Ferieloven *samtidighedsferie* — earned-to-date, ~2,08 / ~0,42 days per month respectively; activated S60, **ADR-030**, superseding ADR-021 D6). Their **day-count is NOT pro-rated by part-time fraction** (flat 25/5 for every employee per Ferieloven §5 stk.1 — "uanset om du arbejder på fuld tid, nedsat tid, eller arbejder få dage om ugen"; state circular Medst. 021-24 §3 follows; **ADR-031**, superseding ADR-030 D8's piecewise-fraction premise). **Consumption (afholdelse) — corrected S66, ADR-032 (verified against primary sources, `vacation-consumption-mechanism-research.md`):** one day off consumes `hours ÷ that day's scheduled norm` feriedage — the state Ferievejledning's own mechanism (Example 3.5: 3 timers frihed = ½ dag on a 6h day, ⅓ on a 9h day) — so a whole scheduled workday off = exactly **1** dag for every employee at any fraction. **There is NO `5 ÷ N per day off` multiplier in the state-sector authority** (LBK 230/2021 §6 stk.2 is a *week-mirroring* rule: vacation is held 5 days/week mirroring the work pattern, arbejdsfrie dage "indgår i ferien med et forholdsmæssigt antal" — self-enforcing under the system's 5-weekday norm model; the 5÷N framing the earlier deferral anticipated was a private-sector practitioner shorthand, refuted by adversarial verification). §8.1/§8.4: NO special rules for <5-day/week employees for either ordinary or særlige feriedage. SPECIAL_HOLIDAY consumes by the same basis (and may be taken "samlet, enkeltvis og som brøkdele af dage"). **Taking unit, re-verified S147 (R2, CONFIRMED; `sick-day-credit-and-agreement-texts-research.md` R2):** Aftale om ferie § 13 stk. 2 (Medst. 021-24 / CIR1H 9298): *"Afvikling kan ske som enkeltdage eller som brøkdele af dage"* — særlige feriedage may be taken in part days. StatsTid serves the Skema row with `fullDayOnly = false` (S147 QUAL-235, TASK-14701). One nuance, no code: days the **employer** imposes after 1 January are whole days only (Ferievejledning, Dec 2019; RR-6). The monetary feriebetaling value (also part-time-scaled) is not computed by this system. CARE_DAY, CHILD_SICK, and SENIOR_DAY use the IMMEDIATE accrual model and consume by the same `hours ÷ day-norm` basis (no conversion). CHILD_SICK is the only per-episode entitlement and varies by agreement.
@@ -183,11 +213,13 @@ VACATION and SPECIAL_HOLIDAY use the **MONTHLY_ACCRUAL** model (Ferieloven *samt
 
 The Skema save refuses any code outside the vocabulary with 422. The change moved the weekly core's replay marker once, to `weekly-timeline-v2` (ADR-016 D10).
 
+**S148 addition (TASK-14811, QUAL-236).** `CHILD_SICK_CALL_HOME`, the OK26 call-home day, joins the **Credit** class, so its hours count toward the norm like a sick day. That was S148's one change to the pay arithmetic, and it moved the marker once more, to `weekly-timeline-v3`.
+
 **Residual (RR-3, MEDIUM; an S148 candidate beside D-8 and ADR-043 R-7).** For a partly worked sick day the sources read the credit as max(worked, planned), and local variation is allowed under 022-26 § 3. StatsTid credits the stored sick hours as entered. That can over-credit when worked plus sick hours exceed the day's norm (QUAL-237).
 
 ## Wage Type Mappings (SLS Codes)
 
-Source: `wage_type_mappings` seed data in `init.sql`. All mappings are identical for OK24 and OK26.
+Source: `wage_type_mappings` seed data in `init.sql`. The mappings are identical for OK24 and OK26 except one: since S148 the child's call-home day (`CHILD_SICK_CALL_HOME`) has a row under OK26 only, for every agreement (the Absence Types table below).
 
 Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) / SR-HK-OK24-030 (HK bundle, ~22 mappings) / SR-PROSA-OK24-008 (mirrors HK) / SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 (variants — SLS code divergence resolved S37 TASK-3702 via mirror-AC-base per interim-expert decision; canonical candidate bug **#2** in `agreement-ruleset-audit.md`).
 
@@ -230,6 +262,7 @@ Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) 
 | LEAVE_WITHOUT_PAY | SLS_0560 | Leave without pay | Y | Y | Y |
 | LEAVE_WITH_PAY | SLS_0565 | Leave with pay | Y | Y | Y |
 | SPECIAL_HOLIDAY_ALLOWANCE | SLS_0570 | Special holiday allowance | Y | Y | Y |
+| CHILD_SICK_CALL_HOME | SLS_0530 | Child's sick day, call-home hours: **OK26 only**; the code is provisional (S148, QUAL-249) | Y | Y | Y |
 
 > **Shared-code note (verified 2026-08-13):** `PARENTAL_LEAVE` and `SICK_DAY` both map to `SLS_0540`.
 > This faithfully mirrors the seed data (`docker/postgres/init.sql` — the PARENTAL_LEAVE rows are
@@ -239,6 +272,14 @@ Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) 
 > source-register row records them jointly, and no test asserts either code. Treat as an open
 > source-verification item for the Phase B expert pass (see `agreement-source-register.md`, which
 > registered the analogous `MERARBEJDE`/`OVERTIME_50 → SLS_0210` collision but not this one).
+>
+> **S148 addition (2026-11-25; R-16, provisional):** `CHILD_SICK_CALL_HOME` and `CHILD_SICK_DAY` both map to
+> `SLS_0530` under OK26. The call-home day (the rest of the working day on which a child falls ill after the parent
+> has arrived at work; OK26 only) is credited toward the norm like a sick day since S148 (TASK-14811, QUAL-236), and
+> payroll skips a line with no mapping, so each agreement needed a row. StatsTid exported it under the child's first
+> sick day's code as a stated, provisional choice: the hours are right, only the payroll code may be wrong. The
+> Phase B payroll experts name the real wage type, and the five rows are then replaced (QUAL-249; the seed rows
+> carry `shortcut(QUAL-249)` in `docker/postgres/init.sql`).
 
 ### Flex & Duty
 
@@ -324,8 +365,8 @@ HK / PROSA / AC_RESEARCH / AC_TEACHING have no position overrides at all — see
 
 When resolving a config for a specific employee:
 
-1. **Central config** (CentralAgreementConfigs) -- base values per agreement/OK version
-2. **Position override** (PositionOverrideConfigs) -- partial overrides per position, null fields fall through
-3. **Local override** (local_configurations table) -- org-specific overrides within central constraints
+1. **Central config** (the `agreement_configs` table) -- the published version in force on the day, per agreement/OK version
+2. **Position override** (the override's dated versions) -- partial overrides per position, null fields fall through
+3. **Local profile** (`local_agreement_profiles`, ADR-017) -- the organisation's dated row covering the day; NULL inherits
 
-This chain is implemented in `ConfigResolutionService` (Infrastructure layer).
+This chain is implemented in `ConfigResolutionService` (Infrastructure layer). Since S148 each layer is the one in force on the day asked for, and the lookup never substitutes a compiled value: a database error or a day with no published central version refuses (ADR-014). `CentralAgreementConfigs` and `PositionOverrideConfigs` in SharedKernel are compiled tables that `init.sql` mirrors; they are not this lookup's answer, and the three legacy paths that still use them are QUAL-262.

@@ -947,14 +947,14 @@ AC OK26 is a placeholder in `CentralAgreementConfigs.cs:100` — the comment rea
 | `agreement_code` | AC |
 | `ok_version` | OK26 |
 | `field` | All AC OK26 cells in `wage_type_mappings` (17 mappings + 1 NORM_DEVIATION; mirrors AC OK24 mappings) |
-| `current_encoded_value` | Identical to AC OK24 (see SR-AC-OK24-037 bundle). Rows at init.sql:290 (NORMAL_HOURS), 297 (MERARBEJDE), 306 (VACATION) and continuing through L1201 (NORM_DEVIATION OK26 AC). |
+| `current_encoded_value` | Identical to AC OK24 (see SR-AC-OK24-037 bundle) **plus one mapping since S148: `CHILD_SICK_CALL_HOME → SLS_0530`** (the OK26 call-home day; provisional, QUAL-249; `init.sql:318` at S148's close). Rows at init.sql:290 (NORMAL_HOURS), 297 (MERARBEJDE), 306 (VACATION) and continuing through L1201 (NORM_DEVIATION OK26 AC). |
 | `authoritative_source` | pending — SLS wage type codes are Personalestyrelsen-administered and typically stable across OK transitions; OK26 cirkulær may introduce new wage types (e.g., for new compensation categories) that would require new mappings |
 | `interpretation` | AC OK26 wage type mappings mirror AC OK24. SLS codes stable across OK24 → OK26 transition. New mappings (if any) will be added as Phase B identifies them from the OK26 cirkulær. |
 | `confidence_level` | HIGH for the existing mappings (SLS codes are stable infrastructure; the inheritance is correct); LOW for "completeness" (OK26 may introduce new time types requiring new mappings that don't exist in the OK24 set) |
 | `interpretation_authority` | Personalestyrelsen (SLS technical) |
 | `last_verified_by` | pending |
 | `decision_date` | pending |
-| `supersession_history` | (none) |
+| `supersession_history` | `[{date: 2026-11-12, from_value: "(no CHILD_SICK_CALL_HOME mapping)", to_value: "CHILD_SICK_CALL_HOME → SLS_0530 (provisional)", source_url: "pending — the code is StatsTid's provisional choice (S148 refinement ruling R-16); the call-home day itself: the AC settlement item 4 (in force 1 Apr 2026), circular pending (QUAL-236, QUAL-BF-004)", commit: "26065e1a (S148 TASK-14811 stack merge)"}]` |
 | `bug_correction_history` | (none) |
 | `disputed?` | false |
 | `notes` | Wage type mapping completeness is a separate concern from individual mapping correctness. The OK26 placeholder inherits the OK24 set; if OK26 introduces new time types, additional rows land via S40 cutover. |
@@ -1661,14 +1661,14 @@ HK OK26 mirrors HK OK24 per `CentralAgreementConfigs.cs:123` ("HK OK26 (placehol
 | `agreement_code` | HK |
 | `ok_version` | OK26 |
 | `field` | All HK OK26 cells in `wage_type_mappings` (mirrors HK OK24 mappings) |
-| `current_encoded_value` | Identical to HK OK24 (see SR-HK-OK24-030 bundle). |
+| `current_encoded_value` | Identical to HK OK24 (see SR-HK-OK24-030 bundle) **plus one mapping since S148: `CHILD_SICK_CALL_HOME → SLS_0530`** (the OK26 call-home day; provisional, QUAL-249; `init.sql:319` at S148's close). |
 | `authoritative_source` | pending — SLS technical documentation; codes stable across OK24 → OK26 transition |
 | `interpretation` | HK OK26 wage type mappings mirror HK OK24. SLS codes stable. |
 | `confidence_level` | HIGH for existing mappings (stable infrastructure); LOW for completeness (OK26 may introduce new wage types) |
 | `interpretation_authority` | Personalestyrelsen (SLS technical) |
 | `last_verified_by` | pending |
 | `decision_date` | pending |
-| `supersession_history` | (none) |
+| `supersession_history` | `[{date: 2026-11-12, from_value: "(no CHILD_SICK_CALL_HOME mapping)", to_value: "CHILD_SICK_CALL_HOME → SLS_0530 (provisional)", source_url: "pending — the code is StatsTid's provisional choice (S148 refinement ruling R-16); the call-home day itself: 021-26 § 14 (QUAL-236)", commit: "26065e1a (S148 TASK-14811 stack merge)"}]` |
 | `bug_correction_history` | (none) |
 | `disputed?` | false |
 | `notes` | Same shape as AC OK26 bundle (SR-AC-OK26-003). |
@@ -1941,14 +1941,14 @@ PROSA OK26 mirrors PROSA OK24 per `CentralAgreementConfigs.cs:154` ("PROSA OK26 
 | `agreement_code` | PROSA |
 | `ok_version` | OK26 |
 | `field` | All PROSA OK26 wage type mappings (mirrors PROSA OK24 bundle SR-PROSA-OK24-008). |
-| `current_encoded_value` | Identical to PROSA OK24 (22 mappings, same as HK). |
+| `current_encoded_value` | Identical to PROSA OK24 (22 mappings, same as HK) **plus one mapping since S148: `CHILD_SICK_CALL_HOME → SLS_0530`** (the OK26 call-home day; provisional, QUAL-249; `init.sql:320` at S148's close). |
 | `authoritative_source` | SLS technical documentation |
 | `interpretation` | Placeholder inheritance. SLS codes stable. |
 | `confidence_level` | HIGH for existing mappings; LOW for completeness |
 | `interpretation_authority` | Personalestyrelsen (SLS technical) |
 | `last_verified_by` | pending |
 | `decision_date` | pending |
-| `supersession_history` | (none) |
+| `supersession_history` | `[{date: 2026-11-12, from_value: "(no CHILD_SICK_CALL_HOME mapping)", to_value: "CHILD_SICK_CALL_HOME → SLS_0530 (provisional)", source_url: "pending — the code is StatsTid's provisional choice (S148 refinement ruling R-16); the call-home day itself: 020-26 § 14 (QUAL-236)", commit: "26065e1a (S148 TASK-14811 stack merge)"}]` |
 | `bug_correction_history` | (none) |
 | `disputed?` | false |
 | `notes` | Same shape as HK OK26 bundle. |
@@ -2348,14 +2348,14 @@ Both AC variants OK26 are placeholders per `CentralAgreementConfigs.cs:211 + 261
 | `agreement_code` | AC_RESEARCH |
 | `ok_version` | OK26 |
 | `field` | All AC_RESEARCH OK26 wage type mappings (mirrors OK24 bundle SR-AC_RESEARCH-OK24-006) |
-| `current_encoded_value` | Identical to AC_RESEARCH OK24 mappings (12 entries; init.sql:980–991 byte-identical to L965–976 except OK version). Inherits same SLS code divergence from AC base. |
+| `current_encoded_value` | Identical to AC_RESEARCH OK24 mappings (12 entries; init.sql:980–991 byte-identical to L965–976 except OK version). Inherits same SLS code divergence from AC base. **Plus one mapping since S148: `CHILD_SICK_CALL_HOME → SLS_0530`** (the OK26 call-home day; provisional, QUAL-249; `init.sql:1446` at S148's close). |
 | `authoritative_source` | pending (Phase B — same finding as OK24) |
 | `interpretation` | Same wage-type-code-divergence pattern as OK24. |
 | `confidence_level` | LOW (inherits SR-AC_RESEARCH-OK24-006) |
 | `interpretation_authority` | Personalestyrelsen (SLS technical) |
 | `last_verified_by` | pending |
 | `decision_date` | pending |
-| `supersession_history` | (none) |
+| `supersession_history` | `[{date: 2026-11-12, from_value: "(no CHILD_SICK_CALL_HOME mapping)", to_value: "CHILD_SICK_CALL_HOME → SLS_0530 (provisional)", source_url: "pending — the code is StatsTid's provisional choice (S148 refinement ruling R-16); the call-home day itself: the AC settlement item 4 (in force 1 Apr 2026), circular pending (QUAL-236, QUAL-BF-004)", commit: "26065e1a (S148 TASK-14811 stack merge)"}]` |
 | `bug_correction_history` | (none) |
 | `disputed?` | false |
 | `notes` | Inherits SR-AC_RESEARCH-OK24-006 candidate-bug finding. |
@@ -2388,14 +2388,14 @@ Both AC variants OK26 are placeholders per `CentralAgreementConfigs.cs:211 + 261
 | `agreement_code` | AC_TEACHING |
 | `ok_version` | OK26 |
 | `field` | All AC_TEACHING OK26 cells across 4 data domains: 001 = `agreement_configs` (mirrors AC_TEACHING OK24 cell-by-cell; init.sql:1188 byte-identical to L1182); 002 = `entitlement_configs` explicit-absence; 003 = `wage_type_mappings` (mirrors OK24, init.sql:1010–1021); 004 = `position_override_configs` explicit-absence |
-| `current_encoded_value` | Identical to AC_TEACHING OK24 across all 4 domains. AnnualNormHours = 1680 maintained. |
+| `current_encoded_value` | Identical to AC_TEACHING OK24 across all 4 domains. AnnualNormHours = 1680 maintained. **Exception since S148, in 003 (`wage_type_mappings`): plus `CHILD_SICK_CALL_HOME → SLS_0530`** (the OK26 call-home day; provisional, QUAL-249; `init.sql:1482` at S148's close). |
 | `authoritative_source` | pending — OK26 cirkulær under finalization. |
 | `interpretation` | Placeholder inheritance for all 4 data domains. Inherits all AC_TEACHING OK24 findings (entitlement gap, wage-type-code divergence, AnnualNormHours divergence from AC_RESEARCH). |
 | `confidence_level` | LOW (placeholder) |
 | `interpretation_authority` | Personalestyrelsen (anticipated) |
 | `last_verified_by` | pending |
 | `decision_date` | pending |
-| `supersession_history` | (none) |
+| `supersession_history` | `[{date: 2026-11-12, domain: "003 wage_type_mappings", from_value: "(no CHILD_SICK_CALL_HOME mapping)", to_value: "CHILD_SICK_CALL_HOME → SLS_0530 (provisional)", source_url: "pending — the code is StatsTid's provisional choice (S148 refinement ruling R-16); the call-home day itself: the AC settlement item 4 (in force 1 Apr 2026), circular pending (QUAL-236, QUAL-BF-004)", commit: "26065e1a (S148 TASK-14811 stack merge)"}]` |
 | `bug_correction_history` | (none — inherits S35 AC=AFSPADSERING for OK26 placeholder; entitlement-gap + wage-type-divergence candidate bugs inherit) |
 | `disputed?` | false |
 | `notes` | **Single compound row covering 4 placeholder bundles** for AC_TEACHING OK26 — further compaction of the placeholder pattern justified because both AC variants follow identical placeholder shape (4 bundles per variant; 8 rows total via this row + SR-AC_RESEARCH-OK26-001..004). If TASK-3605 close needs separate rows per data domain for AC_TEACHING (per Phase B preference), this row can be split into 4 later without schema change. |

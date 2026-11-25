@@ -110,10 +110,10 @@ All UI components are barrel-exported from `ui/index.ts`.
 | ~~FlexBalanceCard~~ | — | Deleted in S146 (TASK-14608): the flex balance shows on the Skema balance card, the year tile and the team overview |
 | SkemaGrid | `SkemaGrid.tsx` | Monthly spreadsheet grid (days x projects/absence rows); supports read-only/locked rendering (S55) |
 | AllocationSummary | `AllocationSummary.tsx` | Work-time allocation reconciliation summary (S56/ADR-028) |
-| ComplianceWarnings | `ComplianceWarnings.tsx` | EU-WTD compliance warnings, and (S147, QUAL-234 interim) one month-level notice, "Hviletid ikke kontrolleret for N dage", for days the 11-hour rest check could not measure. The sentence is built by `restNotCheckedNotice`, exported from this module by design so Teamoversigt shows the same words; it retires when the rest check reads Skema's intervals (S148 stage 0) |
+| ComplianceWarnings | `ComplianceWarnings.tsx` | EU-WTD compliance warnings in one polite live region (S148; see "Accessibility patterns"), and (since S147) one month-level notice, "Hviletid ikke kontrolleret for N dage", for days the 11-hour rest check could not measure. The sentence is built by `restNotCheckedNotice`, exported from this module by design so Teamoversigt shows the same words. Since S148 the rest check reads Skema's clock intervals, so the notice lists only days whose hours are not all on the clock; it stays, in the informational style rather than the warning style (owner ruling R-22; QUAL-234) |
 | ~~ProjectPicker~~ | — | Deleted in S72 (the Skema redesign, `c91f63d2`) |
-| TimeEntryForm _(legacy)_ | `TimeEntryForm.tsx` | Superseded by SkemaPage; only referenced by unrouted legacy pages |
-| WeekGrid _(legacy)_ | `WeekGrid.tsx` | Superseded by SkemaGrid; only referenced by unrouted `WeeklyView` |
+| ~~TimeEntryForm~~ | — | Deleted in S148 (TASK-14803, `b8316737`) with the unrouted `TimeRegistration` page, when the old time-entry route `POST /api/time-entries` was retired (TASK-14802); hours are saved only through Skema |
+| WeekGrid _(legacy)_ | `WeekGrid.tsx` | Superseded by SkemaGrid; imported by nothing since `WeeklyView` was deleted (S66, `0abcc84e`) |
 
 > Removed S56 (ADR-028 timer retirement): `TimerControl.tsx` and the `useTimer` hook no longer exist.
 
@@ -182,7 +182,7 @@ Routes are defined in `frontend/src/App.tsx`. Unauthenticated → `/login`; auth
 | `/health` | `HealthDashboard` | any auth | Service health (hidden from nav) |
 | `*` | `NotFoundPage` | any auth | 404 fallback |
 
-Legacy/orphaned pages still in source but **not routed**: `TimeRegistration` (superseded by `SkemaPage`); `EntitlementConfigEditor` (not imported by `App.tsx`). (`AbsenceRegistration` and `WeeklyView`, formerly listed here, have since been deleted from source. **`OvertimePreApprovalManagement` left this list in S140** — it was finished and unit-tested but had never been routed, so no user in any role could reach it, and it is now routed under the leader tier with a `Sidebar.tsx` entry in "Godkend tid"; quality row QUAL-162.)
+Legacy/orphaned pages still in source but **not routed**: `EntitlementConfigEditor` (not imported by `App.tsx`). (`AbsenceRegistration` and `WeeklyView`, formerly listed here, have since been deleted from source, and so has `TimeRegistration`, deleted in S148 with the old time-entry route, TASK-14803. **`OvertimePreApprovalManagement` left this list in S140** — it was finished and unit-tested but had never been routed, so no user in any role could reach it, and it is now routed under the leader tier with a `Sidebar.tsx` entry in "Godkend tid"; quality row QUAL-162.)
 
 **New in S140 — the HR follow-up surface.** Route `/admin/opfoelgning` ("Opfølgning") inside the `RequireRole minRole="LocalHR"` group, with a `Sidebar.tsx` entry in the Administration group. It is the shape the owner ruled from the S139 HR follow-up register: **one landing page, one tile per process** (open count + age of the oldest item), each process's own list behind its tile. `pages/admin/opfoelgning/WorklistList.tsx` (the backdate worklist, S140) is the first of those lists and takes `{ onResolved }` so the landing page can refresh its tiles after a resolve. **The lists are read-only in S140** (owner ruling OQ-4): the four process actions they point at — reconcile payout, resolve a flagged settlement, record a §21 transfer agreement, settlement reversal — have no frontend yet and are S141 items, so those lists say so rather than offering a form. Two role rules to preserve when extending it: the payroll-recalculation card is Global-Admin-only, renders **no payload** and makes **no network call** (the browser genuinely cannot reach the Payroll host — `/api/*` proxies to the Backend only, and the typed client is generated from the Backend's specification alone), and it is replaced entirely by a blocked notice when a row carries `recalcBlockedBy`. Note also that `RequireRole` renders a **403 `ForbiddenPage` card and does not redirect** — pin that behaviour, not a redirect.
 
@@ -214,7 +214,7 @@ Legacy/orphaned pages still in source but **not routed**: `TimeRegistration` (su
 | `useSearch` | Server-side units+people search overlay for the merged admin page (S107) |
 | `useSkema` | Monthly skema data + approval/reopen plumbing |
 | `useTeamOverview` | Leader Teamoversigt aggregate rows (S87) |
-| `useTimeEntries` | Time entry CRUD operations |
+| `useTimeEntries` | Read-only list of an employee's time entries (`GET /api/time-entries/{employeeId}`). Its register call left with the retired `POST /api/time-entries` (S148, TASK-14803), and since then **no production code uses it**: its only caller is its typed-wire test (`hooks/__tests__/employeeTypedWire.test.ts`) |
 | `useUnitMutations` | Unit structure mutations — create/rename/move/delete, If-Match (ADR-038; S108) |
 | `useWageTypeMappings` | Wage type mapping CRUD for GlobalAdmin |
 | `useYearOverview` | Read-only year overview for ArsoversigtPage (S65) |
@@ -248,6 +248,14 @@ Centralized fetch wrapper. All API calls go through this client.
 - Class names: camelCase in CSS modules (e.g., `.formField`, `.submitButton`)
 - Border radius is always `0px` -- do not override
 - Import pattern: `import styles from './Component.module.css'`
+
+## Accessibility patterns
+
+### Live regions (screen-reader announcements) — S148
+- **One polite live region per changing panel, always mounted.** A panel whose content should be announced when it changes is a single `role="status"` (or `aria-live="polite"`) element that stays in the page and is filled in place; a region inserted with its text already in it is often not announced. The items inside carry no role of their own, so a changed set is announced once. Examples: the compliance warnings panel (`components/ComplianceWarnings.tsx:85-92`, S148 TASK-14814; empty while loading, and `.region:empty` takes the empty region out of the layout) and Skema's month status and removal announcement (`pages/SkemaPage.tsx:1509-1519`; the removal has a region of its own, because the status region speaks "Gemmer…" during a save and would overwrite it).
+- **A note that does not change with what the user does is not a live region.** `Alert` is `role="alert"` (`components/ui/Alert.tsx:16`), which interrupts a screen reader and is announced again after every save, so a fixed explanatory note uses a plain element (S148 TASK-14807, review W-1).
+- **Information is not a warning.** The "Hviletid ikke kontrolleret for N dage" notice uses the informational style (`--color-info`, the `.info` rule in `ComplianceWarnings.module.css`), not the breach style (S148, owner ruling R-22).
+- **Known gap** (below the quality register's floor; recorded in `docs/sprints/SPRINT-148.md`, C-1): Teamoversigt's detail row gives each warning line its own `role="status"` (`pages/approval/TeamOversigt.tsx:309-332`), against this pattern.
 
 ## Test Infrastructure
 - **Runner**: vitest (configured in `vite.config.ts`)
@@ -289,7 +297,6 @@ frontend/
       SkemaGrid.tsx             # Domain: monthly spreadsheet (lockable)
       AllocationSummary.tsx     # Domain: work-time allocation (S56)
       ComplianceWarnings.tsx    # Domain: EU-WTD warnings + the rest-not-checked notice (S147)
-      TimeEntryForm.tsx         # Domain: legacy (unrouted)
       WeekGrid.tsx              # Domain: legacy (unrouted)
     hooks/                     # 28 data-fetching hooks
     lib/

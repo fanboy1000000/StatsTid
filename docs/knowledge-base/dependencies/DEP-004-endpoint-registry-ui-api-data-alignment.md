@@ -32,7 +32,7 @@ Lightweight structural contract mapping every API endpoint to its UI consumer(s)
 | `/api/skema/{employeeId}/month` | GET | SkemaPage | useSkema | TimeEntry, AbsenceEntry, Project, WorkTimeProjection, ApprovalPeriod | — | Employee+ |
 | `/api/skema/{employeeId}/save` | POST | SkemaPage | useSkema | TimeEntry, AbsenceEntry, WorkTimeProjection | TimeEntryRegistered, AbsenceRegistered, WorkTimeRegistered | Employee+ |
 
-> GET now returns `workTime` (intervals + manualHours) + `dailyNorm` (per-day norm) instead of `timerSession`; POST `/save` accepts an optional `workTime` block (S56, ADR-028). The allocation gate lives in the existing `/api/approval/{periodId}/employee-approve` endpoint (discriminated 422).
+> GET now returns `workTime` (intervals only; manual hours retired in S148, TASK-14809; since S148 POST `/save` also takes a `cleared` block, TASK-14840) + `dailyNorm` (per-day norm) instead of `timerSession`; POST `/save` accepts an optional `workTime` block (S56, ADR-028). The allocation gate lives in the existing `/api/approval/{periodId}/employee-approve` endpoint (discriminated 422).
 
 ### Balance & Årsoversigt (section added S65)
 
@@ -104,7 +104,7 @@ These endpoints predate the Skema monthly spreadsheet (S9). Frontend hooks exist
 
 | Endpoint | Method | UI Consumer | Hook | Data Model | Event | Auth | Status |
 |----------|--------|-------------|------|------------|-------|------|--------|
-| `/api/time-entries` | POST | — | useTimeEntries (legacy) | TimeEntry | TimeEntryRegistered | Employee+ | Superseded by Skema |
+| ~~`/api/time-entries`~~ | POST | — | — (`useTimeEntries` keeps only its GET) | — | — | — | **Retired in S148 TASK-14802** (merged `e4e6b0ea`): it stored any activity type as free text and let paid hours bypass the send check; the Skema save is the one way to register time (ADR-028 D6, ADR-043 D11) |
 | `/api/time-entries/{employeeId}` | GET | — | useTimeEntries (legacy) | TimeEntry | — | Employee+ | Superseded by Skema |
 | `/api/absences` | POST | — | useAbsences (legacy) | AbsenceEntry | AbsenceRegistered | Employee+ | Superseded by Skema |
 | `/api/absences/{employeeId}` | GET | — | useAbsences (legacy) | AbsenceEntry | — | Employee+ | Superseded by Skema |
