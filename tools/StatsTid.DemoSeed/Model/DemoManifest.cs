@@ -118,7 +118,7 @@ public sealed class DemoActivity
     /// <summary>
     /// S127 / TASK-12701a — the month's PROJECT ALLOCATIONS (Skema <c>entries</c>). One or more rows
     /// per worked day; the day's rows sum EXACTLY to that day's <see cref="WorkTime"/> total, which is
-    /// what the submit-time allocation gate reconciles (<c>ApprovalEndpoints.cs:1446-1506</c>).
+    /// what the submit-time allocation gate reconciles (<c>ApprovalEndpoints.ExecuteSendAsync</c>, step (5e)).
     /// <para>NULL (hence ABSENT from the JSON, mirroring <see cref="DemoManifest.UnitPlans"/>) when
     /// the month has not been filled — which is what lets the pre-S127 legacy pin compare
     /// byte-for-byte against an unfilled manifest, and lets an old manifest deserialize.</para>
@@ -130,7 +130,7 @@ public sealed class DemoActivity
     /// S127 / TASK-12701a — the month's self-recorded work time (Skema <c>workTime</c>), one row per
     /// worked day. Together with <see cref="Absences"/> these cover EVERY expected workday of the
     /// month, which is what the submit-time coverage gate requires
-    /// (<c>ApprovalEndpoints.cs:1387-1444</c>). Null ⇒ absent, as for <see cref="Allocations"/>.
+    /// (<c>ApprovalEndpoints.ExecuteSendAsync</c>, step (5d)). Null ⇒ absent, as for <see cref="Allocations"/>.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<DemoWorkDay>? WorkTime { get; set; }

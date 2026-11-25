@@ -29,10 +29,10 @@ namespace StatsTid.Infrastructure;
 /// written). NULL bounds are unbounded (D2); both-NULL skips the query entirely.</para>
 ///
 /// <para><b>Why the caller's (conn, tx).</b> Every caller holds the ADR-032 D4 employee
-/// advisory lock on that tx, and the registration writers acquire the SAME key — a self-managed
-/// connection would read OUTSIDE the lock and miss a registration committed while the edit was
-/// blocked on it (the S136 lock regime / the TimeEndpoints race class). Never "simplify" this
-/// to a pooled read.</para>
+/// advisory lock on that tx, and the registration writer, the Skema save, acquires the SAME
+/// key — a self-managed connection would read OUTSIDE the lock and miss a registration
+/// committed while the edit was blocked on it (the S136 lock regime / the PAT-015 race
+/// class). Never "simplify" this to a pooled read.</para>
 /// </summary>
 public static class EmploymentWindowStrandCheck
 {

@@ -51,6 +51,7 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
     private static readonly DateOnly RejMonthStart = new(2026, 5, 1);
     private static readonly DateOnly RejMonthEnd = new(2026, 5, 31);
     private static readonly DateOnly RegDay = new(2026, 5, 4); // a Monday in-month
+    // Seeded below as the one interval 08:00-14:30 (the work_time_projection insert): change both together.
     private const decimal WorkedSentinel = 6.5m;               // recognizable, non-zero, balanced
     private const decimal AllocSentinel = 6.5m;
     private const string SentinelTask = "AC13-TASK";

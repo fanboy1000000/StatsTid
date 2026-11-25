@@ -239,8 +239,8 @@ public sealed class UserRepository
     // other path without an explicit allowlist ruling.
     //
     // S136 / TASK-13603 (ADR-040 D3 / SEC-046) — DELIBERATE allowlist EXTENSION, ruled by
-    // the ratified ADR + the S136 refinement: the TWO REGISTRATION WRITERS join the
-    // allowlist — POST /api/time-entries and POST /api/skema/{id}/save (terminated-
+    // the ratified ADR + the S136 refinement: the TWO REGISTRATION WRITERS joined the
+    // allowlist — POST /api/time-entries (retired in S148) and POST /api/skema/{id}/save (terminated-
     // inclusive validator + terminated-inclusive SUBJECT reads: the pooled pre-check
     // read AND, since the S136 Step-5a fix-forward, the in-tx in-lock subject-state
     // re-check). Rationale: the active-only subject read 404'd a deactivated leaver for
@@ -323,7 +323,7 @@ public sealed class UserRepository
     /// (end-date endpoint, settlement resolve/reconcile-payout, year-overview via
     /// <c>OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync</c>) — <b>plus,
     /// since S136 / TASK-13603 (ADR-040 D3 / SEC-046), the TWO REGISTRATION WRITERS'
-    /// pre-transaction subject reads</b> (<c>POST /api/time-entries</c> and the Skema save) — <b>and, since
+    /// pre-transaction subject reads</b> (<c>POST /api/time-entries</c>, retired in S148, and the Skema save) — <b>and, since
     /// S138 / TASK-13805, the approval SEND command</b> (<c>ApprovalEndpoints.ExecuteSendAsync</c>, whose single
     /// in-tx subject read after the advisory lock IS the authoritative D3 check — a departed employee's FINAL
     /// month is exactly the one payroll needs certified) — <b>and, since S138 / TASK-13802, the employee-profile

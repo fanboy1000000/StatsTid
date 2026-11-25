@@ -70,9 +70,9 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
     /// — ONE record, sibling rule).</summary>
     private static readonly string[] DayHoursRowKeys = { "date", "hours" };
 
-    /// <summary>The EXACT 2 members of a <c>SkemaWorkTimeDayRow</c>. S148 S0-5: <c>manualHours</c> is retired;
-    /// this key-set assertion is kind F (CI): the served row has three keys until the member is removed
-    /// (red condition: <c>SkemaWorkTimeDayRow</c> still serving <c>manualHours</c>).</summary>
+    /// <summary>The EXACT 2 members of a <c>SkemaWorkTimeDayRow</c> (S148 S0-5: <c>manualHours</c> is
+    /// retired; the kind-F label of the assertion that uses this set is on
+    /// <c>Save_Post200_SavedCountReceipt_Unconditioned_ThenMonthServesTheRow</c>).</summary>
     private static readonly string[] WorkTimeDayKeys = { "date", "intervals" };
 
     /// <summary>The EXACT 1 member of <c>SkemaSaveResponse</c>.</summary>
@@ -234,7 +234,9 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
     /// matcher, sent WITHOUT any precondition header (unconditioned mutation #3) and serving NO
     /// ETag; the month GET re-read serves the just-written row (the ADR-018 D12 read-your-write
     /// choreography through the in-tx projection) — the save's 17-site error fan stays untyped
-    /// and untouched (S120 Explicit exclusions).</summary>
+    /// and untouched (S120 Explicit exclusions).
+    /// <para>S148 S0-5: the workTime row's key-set assertion (<c>WorkTimeDayKeys</c>) is kind F (CI): it
+    /// is red while <c>SkemaWorkTimeDayRow</c> still serves <c>manualHours</c> (three keys).</para></summary>
     [Fact]
     public async Task Save_Post200_SavedCountReceipt_Unconditioned_ThenMonthServesTheRow()
     {

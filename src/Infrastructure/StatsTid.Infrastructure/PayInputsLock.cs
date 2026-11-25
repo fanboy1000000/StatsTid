@@ -35,8 +35,9 @@ public static class PayInputsLock
 {
     /// <summary>
     /// Takes the pay-inputs lock EXCLUSIVE on <paramref name="conn"/>/<paramref name="tx"/>: the
-    /// first statement of a writer's READ COMMITTED transaction. Blocks until granted; released at
-    /// commit or rollback.
+    /// first statement of a writer's READ COMMITTED transaction. Waits for the lock within Npgsql's
+    /// default 30-second command timeout (no <c>CommandTimeout</c> is set), so a writer queued behind a
+    /// longer holder fails, writing nothing, rather than waiting on (F9); released at commit or rollback.
     /// </summary>
     public static async Task AcquireExclusiveAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct = default)

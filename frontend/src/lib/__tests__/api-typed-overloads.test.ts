@@ -349,7 +349,7 @@ describe('S112 typed derivation — compile-time fixtures', () => {
 })
 
 describe('S112 typed derivation — real committed spec', () => {
-  it('phase pin: after the S119 Pass-6 bucket-B drain — 36 POSTs, 21 PUTs, 13 DELETEs (retrofit updates this)', () => {
+  it('phase pin: the typed POST, PUT and DELETE unions, exactly (a typed-route change updates this)', () => {
     // S112 / TASK-11203 — the backend typed 20 ops (units / organizations /
     // users / roles / employee-profiles); the put/delete unions became
     // NON-EMPTY and the post union grew from exactly '/api/admin/units'.

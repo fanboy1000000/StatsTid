@@ -37,7 +37,7 @@ namespace StatsTid.Backend.Api.Endpoints.Helpers;
 ///
 /// <para><b>Where it runs</b> — exactly the closed list of writes an Employee token can reach (R-24),
 /// each after its own access check and subject read, with the handler's single Copenhagen date
-/// (PAT-028): the Skema save (advisory pre-check and in-lock re-check), the time-entry POST (both),
+/// (PAT-028): the Skema save (advisory pre-check and in-lock re-check),
 /// the send command shared by send and employee-approve, the reopen's Employee arm, the row-preferences
 /// PUT and the compensation-choice PUT. Every other write needs LeaderOrAbove or HROrAbove and reaches
 /// a person's own record only through org scope, where TASK-14703's departed-self clause in

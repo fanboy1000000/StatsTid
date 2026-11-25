@@ -36,8 +36,8 @@ namespace StatsTid.Infrastructure;
 /// <c>pg_advisory_xact_lock</c>). A self-managed read there opens a private connection
 /// that sits OUTSIDE the caller's transaction and therefore outside the lock — it would
 /// miss a concurrent write that committed while the caller blocked on the lock acquire.
-/// That is the exact race documented at <c>TimeEndpoints.cs</c> ("Placement (PAT-015)":
-/// the approval-status in-lock read) and pinned by
+/// That is the exact race documented at the Skema save's in-lock approval re-read
+/// (<c>SkemaEndpoints.cs</c>, "THE AUTHORITATIVE APPROVAL-STATUS RE-READ"; PAT-015) and pinned by
 /// <c>ApprovalPeriodRepository.GetByEmployeeAndPeriodAsync(conn, tx, …)</c>. A future
 /// cleanup that removes this interface "for consistency with the profile resolver"
 /// reintroduces that race silently.
