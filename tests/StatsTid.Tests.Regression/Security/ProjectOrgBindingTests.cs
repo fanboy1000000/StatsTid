@@ -1,6 +1,9 @@
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.Auth;
+using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Contracts;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -28,6 +31,7 @@ public sealed class ProjectOrgBindingTests : IAsyncLifetime
     private StatsTidWebApplicationFactory _factory = null!;
     private Guid _projectA;
     private Guid _projectB;
+    private Guid _inactiveProjectA;
 
     public async Task InitializeAsync()
     {
@@ -48,6 +52,8 @@ public sealed class ProjectOrgBindingTests : IAsyncLifetime
                 ("orgId", org), ("name", $"{org} Test Org"), ("path", $"/{org}/"));
         _projectA = await InsertProjectAsync(conn, OrgA, "S148_A", "Projekt A", 3);
         _projectB = await InsertProjectAsync(conn, OrgB, "S148_B", "Projekt B", 5);
+        _inactiveProjectA = await InsertProjectAsync(conn, OrgA, "S148_A_OFF", "Lukket A", 4);
+        await Exec(conn, "UPDATE projects SET is_active = FALSE WHERE project_id = @id", ("id", _inactiveProjectA));
     }
 
     public async Task DisposeAsync()
@@ -126,15 +132,98 @@ public sealed class ProjectOrgBindingTests : IAsyncLifetime
     {
         using var admin = LocalAdminOfA();
         var unknown = Guid.NewGuid();
+        const string putBody = """{ "projectName": "Ghost", "sortOrder": 1 }""";
+
+        using var putAbsent = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Put, $"/api/projects/{OrgA}/{unknown}", putBody));
+        var putAbsentJson = await AssertNotFoundAsync(putAbsent);
+        using var putElsewhere = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Put, $"/api/projects/{OrgA}/{_projectB}", putBody));
+        var putElsewhereJson = await AssertNotFoundAsync(putElsewhere);
+        Assert.Equal(putAbsentJson, putElsewhereJson);
+
+        using var delAbsent = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Delete, $"/api/projects/{OrgA}/{unknown}"));
+        var delAbsentJson = await AssertNotFoundAsync(delAbsent);
+        using var delElsewhere = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Delete, $"/api/projects/{OrgA}/{_projectB}"));
+        var delElsewhereJson = await AssertNotFoundAsync(delElsewhere);
+        Assert.Equal(delAbsentJson, delElsewhereJson);
+    }
+
+    /// <summary>
+    /// What it proves: the scope check still comes first for a plain LocalAdmin. An administrator of A who puts
+    /// B in the address, with B's project, is refused 403 and B's row is unchanged.
+    /// <b>Kind R</b> (guard). Red conditions: none on <c>45b86bcc</c>, where it is green too (the scope check was
+    /// already first and unchanged); it goes red if the binding replaced or reordered the scope check.
+    /// </summary>
+    [Fact]
+    public async Task LocalAdminOfA_AddressingB_403_AndNothingChanges()
+    {
+        using var admin = LocalAdminOfA();
 
         using var put = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Put, $"/api/projects/{OrgA}/{unknown}",
-            """{ "projectName": "Ghost", "sortOrder": 1 }"""));
-        await AssertNotFoundAsync(put);
+            HttpMethod.Put, $"/api/projects/{OrgB}/{_projectB}",
+            """{ "projectName": "Hijacked", "sortOrder": 99 }"""));
+        Assert.Equal(403, (int)put.StatusCode);
 
         using var del = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Delete, $"/api/projects/{OrgA}/{unknown}"));
-        await AssertNotFoundAsync(del);
+            HttpMethod.Delete, $"/api/projects/{OrgB}/{_projectB}"));
+        Assert.Equal(403, (int)del.StatusCode);
+
+        await AssertProjectBUnchangedAsync();
+    }
+
+    /// <summary>
+    /// What it proves: the binding holds for an administrator with scopes over both A and B. With A in the
+    /// address and B's project the answer is 404 and B is unchanged; with B in the address and B's project the
+    /// same administrator's edit works (200).
+    /// <b>Kind F</b> for the first half. Red conditions: the 404 assertion. On <c>45b86bcc</c>
+    /// <c>UpdateAsync(Guid projectId, ...)</c> ran <c>UPDATE projects SET project_name = @projectName, sort_order =
+    /// @sortOrder WHERE project_id = @projectId</c>, and the scope check passed for A, so it answered 200 and B's row
+    /// changed. The second half is a guard (green on both).
+    /// </summary>
+    [Fact]
+    public async Task AdminOverAAndB_AddressBinding_404ForMismatch_200ForMatch()
+    {
+        using var admin = LocalAdminOver(OrgA, OrgB);
+
+        using var mismatch = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Put, $"/api/projects/{OrgA}/{_projectB}",
+            """{ "projectName": "Hijacked", "sortOrder": 99 }"""));
+        await AssertNotFoundAsync(mismatch);
+        await AssertProjectBUnchangedAsync();
+
+        using var match = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Put, $"/api/projects/{OrgB}/{_projectB}",
+            """{ "projectName": "Omdøbt B", "sortOrder": 6 }"""));
+        Assert.Equal(200, (int)match.StatusCode);
+        var (name, sort, active) = await ReadProjectAsync(_projectB);
+        Assert.Equal("Omdøbt B", name);
+        Assert.Equal(6, sort);
+        Assert.True(active);
+    }
+
+    /// <summary>
+    /// What it proves: editing one's own inactive project still works. The PUT answers 200, the name and sort order
+    /// are updated, and the project stays inactive.
+    /// <b>Kind R</b> (guard against over-blocking). Red conditions: none on <c>45b86bcc</c> (its UPDATE had no
+    /// <c>is_active</c> condition); it goes red if the fix adds an active-only condition.
+    /// </summary>
+    [Fact]
+    public async Task OwnInactiveProject_Put_200_UpdatesAndStaysInactive()
+    {
+        using var admin = LocalAdminOfA();
+
+        using var put = await admin.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Put, $"/api/projects/{OrgA}/{_inactiveProjectA}",
+            """{ "projectName": "Genåbnet navn", "sortOrder": 11 }"""));
+        Assert.Equal(200, (int)put.StatusCode);
+
+        var (name, sort, active) = await ReadProjectAsync(_inactiveProjectA);
+        Assert.Equal("Genåbnet navn", name);
+        Assert.Equal(11, sort);
+        Assert.False(active);
     }
 
     /// <summary>
@@ -176,11 +265,40 @@ public sealed class ProjectOrgBindingTests : IAsyncLifetime
     private HttpClient LocalAdminOfA()
         => SpecRuntimeTestSupport.CreateLocalAdminClient(_factory, "s148_ladm_a", OrgA);
 
-    private static async Task AssertNotFoundAsync(HttpResponseMessage response)
+    /// <summary>A client whose JWT carries a LocalAdmin ORG_ONLY scope over each of the given organisations
+    /// (scopes are matched exactly per organisation). Same token shape as
+    /// <c>SpecRuntimeTestSupport.CreateLocalAdminClient</c>, with several scopes.</summary>
+    private HttpClient LocalAdminOver(params string[] orgIds)
+    {
+        var client = _factory.CreateClient();
+        var tokenService = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!",
+            ExpirationMinutes = 60,
+        });
+        var token = tokenService.GenerateToken(
+            employeeId: "s148_ladm_multi", name: "s148_ladm_multi", role: StatsTidRoles.LocalAdmin,
+            agreementCode: "AC", orgId: orgIds[0],
+            scopes: orgIds.Select(o => new RoleScope(StatsTidRoles.LocalAdmin, o, "ORG_ONLY")).ToArray());
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    /// <summary>Asserts a 404 whose body is a JSON object with exactly one member, <c>error</c>, equal to
+    /// "Project not found"; returns the body's raw JSON text for whole-body comparison.</summary>
+    private static async Task<string> AssertNotFoundAsync(HttpResponseMessage response)
     {
         Assert.Equal(404, (int)response.StatusCode);
-        var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
-        Assert.Equal(NotFoundBody, body.GetProperty("error").GetString());
+        var raw = await response.Content.ReadAsStringAsync();
+        var body = JsonDocument.Parse(raw).RootElement;
+        Assert.Equal(JsonValueKind.Object, body.ValueKind);
+        var members = body.EnumerateObject().ToList();
+        Assert.Single(members);
+        Assert.Equal("error", members[0].Name);
+        Assert.Equal(NotFoundBody, members[0].Value.GetString());
+        return body.GetRawText();
     }
 
     private async Task AssertProjectBUnchangedAsync()
