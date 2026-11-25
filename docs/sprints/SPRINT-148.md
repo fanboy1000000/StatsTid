@@ -4440,3 +4440,19 @@ The owner chose (1). When no profile covers today, the profile edit creates a ne
   - the phantom scheduled change;
   - the copy for an out-of-range fraction.
 - Cycles used: 1 of 5.
+
+**QUAL-268 stack, cycle-1 adjudication** (`.claude/reviews/S148-QUAL268-stack-5a-adjudication-c1.md`, Fable 5.2, RULED-WITH-OWNER-QUESTIONS); the Orchestrator's rulings c1 adopt it in full (`S148-QUAL268-stack-5a-rulings-c1.md`).
+- **Ruling 1:** a pre-image that covered no day is "no prior coverage", so revaluation and `PROFILE_CHANGE` always fire on a reopen. It also fixes the ordinary edit on a zero-length row, and closes the builder's F1 and consult R-3. Ruling 5's category trigger is unchanged.
+- **Ruling 7:** the re-create's 409 and 400 check the organisation first (consult R-1).
+- **Ruling 3:** the form says why its submit is dead, and the plustid pre-fill is not clamped.
+- **Rulings 4–6:** a partial 404 offers nothing; "Gem ændringer" waits for a pending create; focus goes through a ref.
+- **Ruling 2:** the phantom scheduled change is registered, pinned and told.
+- **Ruling 9:** a suspected two-step gap fill with the cancelled category goes to a trace.
+
+**Owner ruling, 2026-11-25** (the adjudication's § 4 question; AskUserQuestion): **"C later, A now".**
+- **Rejected:** (B) treating equal values as "no change". It bends OQ-6 and does not fix the gap fill.
+- **Adopted:** cancelled zero-length rows stay boundaries for now. Both effects are registered and test-pinned. The root fix (C) goes on the ROADMAP: the shared timeline writer learns to step over cancelled rows, with an ADR-020 amendment, as its own task in a later sprint.
+
+**FU-1** `6301f525` (`backend-infrastructure`, rulings 1, 7 and 8; Docker facts expected to change: none, argued) and **FU-2** `82a4818d` → `dfad94ba` (`ux`, rulings 3–6 with the facts; 7 of 18 red on `8d16d3e2`) were combined.
+- **Orchestrator comment-only commit** `5fdc3bb1`: the GET's 404 comment, as ruling 8's doc.
+- **FU-3** (`test-qa`, facts 1a–1d, 2a, 7a and ruling 10) and **the ruling-9 trace** are dispatched on `5fdc3bb1`.
