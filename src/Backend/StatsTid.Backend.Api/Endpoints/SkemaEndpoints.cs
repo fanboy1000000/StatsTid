@@ -148,9 +148,9 @@ public static class SkemaEndpoints
     // S128 / TASK-12803 — the S127/TASK-12704 IsPeriodLockedForSave / PeriodLockedForSaveConflict
     // pair moved VERBATIM to the shared StatsTid.Backend.Api.ApprovalPeriodSaveLock (the
     // ApprovalVisibility precedent: one predicate, one 409 construction site) so
-    // POST /api/time-entries enforces the SAME lock without a hand-copied status list. The two
-    // call sites below (pre-transaction fast path + in-lock authoritative re-read) are unchanged
-    // in behavior — same predicate body, same 409 body, byte-identical wire.
+    // POST /api/time-entries (retired in S148) could enforce the SAME lock without a hand-copied
+    // status list. The two call sites below (pre-transaction fast path + in-lock authoritative
+    // re-read) are unchanged in behavior — same predicate body, same 409 body, byte-identical wire.
 
     // S61 / TASK-6101 — the Backend-local EarnedToDate/MonthIndex mirror was removed. The pure
     // earned-to-date math is now the single shared copy in StatsTid.SharedKernel.Calendar.AccrualMath
@@ -764,7 +764,8 @@ public static class SkemaEndpoints
                 //
                 // ── S136 / TASK-13603 — TERMINATED-INCLUSIVE validator swap (ADR-040 D3) ─────────
                 // Surface 3 of the S70 R9c allowlist extension this task makes (mandatory
-                // Security-invariant review; surfaces 1+2 are on POST /api/time-entries). The shared
+                // Security-invariant review; surfaces 1+2 were on POST /api/time-entries, retired
+                // in S148). The shared
                 // ValidateEmployeeAccessAsync resolves its target ACTIVE-ONLY, so a deactivated
                 // leaver 403'd ("Target employee not found") even for in-scope HR BEFORE the subject
                 // read below could 404 — locking HR out of the routine final-month correction (the
@@ -2546,8 +2547,8 @@ public static class SkemaEndpoints
                     // month-bounded then, by the S56 pre-tx check above). Since S145 Step 7a (B-1,
                     // R-128) all three arrays are month-bounded by the pre-tx checks above, so every
                     // date reaching this gate lies in the requested month. Refusal is date-free via
-                    // the shared EmploymentWindowGate (ONE predicate + ONE 422 construction site with
-                    // POST /api/time-entries — see that class for the do-not-add-date-fields rule).
+                    // the shared EmploymentWindowGate (ONE predicate + ONE 422 construction site; see
+                    // that class for the do-not-add-date-fields rule).
                     //
                     // Placement is the LOCK REGIME (S136 refinement, Codex-B1): the employment-date
                     // PUTs acquire this SAME EmployeeConsumptionLock as their first in-tx statement,
@@ -2556,15 +2557,14 @@ public static class SkemaEndpoints
                     // concurrent window-edit/registration pair cannot interleave into out-of-window
                     // data (the same three-ingredient PAT-015 story as the approval re-read below).
                     //
-                    // IN-TX ORDER RULE (fixed total order, shared verbatim with the time-entry POST
-                    // so two writers can never deadlock): EmployeeConsumptionLock acquisition FIRST,
+                    // IN-TX ORDER RULE (fixed total order): EmployeeConsumptionLock acquisition FIRST,
                     // then the D3 subject-state re-check above, then this window gate, then the
                     // approval-period status check. WITHIN THIS TRANSACTION the window outranks the
                     // approval status deliberately — non-employment is the strongest fact about a
                     // date (the ADR-040 D5 tie-break spirit).
                     //
                     // S136 Step-5a truth-up (Codex WARNING): that precedence holds only INSIDE the
-                    // tx. This endpoint (unlike the time-entry POST) also runs a PRE-TX month-lock
+                    // tx. This endpoint also runs a PRE-TX month-lock
                     // fast path (the advisory approval read further up), so an out-of-window date
                     // in a locked month is answered 409 THERE, before this gate ever runs — a
                     // CHOSEN divergence, not an accident: both paths refuse fail-closed, and the
@@ -2696,9 +2696,10 @@ public static class SkemaEndpoints
                             Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>();
 
                     // ── S66 / TASK-6603 FIX-FORWARD — in-lock authoritative re-checks (ADR-032 D2/D3) ──
-                    // The pre-tx guards (the D3 norm cap at :552 and the anchor profile-missing 422 at
-                    // :829) ran BEFORE the advisory lock against a possibly-stale norm. A profile PUT
-                    // (TASK-6604) that committed between those checks and THIS recompute lowered or
+                    // The pre-tx guards (the D3 per-day norm cap and the per-type batch anchor's
+                    // profile-missing 422, both further up) ran BEFORE the advisory lock against a
+                    // possibly-stale norm. A profile PUT (TASK-6604) that committed between those
+                    // checks and THIS recompute lowered or
                     // removed fullDayHours — so the authoritative values just re-derived inside the lock
                     // are the source of truth and MUST be re-validated here (the racing-save loser gets a
                     // clean 422, never a 500 or an unvalued persist). On any violation we throw

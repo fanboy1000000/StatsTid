@@ -915,9 +915,9 @@ public static class EmploymentDateEndpoints
     /// and D2's no-backfill rollout cost nothing here.</para>
     ///
     /// <para><b>Why the caller's (conn, tx).</b> Both PUTs hold the ADR-032 D4 employee
-    /// advisory lock on that tx, and the registration writers acquire the SAME key — a
-    /// self-managed connection would read OUTSIDE the lock and miss a registration committed
-    /// while this edit was blocked on it (the S136 lock regime / the TimeEndpoints race class).
+    /// advisory lock on that tx, and the registration writer, the Skema save, acquires the SAME
+    /// key — a self-managed connection would read OUTSIDE the lock and miss a registration
+    /// committed while this edit was blocked on it (the S136 lock regime / the PAT-015 race class).
     /// Never "simplify" this to a pooled read.</para>
     ///
     /// <para><b>Response contract.</b> Mirrors the R7a/R13 settlement-span 409 (the sibling

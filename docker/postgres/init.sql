@@ -2077,7 +2077,7 @@ CREATE TABLE IF NOT EXISTS time_entries_projection (
     event_id                    UUID            PRIMARY KEY,
     employee_id                 TEXT            NOT NULL,
     date                        DATE            NOT NULL,
-    hours                       NUMERIC(8,4)    NOT NULL,  -- S27 Step 7a P2 fix: 4 decimal places preserves sub-centesimal hours (e.g., 7.375h = 22.5min); RequestValidator accepts arbitrary decimal in (0,24], canonical events keep full precision, projection must too
+    hours                       NUMERIC(8,4)    NOT NULL,  -- S27 Step 7a P2 fix: 4 decimal places preserves sub-centesimal hours (e.g., 7.375h = 22.5min); the Skema save accepts any decimal above 0, canonical events keep full precision, projection must too
     start_time                  TIME,
     end_time                    TIME,
     task_id                     TEXT,

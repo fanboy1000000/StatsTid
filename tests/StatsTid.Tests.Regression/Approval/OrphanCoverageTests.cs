@@ -71,7 +71,7 @@ public sealed class OrphanCoverageTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  The four facts
+    //  The five facts
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -179,15 +179,18 @@ public sealed class OrphanCoverageTests : IAsyncLifetime
     /// shape B  Mb (departs D) ← Rb ; stand-in Vb of Mb    Mb Root,  Rb Covered, Vb Orphan
     /// shape E  Ae (active, away) ← Pe ; stand-in Ve of Ae Ae Root,  Pe Covered, Ve Orphan
     /// </code>
-    /// <para><b>The wording chosen for Root (R-19), ADR-027 D9's literal root:</b> the walk names nobody, the person
+    /// <para><b>The wording chosen for Root (R-19), ADR-027 D9's root that also has a report:</b> the walk names nobody, the person
     /// holds no open PRIMARY line of their own, and another member of the read reports to them on an open PRIMARY
     /// line. Every other uncovered person is an Orphan. (The shape where a middle manager keeps their own line to a
     /// departed top is pinned by <see cref="ManagerOfManagersLosesApprover_IsOrphan_CardEqualsRollUp"/>.)</para>
     /// <para><b>Does this fixture discriminate the readings?</b> Reading (ii), "the walk names them for someone",
-    /// would classify Ma, Mb and Ae as Orphan and Vb and Ve as Root — so shapes A, B and E discriminate (i) from
-    /// (ii). Shape D does not: every person is classified the same under all three. Reading (iii), "holds any open
-    /// PRIMARY line", differs from (i) only for a line from a person OUTSIDE the read (a switched-off report whose line
-    /// stays open); no such person is seeded, so this fixture does NOT discriminate (i) from (iii).</para>
+    /// would classify Ma, Mb and Ae as Orphan and Vb and Ve as Root — so shapes A, B and E discriminate the chosen
+    /// wording above from (ii). Shape D does not: every person is classified the same under every reading named here.
+    /// On this fixture, reading (iii), "holds any open PRIMARY line", could differ from the chosen wording only for a
+    /// line from a person OUTSIDE the read (a switched-off report whose line stays open); no such person is seeded,
+    /// so this fixture does NOT discriminate the chosen wording from (iii). On these four shapes the chosen wording
+    /// classifies everyone as the earlier reading (i), "some PRIMARY line names them", did; shape F, pinned by
+    /// <c>ManagerOfManagersLosesApprover_IsOrphan_CardEqualsRollUp</c>, is where they differ.</para>
     /// <para><b>Red conditions:</b> on the base, Ra is covered by her open line to the departed Ma, so
     /// <c>Assert.Equal("Orphan", ...)</c> for Ra fails; Rb likewise is covered on the base and only the stand-in keeps
     /// her covered now, so a predicate dropping the stand-in fails <c>Rb == Covered</c>; a reading (ii) predicate

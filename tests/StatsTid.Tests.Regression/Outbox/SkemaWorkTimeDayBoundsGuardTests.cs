@@ -17,9 +17,9 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// <para>
 /// The save handler now rejects, UP FRONT (before the transaction), any
 /// <c>workTime[]</c> day that violates a physical input invariant — so no
-/// <c>work_time_projection</c> row is written. Two checks remain (manual hours, and with them the
-/// negative-manual check, are retired): (1) overlapping intervals → 422
-/// <c>work_time_intervals_overlap</c> (pinned here); (2) total worked hours (interval hours) &gt; 24 →
+/// <c>work_time_projection</c> row is written. Two numbered checks remain, labelled (2) and (3) as in
+/// the handler (check (1), negative manual hours, retired with manual hours): (2) overlapping intervals → 422
+/// <c>work_time_intervals_overlap</c> (pinned here); (3) total worked hours (interval hours) &gt; 24 →
 /// 422 <c>work_time_exceeds_day</c>, a backstop that no test reaches today: hours parse 0-23 and overlaps
 /// are refused first, so a day tops out at 86 399 s, which rounds to 24,00. Exactly 24,0 t is allowed;
 /// touching interval boundaries (next.start == prev.end) are NOT an overlap.

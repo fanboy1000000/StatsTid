@@ -40,8 +40,8 @@ namespace StatsTid.Infrastructure;
 /// (own pooled connection — fine outside a lock); the Infrastructure
 /// <see cref="IEmploymentWindowResolverInTx"/> rides the caller's advisory-locked
 /// transaction — required by S136's strand/re-hire guards, where a self-managed read
-/// would sit outside the lock and miss a concurrently-committed write (the TimeEndpoints
-/// PAT-015 race). The full do-not-harmonize warning lives on
+/// would sit outside the lock and miss a concurrently-committed write (the PAT-015
+/// race). The full do-not-harmonize warning lives on
 /// <see cref="IEmploymentWindowResolverInTx"/>. DI registers this concrete once and
 /// exposes it under both contracts.
 /// </para>

@@ -549,7 +549,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     /// stood here ("REJECTED is asserted too — the leader decided on those very numbers, so
     /// withholding them afterwards would erase the basis of the decision") is <b>answered, not
     /// deleted</b>: a REJECTED month is not a frozen decision record, it is one the employee is
-    /// editing again — both <c>/api/time-entries</c> and Skema accept writes into a REJECTED period,
+    /// editing again — the Skema save, the one registration writer, accepts writes into a REJECTED period,
     /// and only EMPLOYEE_APPROVED / APPROVED lock the grid — so the figures a manager would read off it
     /// are in-progress work, NOT "those very numbers". The basis of the decision is preserved by what
     /// stays on the row (status / submittedAt / decisionAt / rejectionReason) and by the audit trail.

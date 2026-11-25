@@ -385,7 +385,7 @@ public sealed class ConfigDateValidationTests : DatedConfigDockerFixture
     private static readonly DateOnly Monday16Nov2026 = new(2026, 11, 16);
 
     /// <summary>
-    /// AC-C2b (1), four arms over TASK-14818's closed Monday list. Clock Thursday 12 November 2026; v1 (37 h)
+    /// AC-C2b (1), seven arms over TASK-14818's closed Monday list. Clock Thursday 12 November 2026; v1 (37 h)
     /// published dated Monday 2 November 2026. Arm 1: a DRAFT at 32 h dated Wednesday 11 November is refused,
     /// field <c>WeeklyNormHours</c>, code <c>NOT_MONDAY_ALIGNED</c>, nearest valid Monday 9 and Monday 16
     /// November, and stays a DRAFT with no PUBLISHED audit row. Arm 2: a DRAFT equal to v1 except
@@ -394,12 +394,16 @@ public sealed class ConfigDateValidationTests : DatedConfigDockerFixture
     /// Wednesday is accepted (the list is no wider than ruled). Arm 4, the override: weekly norm 37 created
     /// dated Monday 2 November; an edit to 32 and a deactivation, both dated Wednesday 11 November, are refused
     /// (field <c>WeeklyNormHours</c>), and an edit changing <c>MaxFlexBalance</c> alone (norm still 37) is accepted.
+    /// Arms 5 and 6: an override create, and an override switched back on, that set a weekly norm dated
+    /// Wednesday 11 November are refused the same way. Arm 7: a config's first version with a weekly norm,
+    /// published dated that Wednesday, is accepted (no earlier version, so no in-force value changes).
     ///
     /// <para>
     /// <b>Kind: F (CI)</b>, a Docker HTTP fact; no local RED. <b>Red conditions</b> (argued against TASK-14818's
     /// base, <c>e9d09a66</c> plus the schema): the routes ignore the date member and answer 200 for arms 1 and 2
     /// and for arm 4's edit and deactivation, so the 400 assertions fail first. Arms 3 and 4's last step pass on
-    /// the base too and pin that the closed list is no wider than ruled. The ruled <c>field</c> for the date's
+    /// the base too and pin that the closed list is no wider than ruled; arm 7 passes on the base too and guards
+    /// the first-version exemption. The ruled <c>field</c> for the date's
     /// own errors is <c>AppliesFrom</c> (TASK-14818's report § 3); a Monday error names the changed field.
     /// </para>
     /// </summary>

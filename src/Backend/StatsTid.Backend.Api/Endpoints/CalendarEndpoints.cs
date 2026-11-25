@@ -21,8 +21,8 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///
 /// <para>
 /// <b>Why a NEW endpoint class rather than a member of <see cref="TimeEndpoints"/>.</b>
-/// <c>TimeEndpoints</c> is the time-ENTRIES family (<c>/api/time-entries</c>, absences, flex) — a
-/// per-employee, DB-backed, write-bearing surface. A calendar bootstrap read has no employee, no
+/// <c>TimeEndpoints</c> is the time-ENTRIES family (the <c>/api/time-entries</c> and absences
+/// reads) — a per-employee, DB-backed surface. A calendar bootstrap read has no employee, no
 /// repository and no write; folding it in would make the entries family mean two unrelated things
 /// and would drag a startup dependency into a domain module.
 /// </para>

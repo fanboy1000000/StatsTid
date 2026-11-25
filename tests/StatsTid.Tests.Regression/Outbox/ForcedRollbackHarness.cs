@@ -60,9 +60,8 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// <see cref="Hosting.StatsTidWebApplicationFactory.WithThrowOnSecondEnqueueOutbox"/> for the
 /// dual-emit publish), expects the 5xx the escaped throw produces, then reuses the same
 /// <c>AssertNo*Async</c> helpers below to pin no leakage. Proven precedent: S127's
-/// <c>Approval.SendAtomicityTests</c>; QUAL-016 spike conversions:
-/// <c>Hosting.AgreementConfigCreateAtomicHttpTests</c> (Pattern B) and
-/// <c>Hosting.TimeEntryRegisterAtomicHttpTests</c> (Pattern C). The assertion helpers below are
+/// <c>Approval.SendAtomicityTests</c>; the QUAL-016 spike conversion
+/// <c>Hosting.AgreementConfigCreateAtomicHttpTests</c> (Pattern B). The assertion helpers below are
 /// harness-agnostic — they read a fresh connection and are reused unchanged by BOTH shapes.
 /// </para>
 /// </summary>

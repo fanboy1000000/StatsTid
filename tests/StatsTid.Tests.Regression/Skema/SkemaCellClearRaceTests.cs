@@ -165,7 +165,7 @@ public sealed class SkemaCellClearRaceTests : SkemaCellClearTestBase
     /// refuses the +1,0: 422, and the WHOLE save rolls back: no <c>AbsenceCleared</c> outbox row, no audit row, Friday's row
     /// still current, no row on Wednesday or Thursday, <c>used</c> still 25,0.
     ///
-    /// <para>Kind R (the atomicity of a save that fails after its clear ran). On base the clear is ignored and the request is two posted days against `used` 23,0: the pre-transaction check passes (23,0 + 2,0 = 25,0), the request queues, and after `used` becomes 25,0 the in-lock guard refuses (25,0 + 2,0 > 25,0) with the same body, so every assertion holds there too and it is green (with the feature: pre-check 22,0 + 2,0 = 24,0, guard 25,0 + 1,0 > 25,0 after the clear ran); the evidence it can fail is the
+    /// <para>Kind R (the atomicity of a save that fails after its clear ran). On base the clear is ignored and the request is two posted days against <c>used</c> 23,0: the pre-transaction check passes (23,0 + 2,0 = 25,0), the request queues, and after <c>used</c> becomes 25,0 the in-lock guard refuses (25,0 + 2,0 > 25,0) with the same body, so every assertion holds there too and it is green (with the feature: pre-check 22,0 + 2,0 = 24,0, guard 25,0 + 1,0 > 25,0 after the clear ran); the evidence it can fail is the
     /// mutation <b>"the clear's audit row or event is written outside the save's transaction"</b> (argued, CI-M2 candidate):
     /// the quota breach then rolls back the projection writes but not the separately committed event or audit row, so the
     /// <c>AbsenceCleared</c> and audit-count assertions (the first after the 422) trip. If the event is written on the

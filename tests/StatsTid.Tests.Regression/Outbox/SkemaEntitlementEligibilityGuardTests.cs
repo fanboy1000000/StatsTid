@@ -188,9 +188,9 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
         var year = saveDate.Year;
         var month = saveDate.Month;
 
-        // Rule-stubbed client: once the eligibility gate passes, the CHILD_SICK POST still
-        // runs quota validation through the rule engine (HTTP), so the stub is required for
-        // the successful save. The eligibility 422 itself rejects pre-rule-engine.
+        // Rule-stubbed client: kept, and harmless. A child's-sick save makes no rule-engine call: its
+        // codes map to no quota type, so the quota pre-check skips them (QUAL-236). The eligibility
+        // 422 itself rejects pre-rule-engine.
         var employee = CreateEmployeeClient(CreateRuleStubbedClient());
         var pre = await PostAbsenceAsync(employee, saveDate, "CHILD_SICK_DAY");
         Assert.Equal(HttpStatusCode.UnprocessableEntity, pre.StatusCode);

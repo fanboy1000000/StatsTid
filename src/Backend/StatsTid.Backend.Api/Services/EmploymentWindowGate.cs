@@ -6,10 +6,11 @@ namespace StatsTid.Backend.Api.Services;
 /// S136 / TASK-13603 (ADR-040 D1–D3; closes SEC-046's date dimension) — THE single spelling of
 /// "this date lies outside the subject's employment window" for the registration write paths,
 /// copying the <see cref="StatsTid.Backend.Api.ApprovalPeriodSaveLock"/> shape exactly: ONE
-/// predicate + ONE response-construction site, shared by BOTH registration writers
-/// (<c>POST /api/time-entries</c> and <c>POST /api/skema/{employeeId}/save</c>) so the refusal
-/// can never drift between them — the same anti-drift rationale that lifted the approval-period
-/// predicate out of <c>SkemaEndpoints</c> in S128 (and <c>ApprovalVisibility</c> before it).
+/// predicate + ONE response-construction site, written for BOTH registration writers
+/// (<c>POST /api/time-entries</c>, retired in S148, and <c>POST /api/skema/{employeeId}/save</c>,
+/// now its one caller) so the refusal could never drift between them — the same anti-drift
+/// rationale that lifted the approval-period predicate out of <c>SkemaEndpoints</c> in S128 (and
+/// <c>ApprovalVisibility</c> before it).
 ///
 /// <para>
 /// <b>What the gate means (ADR-040 D3, plain language):</b> the employment window governs WHAT
@@ -39,14 +40,14 @@ internal static class EmploymentWindowGate
     /// TRUE when the resolved window status refuses registration for the date. The status itself
     /// comes from the <c>IEmploymentWindowResolver</c> family (D1 inclusive end, D2 NULL =
     /// unbounded, no <c>is_active</c> filter) — this predicate adds no window semantics of its
-    /// own, it only names the refusal condition once for both writers.
+    /// own, it only names the refusal condition once.
     /// </summary>
     internal static bool IsOutsideEmploymentWindow(EmploymentWindowStatus status)
         => status == EmploymentWindowStatus.NOT_EMPLOYED;
 
     /// <summary>
-    /// THE single construction site for the outside-employment-period 422, so both registration
-    /// writers return byte-identically the same status code, body shape, and message. Callers
+    /// THE single construction site for the outside-employment-period 422, so every refusal
+    /// returns byte-identically the same status code, body shape, and message. Callers
     /// must have established <see cref="IsOutsideEmploymentWindow"/>.
     ///
     /// <para>House-style body: <c>error</c> (machine key) + <c>kind</c> (the 422-family

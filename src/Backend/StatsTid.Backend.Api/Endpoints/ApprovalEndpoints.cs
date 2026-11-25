@@ -1412,10 +1412,10 @@ public static class ApprovalEndpoints
                 //      decision."
                 //
                 // That is answered, not deleted. The answer is that a REJECTED month is not a decided
-                // month — it is one the employee is actively editing again. `/api/time-entries` and
-                // Skema both accept writes into a REJECTED period (only EMPLOYEE_APPROVED and APPROVED
-                // lock the grid), so the figures a manager reads off a rejected row are NOT "these very
-                // numbers" the decision was taken on; they are whatever the employee has typed since.
+                // month — it is one the employee is actively editing again. The Skema save, the one
+                // registration writer, accepts writes into a REJECTED period (only EMPLOYEE_APPROVED and
+                // APPROVED lock the grid), so the figures a manager reads off a rejected row are NOT "these
+                // very numbers" the decision was taken on; they are whatever the employee has typed since.
                 // Showing them presents in-progress work as if it were a submission, which is exactly
                 // what ruling R1 forbids ("a manager never sees a month the employee could not
                 // certify"). The BASIS of the decision is preserved by what stays visible on the row —
@@ -2232,12 +2232,12 @@ public static class ApprovalEndpoints
     ///
     /// <para><b>The invariant it exists to hold:</b> every transition into a manager-visible state
     /// goes through one validated command, keyed on a whole month, executed under the per-employee
-    /// advisory lock that every request-path projection writer holds. Three qualifications, each
+    /// advisory lock that every request-path projection writer holds. Two qualifications, each
     /// stated because leaving one out would overclaim: <c>ProjectionBackfillService</c> is NOT
-    /// enrolled (a deliberate carve-out, refinement §3.4); legacy <c>SUBMITTED</c> rows stay
-    /// manager-approvable WITHOUT validation (owner ruling R6 — the hole is accepted, not closed);
-    /// and <c>POST /api/time-entries</c> has no approval-status check, so the lock stops a write
-    /// racing INSIDE a send but not one landing AFTER it.</para>
+    /// enrolled (a deliberate carve-out, refinement §3.4); and legacy <c>SUBMITTED</c> rows stay
+    /// manager-approvable WITHOUT validation (owner ruling R6 — the hole is accepted, not closed).
+    /// The one registration writer, the Skema save, re-reads the period's status under this same
+    /// lock, so a save that lands AFTER a send is refused.</para>
     ///
     /// <para><b>Ordering is the contract.</b> The by-id route's checks all used to run BEFORE its
     /// transaction opened, which made them advisory. Required order, both adapters:
@@ -2340,7 +2340,7 @@ public static class ApprovalEndpoints
             // alike). Employee-role actors never reach this branch (handled above); Employee-SHAPED
             // actors (no role / all-Employee scopes) are denied outright by its no-own-data-branch
             // decision — strictly fail-closed relative to the old validator. Same swap, same
-            // reasoning, as TimeEndpoints.cs / SkemaEndpoints.cs (S136 / TASK-13603).
+            // reasoning, as SkemaEndpoints.cs (S136 / TASK-13603).
             var sendFloor = string.Equals(employeeId, actor.ActorId, StringComparison.Ordinal)
                 ? null
                 : StatsTidRoles.LocalHR;
@@ -2528,7 +2528,7 @@ public static class ApprovalEndpoints
         //    NULL = unbounded on that side (D2), end date INCLUSIVE — the last day employed (D1),
         //    date == start and date == end are both EMPLOYED. If this section ever stops having the
         //    subject row in hand, switch to IEmploymentWindowResolverInTx on (conn, tx) — never a
-        //    self-managed read, which would sit outside the lock (the TimeEndpoints PAT-015 race).
+        //    self-managed read, which would sit outside the lock (the PAT-015 race).
         //
         //    ⚠ SPELLS-INCREMENT REVISIT (S136 Step-7a Reviewer W1): this inlined predicate BAKES IN
         //    the single-spell interval assumption that the Skema gate's per-date resolver usage

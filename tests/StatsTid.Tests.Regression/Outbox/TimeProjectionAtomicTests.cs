@@ -27,10 +27,10 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// </code>
 /// We substitute the throwing outbox so the tx must roll back, then assert ZERO rows in
 /// the projection table + <c>outbox_events</c> + <c>events</c> for the employee's stream.
-/// The time-entry path is reached via the Skema save seam (POST /api/skema/{id}/save) and
-/// the legacy time-entry POST; the absence path is reached via the Skema save seam. This
-/// test does not exercise any HTTP route — it pins the repository contract those write
-/// seams depend on.
+/// The time-entry and absence paths are both reached via the Skema save seam
+/// (POST /api/skema/{id}/save), the one registration writer. This
+/// test does not exercise any HTTP route — it pins the repository contract that write
+/// seam depends on.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -87,8 +87,8 @@ public sealed class TimeProjectionAtomicTests : IAsyncLifetime
                 // InsertAsync line. This still pins the contract: if the outbox enqueue
                 // fails, nothing in the tx commits. (A throw AFTER the projection INSERT
                 // would also roll back; we cover the throw-first variant here because the
-                // production write seams order enqueue FIRST (TimeEndpoints time-entry POST
-                // + the Skema save handler), so the projection INSERT is the second step.)
+                // production write seam orders enqueue FIRST (the Skema save handler), so the
+                // projection INSERT is the second step.)
                 var outboxId = await _throwingOutbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event);
                 await _timeRepo.InsertAsync(conn, tx, @event, outboxId);
                 await tx.CommitAsync();

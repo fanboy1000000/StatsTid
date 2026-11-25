@@ -7,7 +7,8 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// S127 / TASK-12701a — fills a generated activity month with self-recorded WORK TIME and matching
 /// PROJECT ALLOCATIONS, so the month satisfies BOTH submit-time gates.
 ///
-/// <para><b>The two gates it targets</b> (<c>ApprovalEndpoints.cs:1387-1506</c>):</para>
+/// <para><b>The two gates it targets</b> (<c>ApprovalEndpoints.ExecuteSendAsync</c>, steps (5d)
+/// coverage and (5e) allocation):</para>
 /// <list type="number">
 ///   <item><b>Coverage</b> — every expected workday (weekday minus a
 ///     <c>danish_public_holidays</c> row) must carry at least one time entry OR one absence.

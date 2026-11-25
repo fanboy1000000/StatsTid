@@ -41,7 +41,7 @@ public enum ApproverCoverageKind
 /// named person to hold a leader role in the same Organisation, and a unit leader may approve where
 /// the walk names nobody (<see cref="DesignatedApproverAuthorizer"/>); this read does not apply either.</para>
 ///
-/// <para><b>Root</b> (R-19) is ADR-027 D9's literal root: the walk names nobody, the person holds no
+/// <para><b>Root</b> (R-19) is ADR-027 D9's root that also has a report: the walk names nobody, the person holds no
 /// open PRIMARY line of their own, and another member of <paramref name="population"/> reports to them
 /// on an open PRIMARY line. Every other uncovered person is an orphan. Requiring no line of one's own is
 /// what keeps a middle manager on the list when the manager above them leaves with nobody usable above:
