@@ -142,11 +142,11 @@ public static class EmployeeProfileSeeder
                 // resolver's `effective_from <= asOfDate` predicate. Stamping today on
                 // backfill would leave pre-deployment periods uncovered → resolver returns
                 // null → PCS/Compliance fail-closed with 500 on any historical calc.
-                // Same-day PUT against a seeder-backfilled row routes to Case C
-                // (effective_from='0001-01-01' < today), but the Step 7a P1 fix in
-                // EmployeeProfileRepository.InsertLiveRowAsync now stamps
-                // supersedingVersion = predecessor.Version + 1, so the ETag monotonicity
-                // contract holds across the supersession.
+                // Same-day PUT against a seeder-backfilled row routes to Case C'
+                // (effective_from='0001-01-01' < today), and the Step 7a P1 rule, now in
+                // EmployeeProfileRepository.ExecuteSplitAsync, stamps the successor
+                // predecessor.Version + 1, so the row version keeps climbing across the
+                // supersession (the client's ETag has been users.version since S141).
                 //
                 // S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — THIS USED TO BE AN INLINE
                 // INSERT. There were three ways to write an employee_profiles row and the one the

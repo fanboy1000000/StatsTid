@@ -17,7 +17,9 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <b>Where it is thrown.</b> By the calculation service's admission step, after the planner and the
 /// week check and before any rule is evaluated (refusal order N1); and by the export's transaction when
 /// its row-locked recheck of M−1 finds the approval withdrawn by a concurrent reopen (TASK-14512 Do 7).
-/// Either way nothing has been written. The host maps it to a 409
+/// At admission nothing has been written. At the export's recheck the export transaction rolls back
+/// (no export record, no event, no audit row), but the month's calculation manifest, written a
+/// moment earlier, stays. The host maps it to a 409
 /// <c>{ success:false, error, kind:"payroll-prior-month-not-approved", periodStart, periodEnd }</c>
 /// whose period is M−1's: a pay period, never an employment date. <see cref="Exception.Message"/> is for
 /// diagnosis and never reaches a response.

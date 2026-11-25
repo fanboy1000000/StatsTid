@@ -559,9 +559,11 @@ public sealed class EmployeeProfileRepository
     /// <para>
     /// Every business date this class produces or compares against goes through here, which is why
     /// it is one method and not five inlined expressions. Five call sites depend on it and they span
-    /// both mechanisms the sprint distinguishes: the as-of-today READS at <c>:164</c>, <c>:194</c>
-    /// and <c>:255</c> (which row is in force right now), the dated writer's routing/cache anchor at
-    /// <c>:709</c>, and the soft-delete's close-date FALLBACK at <c>:1155</c>, which becomes a row's
+    /// both mechanisms the sprint distinguishes: the as-of-today READS in both
+    /// <c>GetByEmployeeIdAsync</c> overloads and in <c>GetByEmployeeIdWithScheduledAsync</c> (which row
+    /// is in force right now), the dated writer's covering-today check and category-cache anchor in
+    /// <c>SupersedeAndCreateAsync</c>, and the soft-delete's close-date FALLBACK in
+    /// <c>SoftDeleteTimelineAsync</c>, which becomes a row's
     /// <c>effective_to</c> and the emitted event's <c>EffectiveTo</c> — a STORED date, not a view.
     /// On the UTC calendar, all five were a day early for the one-to-two hours between Danish
     /// midnight and UTC midnight (Denmark is UTC+1 CET / UTC+2 CEST), which for the writer means a
@@ -588,7 +590,7 @@ public sealed class EmployeeProfileRepository
     /// since S143 / TASK-14308 the single write path for the two CREATE-A-PERSON routes: the boot
     /// backfill seeder and the admin create-person endpoint. It is deliberately NOT the only INSERT
     /// into <c>employee_profiles</c> in the product — <see cref="SupersedeAndCreateAsync"/> Case A
-    /// (and Case T) also produces a net-new live row, via <c>InsertLiveRowAsync</c>, for a
+    /// (and Case T) also produces a net-new live row, via <c>ExecuteOpenInsertAsync</c>, for a
     /// profile-less employee. That is a separate, intended route: it is the DATED WRITER, which locks
     /// the whole timeline and routes through <see cref="Temporal.TemporalWriteRouter"/> because it has
     /// to reason about rows that may already exist; this method is the unconditional first-row insert

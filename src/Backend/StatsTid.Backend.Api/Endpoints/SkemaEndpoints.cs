@@ -340,6 +340,7 @@ public static class SkemaEndpoints
             // row-preferences PUT validation + the `catalogs` field below); the served shape
             // and order are byte-identical to the pre-S72 inline block. Anchor = MONTH-END
             // (the established S59 display anchor).
+            // shortcut(QUAL-BF-011): the særlige-feriedage row is decided once, at month end, so a config ending mid-month offers no row that month, even on the days it still covers; upgrade when the catalogue is decided per day
             var absenceCatalog = await ComputeAbsenceCatalogAsync(
                 employeeId, agreementCode, user, monthEnd,
                 visibilityRepo, eligibilityRepo, entitlementConfigRepo, ct);

@@ -149,7 +149,8 @@ export function PositionOverrideManagement() {
 
   // `key` is the create form's key scope or the override id (the floor's slot); `bound` is the date's
   // lower limit. An answer for an interaction that was cancelled or replaced since, or for a date the
-  // user has changed since, is ignored; a failed write does not refresh the list, so nothing is lost.
+  // user has changed since, is ignored. A failed write leaves the forms as typed; it re-reads the list
+  // only after a refusal that names the predecessor's date (below), so the dates shown catch up.
   const handleMutationError = (err: unknown, mine: Submission, key: string, bound: string | null) => {
     if (!stillCurrent(mine)) return
     if (isPositionOverrideMutationError(err) && err.status === 412) {

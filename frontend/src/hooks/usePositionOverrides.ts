@@ -77,8 +77,10 @@ export function usePositionOverrides() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // `loading` is the first read only (no rows to show yet). A later read, from `refetch` or after a
-  // write, is quiet: the rows already shown stay on screen, and a failed one leaves them and sets `error`.
+  // `loading` is raised on every read until one succeeds (until then there is no list to show). Every
+  // read after a success, from `refetch` or after a write, is quiet: the rows already shown stay on
+  // screen, and a failed one leaves them and sets `error`. `hasRows` means "a read has succeeded",
+  // even one that returned no rows.
   const hasRows = useRef(false)
 
   const fetchAll = useCallback(async () => {

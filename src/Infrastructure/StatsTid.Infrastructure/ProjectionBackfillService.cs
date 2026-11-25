@@ -14,8 +14,9 @@ namespace StatsTid.Infrastructure;
 // Single source of truth for projection backfill.
 // =============================================================================
 //
-// Rebuilds `time_entries_projection` + `absences_projection` from the canonical
-// `events` log so deployments don't strand pre-S27 events outside the new sync
+// Rebuilds `time_entries_projection`, `absences_projection` and `work_time_projection`
+// from the canonical `events` log (the replayed event types are listed on the class
+// summary below) so deployments don't strand pre-S27 events outside the new sync
 // projection tables. Re-runnable against an empty projection or a complete one —
 // `ON CONFLICT (event_id) DO NOTHING` makes the backfill idempotent (see the S145
 // block below for the one partial state it cannot repair).
