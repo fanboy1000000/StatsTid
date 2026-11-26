@@ -58,7 +58,7 @@ Not commitments or dates — direction.
    the sprint's acceptance pin is identical demo pay lines; the one arithmetic change, QUAL-236's new credited
    call-home day, has no demo row); stage 1, where every HK and PROSA payslip moves, gets its own sprint (S149), then
    stage 2 and stage 3.
-   **S148 built stage 0 and the config stage, and no demo payslip moved** (PIN-1; closed ‹close date›, detail in
+   **S148 built stage 0 and the config stage, and no pinned demo pay line moved** (PIN-1, six employee-months in two pinned worlds; closed 2026-11-26, detail in
    `docs/sprints/SPRINT-148.md`). In plain words: on-call, call-ins and travel can no longer be registered, and payroll
    refuses a stored one rather than paying it as ordinary work (QUAL-202; QUAL-232's interim); the child's sick days
    follow the agreements (QUAL-236); a day's paid absence is worth at most its planned hours minus the hours worked
@@ -69,7 +69,7 @@ Not commitments or dates — direction.
    Q-1; QUAL-206), and the editors gained an institution's customary days, the local profile's eighteen new
    settings and two HR facts per person, recorded now and read by pay from S149 or stage 2.
    **Next: S149, stage 1** — the monthly norm and flex by default. Every HK and PROSA payslip moves, so S149 re-pins
-   PIN-1 at the recorded seeds (47 and 45). **Passed on to S149's refinement** (the S148 refinement's "Items ADR-043
+   PIN-1 at the recorded seeds (47 and 45). **S149's first task (owner ruling 2026-11-26): QUAL-284**, a backdated norm change leaving stored paid absence above the day's new worth: ADR-043 D2's engine-side credit, min(stored, planned − worked), with a quota's consumption clipped to match. **The re-pin should widen PIN-1** (S148 Step 7a, Fable W2): a flex payout, a sick day and a second month with a carried balance, none of which the S148 goldens hold. **Passed on to S149's refinement** (the S148 refinement's "Items ADR-043
    assigned to this refinement, passed on", ruling R-11; ADR-043's S148 notes): QUAL-225's HR-entered opening flex
    balance; how AC's annual-norm variants settle flex; whether HRP-024 ("approve the previous month first") retires
    or is re-stated; the customary-day and HR-facts writers joining the pay-inputs lock and the correction worklist
