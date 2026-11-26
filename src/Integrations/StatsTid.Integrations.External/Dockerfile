@@ -11,7 +11,7 @@ COPY src/Infrastructure/ src/Infrastructure/
 COPY src/Integrations/StatsTid.Integrations.External/ src/Integrations/StatsTid.Integrations.External/
 RUN dotnet publish src/Integrations/StatsTid.Integrations.External/StatsTid.Integrations.External.csproj -c Release -o /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .
