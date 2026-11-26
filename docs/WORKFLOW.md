@@ -444,7 +444,7 @@ this is a checklist with a record, like the Orchestrator seat:
   comparison after any pin is mandatory. A stale client is a cause a pin does not fix.
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
   compare against): Fable **`claude-fable-5-2`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5-5`** ·
-  Haiku **`claude-haiku-4-5-20251001`**. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);
+  Haiku **`claude-haiku-5-5`** *(corrected at S148's C-5: the S148 `sweep` agents ran on it, read from the subagent transcripts)*. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);
   the suffix is ignored when comparing. *(Sonnet corrected from `claude-sonnet-5` at the S144 close: from client
   2.1.284 on, all ten S144 Sonnet-tier spawns resolved to `claude-sonnet-5-5`, read from the subagent transcripts.)*
 - **Last verified 2026-11-10 (client 2.1.322), with the floor bump to Fable 5.2:** after the client update

@@ -784,7 +784,10 @@ EM B1). Every row here waits on those specifications, except the machine login E
   spawn is visible and retried; (b) both — the close guard runs on every shell command, so on this
   memory-constrained machine a slow start would stop all shell work; (c) neither — rely on the register's
   "log ALLOW N / transcripts M" reconciliation and the close commit's hook record to notice misses. Read
-  S148's reconciliation first: it shows whether 60 s alone closes the gap.
+  S148's reconciliation first: it shows whether 60 s alone closes the gap. **Decided 2026-11-26 (S148 C-5): (a), the
+  routing guard only** (`"onFailure": "block"` on the Agent hook); S148 showed 441 of 441 launches checked and 1 of
+  about 22,300 shell commands missed. The close guard stays fail-open. See FAIL-009 § Residual. *This entry can leave
+  the backlog at the next tidy.*
   **Owner ruling 2026-11-06: (c) for now — decide at S148's close**, with S148's register row (log vs
   transcripts, and any `hook_cancelled` / `hook_non_blocking_error` in the session transcript) as the evidence;
   if misses remain, choose (a) or (b) then.

@@ -11,6 +11,7 @@
             "command": "powershell.exe",
             "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PROJECT_DIR}/.claude/hooks/model-routing-guard.ps1"],
             "timeout": 60,
+            "onFailure": "block",
             "statusMessage": "Checking model routing (planning/review on the newest Fable; implementation on Opus and cheaper)"
           }
         ]

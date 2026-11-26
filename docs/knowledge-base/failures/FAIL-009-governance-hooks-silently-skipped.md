@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | FAIL-009 |
 | **Category** | failure |
-| **Status** | resolved (paths and timeout fixed 2026-11-05; fail-open remains by design, the fail-closed choice queued for the owner — see Residual) |
+| **Status** | resolved (paths and timeout fixed 2026-11-05; owner ruling 2026-11-26: the routing guard fails closed, the close guard stays fail-open — see Residual) |
 | **Sprint** | S147 (found after C-5) |
 | **Date** | 2026-11-05 |
 | **Domains** | CI/Tooling (the enforcement layer: `.claude/settings.json`, `.claude/hooks/*.ps1`) |
@@ -103,6 +103,12 @@ not taken here; it is queued in `ROADMAP.md`'s backlog (owner ruling 2026-11-06:
 decide at S148's close, on S148's reconciliation). Until then the register's reconciliation and close-line
 check are the detective control, and S148's "log ALLOW N / transcripts M" is the first test of whether 60 s is
 enough: the 60 s limit is a judgment, not a measurement (a cancelled hook leaves no completion time).
+
+**Decided 2026-11-26 (S148 C-5; owner ruling, "Routing guard only").**
+- **The evidence, from S148's reconciliation** (`docs/operations/model-routing-register.md`, the S148 row): the routing guard checked all 441 agent launches ("log ALLOW 440 / transcripts 439", one to one), with 0 timeouts and 0 start failures. The close guard missed 1 of about 22,300 shell commands: a read-only `git show` timed out at 61.7 s. The slowest start on record took 29.8 s, and 48 of the 58 recorded starts were above the old 10 s limit. The close commit's own check ran and passed in about 3 s.
+- **Applied:** `"onFailure": "block"` on the Agent hook in `.claude/settings.json` (the key and value confirmed in client 2.1.332's hooks schema). A routing-guard failure now refuses the launch with a visible error, to be re-issued. The guard sets `$ErrorActionPreference = 'Stop'`, so an unexpected script error (exit 1) refuses too.
+- **The close guard stays fail-open.** It runs before every shell command, so on this memory-constrained machine a slow-PowerShell stretch would stop all shell work for every running agent. The one command it protects, the close, is checked after the fact by the register's `close` line and the commit's hook record.
+- **A correction to the counts above:** the S147 close-guard figures (83 timeouts and 72 start failures) cover the session transcript only. S147's agent transcripts held 1,086 more timeouts and 349 more start failures (the S148 C-5 draft, `.claude/plans/s148/C5-routing-row-draft.md`).
 
 ## Lesson
 1. **A guard that can fail open must be observed failing.** Count what the guard *should* have seen from an
