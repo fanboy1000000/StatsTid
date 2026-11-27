@@ -28,7 +28,9 @@ namespace StatsTid.Tests.Regression.Security;
 /// by named mutations of <c>JwtValidationSetup.cs</c> (M-5 audience, M-6 claim mapping, M-7 clock skew
 /// widened to 10 minutes, M-7b clock-skew line deleted).
 /// The L-9a, L-9b, L-12 and L-13 literals are CAPTURED outcomes of the pre-refresh runtime; they detect
-/// movement and have no mutation.</para>
+/// movement and have no named mutation (M-7 also turns L-13 red, because the future-<c>nbf</c> rejection
+/// uses the same clock skew). L-5, L-5b and L-6 build their tokens by hand, so they do not depend on the
+/// signing library agreeing to mint an already-expired token.</para>
 ///
 /// <para>Non-Docker: an in-memory test server, no container. This file is frozen from the commit CI-W0 runs
 /// green on; it names no runtime version (ADR-045).</para>
@@ -158,10 +160,12 @@ public sealed class TokenPathPinTests
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     /// <summary>An HS256 token built without the signing library: the test encodes header and payload and
-    /// computes the signature with HMACSHA256. Valid for one hour.</summary>
-    private static string HandBuiltHs256Token(byte[] keyBytes, bool includeExp = true, long? notBefore = null)
+    /// computes the signature with HMACSHA256. By default <c>exp</c> is one hour ahead and there is no
+    /// <c>nbf</c>; the parameters set <c>exp</c> (Unix seconds), omit it, or add an <c>nbf</c>.</summary>
+    private static string HandBuiltHs256Token(
+        byte[] keyBytes, bool includeExp = true, long? notBefore = null, long? expiresAt = null)
     {
-        var exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
+        var exp = expiresAt ?? DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
         var header = B64Url(Encoding.UTF8.GetBytes("{\"alg\":\"HS256\",\"typ\":\"JWT\"}"));
         var json = "{\"sub\":\"emp001\",\"role\":\"LOCAL_HR\",\"iss\":\"statstid\",\"aud\":\"statstid\""
             + (includeExp ? ",\"exp\":" + exp : "")
@@ -171,6 +175,17 @@ public sealed class TokenPathPinTests
         var signingInput = Encoding.ASCII.GetBytes(header + "." + payload);
         using var hmac = new HMACSHA256(keyBytes);
         return header + "." + payload + "." + B64Url(hmac.ComputeHash(signingInput));
+    }
+
+    /// <summary>A hand-built token signed with the host key that expired <paramref name="ago"/> before now
+    /// (<c>nbf</c> one hour before that).</summary>
+    private static string ExpiredToken(TimeSpan ago)
+    {
+        var expires = DateTimeOffset.UtcNow - ago;
+        return HandBuiltHs256Token(
+            Encoding.UTF8.GetBytes(Key),
+            notBefore: expires.AddHours(-1).ToUnixTimeSeconds(),
+            expiresAt: expires.ToUnixTimeSeconds());
     }
 
     /// <summary>Kind R. L-1: a token from the legacy handler (<see cref="JwtTokenService"/>) passes and the
@@ -227,21 +242,19 @@ public sealed class TokenPathPinTests
     public async Task L5_ExpiredFiveMinutesAgo_Is401()
     {
         await using var host = await StartAsync();
-        var now = DateTime.UtcNow;
-        var response = await GetAsync(host, HandlerToken(notBefore: now.AddMinutes(-60), expires: now.AddMinutes(-5)));
+        var response = await GetAsync(host, ExpiredToken(TimeSpan.FromMinutes(5)));
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Equal(0, host.ProbeHits);
     }
 
-    /// <summary>Kind R. L-5b: expired 100 seconds ago is 401. Together with L-6 this brackets the 1-minute
-    /// skew at 20 s and 100 s, so it is red at any skew of 100 s or more, the library default included.
+    /// <summary>Kind R. L-5b: expired 100 seconds ago is 401. Together with L-6 (20 s, 200) it brackets the
+    /// 1-minute skew; it detects a skew of two minutes or more, the library's 5-minute default included.
     /// Red conditions: M-7b (the <c>ClockSkew</c> line deleted).</summary>
     [Fact]
     public async Task L5b_ExpiredHundredSecondsAgo_Is401()
     {
         await using var host = await StartAsync();
-        var now = DateTime.UtcNow;
-        var response = await GetAsync(host, HandlerToken(notBefore: now.AddMinutes(-60), expires: now.AddSeconds(-100)));
+        var response = await GetAsync(host, ExpiredToken(TimeSpan.FromSeconds(100)));
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Equal(0, host.ProbeHits);
     }
@@ -251,8 +264,7 @@ public sealed class TokenPathPinTests
     public async Task L6_ExpiredTwentySecondsAgo_Is200()
     {
         await using var host = await StartAsync();
-        var now = DateTime.UtcNow;
-        var response = await GetAsync(host, HandlerToken(notBefore: now.AddMinutes(-60), expires: now.AddSeconds(-20)));
+        var response = await GetAsync(host, ExpiredToken(TimeSpan.FromSeconds(20)));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, host.ProbeHits);
     }
@@ -336,7 +348,8 @@ public sealed class TokenPathPinTests
         Assert.Equal(L12_NoExp_ProbeHits, host.ProbeHits);
     }
 
-    /// <summary>Kind R (movement detector, no mutation). L-13: a hand-built HS256 token whose <c>nbf</c> is
+    /// <summary>Kind R (movement detector, no named mutation; M-7 also turns it red, because the
+    /// future-<c>nbf</c> rejection uses the same skew). L-13: a hand-built HS256 token whose <c>nbf</c> is
     /// 10 minutes ahead (<c>exp</c> one hour ahead). CAPTURED literals: status and whether the probe was
     /// reached.</summary>
     [Fact]
