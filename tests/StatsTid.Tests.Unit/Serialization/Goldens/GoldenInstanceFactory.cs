@@ -9,8 +9,9 @@ namespace StatsTid.Tests.Unit.Serialization.Goldens;
 ///
 /// <para>
 /// Every public settable member is set to a value taken from a fixed pool by a running counter, so the same
-/// type always gets the same instance (members are visited in ordinal name order, never in a clock- or
-/// hash-dependent order). That includes the members that otherwise default to "now" or a random id
+/// type always gets the same instance. The order is explicit and never the runtime's reflection order:
+/// members are visited in ordinal name order, and a constructor is chosen by parameter count (most first), then
+/// by the ordinal order of its parameter type names. That includes the members that otherwise default to "now" or a random id
 /// (<c>EventId</c>, <c>OccurredAt</c>). Every collection gets two elements. Across the pools: Danish letters
 /// and characters the default JSON encoder escapes, decimals with different scales (<c>7.40</c>, <c>8.0</c>,
 /// <c>-0.25</c>), a UTC and an unspecified <c>DateTime</c>, <c>DateOnly</c>, <c>TimeOnly</c> with 100-ns
@@ -58,7 +59,7 @@ internal sealed class GoldenInstanceFactory
         if (type == typeof(long)) return 1000L + i;
         if (type == typeof(short)) return (short)(2 + i);
         if (type == typeof(byte)) return (byte)(2 + i);
-        if (type == typeof(bool)) return true;
+        if (type == typeof(bool)) return i % 3 != 2;   // true, true, false: the writer writes both forms
         if (type == typeof(Guid)) return Guid.Parse($"{i + 1:x8}-aaaa-4bbb-8ccc-{i + 1:x12}");
         if (type == typeof(DateTime))
             return DateTime.SpecifyKind(new DateTime(2026, 3, 2, 8, 30, 15).AddDays(i).AddTicks(1234567),
@@ -96,7 +97,19 @@ internal sealed class GoldenInstanceFactory
         if (generic != typeof(Dictionary<,>) && generic != typeof(IDictionary<,>) && generic != typeof(IReadOnlyDictionary<,>))
             return false;
         var args = type.GetGenericArguments();
-        var dictionary = (IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(args))!;
+        if (args[0] == typeof(string) && args[1] == typeof(object))
+        {
+            // An object-typed slot has no shape to build from. The one such slot in the event map is
+            // SegmentSnapshot.Values: the production shape is one WtmNaturalKey value (OK version, agreement
+            // code, position) beside a null; the null makes the object slot's null form part of the literal.
+            result = new Dictionary<string, object?>
+            {
+                ["WtmNaturalKey"] = new Integrations.Payroll.Services.WtmNaturalKey("OK24", "HK", "Fuldmægtig"),
+                ["ZeroValue"] = null,
+            };
+            return true;
+        }
+        var dictionary =(IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(args))!;
         for (var k = 0; k < 2; k++)
         {
             var key = args[0].IsEnum
@@ -146,7 +159,10 @@ internal sealed class GoldenInstanceFactory
             instance = parameterless.Invoke(null);
         else
         {
-            var ctor = type.GetConstructors().OrderByDescending(c => c.GetParameters().Length).FirstOrDefault()
+            var ctor = type.GetConstructors()
+                .OrderByDescending(c => c.GetParameters().Length)
+                .ThenBy(c => string.Join(",", c.GetParameters().Select(p => p.ParameterType.FullName)), StringComparer.Ordinal)
+                .FirstOrDefault()
                 ?? throw new NotSupportedException($"golden factory: no public constructor on {type}");
             var args = new List<object?>();
             foreach (var parameter in ctor.GetParameters())

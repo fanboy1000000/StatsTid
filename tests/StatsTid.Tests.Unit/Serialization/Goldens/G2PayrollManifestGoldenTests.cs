@@ -71,13 +71,35 @@ public sealed class G2PayrollManifestGoldenTests
         GoldenFile.AssertMatches(File, Actual());
     }
 
+    /// <summary>
+    /// The content hash on its own: the production <c>ComputeContentHash</c> over the ordered fixed lines, and over
+    /// the empty list, equals the hash literals (<c>payroll_export_records.content_hash</c>, ADR-034 D1). Kind: R.
+    /// Red conditions: a different hash encoding (case, length) or a different hashed text. Proved by M-2
+    /// (indented JSON) and M-2b (lowercase hex).
+    /// </summary>
     [Fact]
-    public void The_hash_literals_are_64_uppercase_hex_characters()
+    public void The_content_hash_of_the_fixed_lines_and_of_the_empty_list_equal_their_literals()
+    {
+        var golden = GoldenFile.Load(File);
+        Assert.Equal(golden["3.hash"], PayrollExportManifest.ComputeContentHash(PayrollExportManifest.OrderLines(Input)));
+        Assert.Equal(golden["5.empty.hash"], PayrollExportManifest.ComputeContentHash(Array.Empty<PayrollExportLine>()));
+    }
+
+    /// <summary>
+    /// Capture sanity: reads only the data file, so it is not a pin. The hash literals are 64 uppercase hex
+    /// characters and each is the SHA-256 of its JSON literal, so a capture cannot pair a hash with the wrong text.
+    /// </summary>
+    [Fact]
+    public void Capture_sanity_each_hash_literal_is_the_uppercase_sha256_of_its_json_literal()
     {
         var golden = GoldenFile.Load(File);
         Assert.Matches("^[0-9A-F]{64}$", golden["3.hash"]);
         Assert.Matches("^[0-9A-F]{64}$", golden["5.empty.hash"]);
         Assert.Equal("[]", golden["4.empty.json"]);
+        Assert.Equal(golden["3.hash"], Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(golden["2.json"]))));
+        Assert.Equal(golden["5.empty.hash"], Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(golden["4.empty.json"]))));
     }
 
     [Fact]

@@ -53,8 +53,9 @@ public sealed class G5DerivedIdGoldenTests
         });
     }
 
+    /// <summary>Capture sanity: reads only the data file, so it is not a pin.</summary>
     [Fact]
-    public void Both_halves_of_the_crossing_carry_the_same_stint_id_literal()
+    public void Capture_sanity_both_halves_of_the_crossing_carry_the_same_stint_id_literal()
     {
         var golden = GoldenFile.Load(File);
         Assert.Equal(golden["2.stintId.pre"], golden["3.stintId.post"]);

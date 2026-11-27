@@ -92,8 +92,9 @@ public sealed class G3HoursDigestGoldenTests
         GoldenFile.AssertMatches(File, Actual());
     }
 
+    /// <summary>Capture sanity: reads only the data file, so it is not a pin.</summary>
     [Fact]
-    public void The_digest_literals_are_64_lowercase_hex_and_the_empty_ones_are_the_hash_of_empty_text()
+    public void Capture_sanity_the_digest_literals_are_64_lowercase_hex_and_the_empty_ones_are_the_hash_of_empty_text()
     {
         var golden = GoldenFile.Load(File);
         foreach (var key in new[] { "entries.digest", "absences.digest", "entries.empty.digest", "absences.empty.digest" })
