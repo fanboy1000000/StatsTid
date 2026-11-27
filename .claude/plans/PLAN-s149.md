@@ -309,12 +309,15 @@ runs in the local GATE. Plus `tests/StatsTid.Tests.Unit/Security/PasswordHashPin
 | L-1 | A token minted by `JwtTokenService` (legacy handler, `JwtTokenService.cs:46-53`) with sub, name, role, employee id, agreement code, org id and **two** scopes passes; the probe's `ActorId`, `ActorRole`, `OrgId` and both `Scopes` (every field) equal what was minted (`scopes` JSON array, `JwtTokenService.cs:43`; read at `ActorContext.cs:29-52`). |
 | L-2 | Claim types arrive unmapped: `sub` present and `ClaimTypes.NameIdentifier` absent; `role` present; `User.IsInRole(role)` true (`JwtValidationSetup.cs:27`, `:72`, `:83-84`). |
 | L-3 / L-4 | Wrong issuer → 401; wrong audience → 401 (`:75-78`). |
-| L-5 / L-6 | Expired 5 min ago → 401; expired 30 s ago → 200 (the 1-minute skew, `:81-82`). |
+| L-5 / L-6 | Expired 5 min ago → 401; expired **20 s** ago → 200 (the 1-minute skew, `:81-82`). *"final + 1": L-6 moved from 30 s to 20 s (a 40 s real-clock margin).* |
+| L-5b *(final + 1)* | Expired 100 s ago → 401. It goes red at any skew of 100 s or more, including the library's 5-minute default, which L-5 alone cannot tell from the configured 1 minute (Fable W1). |
 | L-7 | Signed with a different key → 401 (`:79-80`). |
 | L-8 | An unsigned token (`alg: none`) → 401. |
 | L-9a | The key-length minimum **at issuance**, as the pre-refresh runtime behaves today: expected, minting with a 31-byte key throws and a 32-byte key succeeds (the dev key is 49 bytes, `:18`). If today differs, the fact records what today does and the agent reports it. |
 | L-9b | The key-length minimum **at the validator** (Codex W2): two HS256 tokens built independently of the signing library — header and payload base64url-encoded by the test, the signature computed with `System.Security.Cryptography.HMACSHA256` — one signed with a 31-byte key, one with a 32-byte key, each sent through `AddStatsTidJwtAuth` configured (`Jwt:SigningKey`) with the matching key. The two outcomes (status, and whether the probe was reached) are **captured on the pre-refresh runtime before W1 and frozen as literals**, whatever they are; W1 and W3 must reproduce them, and W3's security consult re-reads them for JwtBearer 10. |
 | L-10 | A token minted by `JsonWebTokenHandler` (the Smoke helpers' path, `tests/StatsTid.Tests.Smoke/SmokeTests.cs:57`, `PayrollCalcAuditSmokeTests.cs:315`) gives the same `ActorContext` as L-1. |
+| L-12 *(final + 1)* | A hand-built HS256 token with **no `exp`**, signed with the configured key → its outcome (status, probe reached) captured on the pre-refresh runtime and frozen (`RequireExpirationTime`'s default; Codex B). |
+| L-13 *(final + 1)* | A token with `nbf` 10 min ahead → its outcome captured and frozen. |
 | L-11 | BCrypt: `Verify(<the seed password>, <the seeded hash>)` is true and a wrong password false (the `$2a$11$…` hash seeded for every demo user, `docker/postgres/init.sql:1162`); `HashPassword` then `Verify` round-trips (`AdminEndpoints.cs:914`, `AuthEndpoints.cs:69`). |
 
 ### P-3. The API contract (W2, TASK-14905)
@@ -483,6 +486,7 @@ lint, `git checkout --` the file — at 14912's tip.
 | M-5 | 14901 | `ValidateAudience = false` (`JwtValidationSetup.cs:77`) | L-4 |
 | M-6 | 14901 | `MapInboundClaims = true` (`:72`) | L-2 |
 | M-7 | 14901 | `ClockSkew = TimeSpan.FromMinutes(10)` (`:82`) | L-5 |
+| M-7b *(final + 1)* | 14901 | delete the `ClockSkew` line (`:82`), falling back to the library default | L-5b |
 | M-8 | the 14905 pair | `WrapAsNullableComplex` no longer marks the wrapper nullable (`ResponseStrictTypesFilter.cs:373`, 2.x equivalent) | the translated `ClrNullableComplexMember_EmitsAsNullableAllOfWrapper_AndIsRequired` and P-3 (i) |
 | M-8a … | the 14905 pair | one per translated fact whose shape the real document lacks (N6; named in the translation table) | that fact |
 | M-9 | 14912 (in the W4 worktree, patch method) | insert `const x = 1 as unknown` into a FULL-tier file (e.g. `src/hooks/useForest.ts`) | `npm run lint` exits non-zero |
@@ -1139,6 +1143,15 @@ Both READY-WITH-WARNINGS; every finding ruled by the Orchestrator; none disputed
 | Draft 1 | 2026-11-27 | `planner` (Opus 5.5) | First draft from refinement r2 (READY). Versions re-verified against nuget.org, npm, GitHub releases, the Node schedule and .NET release metadata. Twelve declared deviations (DV-1 … DV-12), thirteen brief contradictions (BC-1 … BC-13), six questions (NR-1 … NR-6). `compare-openapi.mjs` drafted and sanity-checked both ways. |
 | *(annotation)* | 2026-11-27 | Orchestrator | NR-1, NR-2, NR-4, NR-5 and NR-6 ruled (a) as drafted, before Step 0b; NR-6 applied to the ROADMAP working tree. |
 | Draft 2 | 2026-11-27 | `planner` (Opus 5.5) | Step 0b cycle 1 absorbed: Codex 3 W, Fable 3 W / 8 N, all ruled (table above). Owner ruling NR-3 (b): O-0 installs the 10.0.4xx SDK. New: Block W4, L-9b, G-5, FROZEN-CHECK, F-10, reserved fallout rows 14917–14919, mutation provenance, P-3 at W3 and C-2, `required`-as-set in the helper. Budget eight runs. Twenty dispatch ids. |
+| **final + 1** | 2026-11-27 | Orchestrator | TASK-14901 cycle-1 rulings (`.claude/reviews/S149-TASK-14901-5a-rulings-c1.md`):
+- **Added:** L-5b (100 s → 401), L-12 (no `exp`), L-13 (future `nbf`) and M-7b.
+- **Changed:**
+  - L-6 moves to 20 s;
+  - L-2 adds `Identity.Name` and `IsInRole("local_hr")` == false;
+  - the host sets its issuer and audience explicitly;
+  - L-9a accepts any exception;
+  - L-11 pins cost 11.
+- **Moved:** the miscased claim-name token (IdentityModel 8's `CaseSensitiveClaimsIdentity`, an accepted change per P-4 point 7) goes to TASK-14903-T as a **non-frozen** W1 fact asserting the post-upgrade behaviour. It is not frozen in W0, because a frozen pin there would stop W1. |
 | **FINAL** | 2026-11-27 | Orchestrator | Step 0b cycle 5: both lenses READY (`.claude/reviews/S149-0b-codex-c5.raw.md`, `.claude/reviews/S149-0b-reviewer-c5.md`). Header and Status row updated (Fable cycle-5 NOTE). The plan is final at draft 3.2. |
 | Draft 3.2 | 2026-11-27 | Orchestrator | Step 0b cycle 4 absorbed (§ above): FROZEN-CHECK line 3 anchored, since `git grep` has no `-x`. |
 | Draft 3.1 | 2026-11-27 | Orchestrator | Step 0b cycle 3 absorbed (§ above): M-12 dropped; the `Goldens.props` import checked by an exact-line match. |
