@@ -42,6 +42,9 @@ If anything breaks, there is only one possible cause. The database stays on Post
 
 | Task | Disposition | Merge on master | Note |
 |---|---|---|---|
+| TASK-14900 | DONE | `93da6dc7` | wave 0, the persisted-bytes goldens G-1 … G-5 |
+| TASK-14901 | DONE | `b6efa4a2` | wave 0, the login pins L-1 … L-13 (with L-5b, L-9a, L-9b) and L-11 |
+| TASK-14902 | DONE | `90abdfa7` | wave 0, CI hygiene: the Actions' newest majors, Node 24 |
 
 ## Refinement record (Step 4)
 
@@ -163,3 +166,226 @@ The edits were small and mechanical, so the **Orchestrator made draft 3.1** itse
 - **Fable N1: the API contract was compared only once, on .NET 8.** Evidence that settles it: any difference from `--openapi` on .NET 10. Disposition: **absorbed**; the comparison now also runs at W3's GATE and at C-2. **Open** until W3.
 - **Fable N3: Npgsql 9.0's breaking changes were not checked.** Evidence that settles it: each 9.0 item classified in TASK-14904's brief. Disposition: **absorbed**; **open** until TASK-14904 returns.
 - **Fable N5: the .NET 10 SDK's restore audit could add a gate.** Evidence that settles it: any NU1901/NU1902 line in the flip's restore output. Disposition: **pre-ruled** as F-10; **open** until W3.
+
+## Wave 0: the "nothing changed" pins, on the pre-refresh runtime
+
+*Plain language.* Before any dependency moves, wave 0 writes down how the system behaves today, as tests with fixed expected answers. After CI-W0 these tests are **frozen**: no task may ever edit them. If an upgrade turns one red, the upgrade is wrong. The test is never "updated to match".
+- **TASK-14900** pins the bytes the system *stores* and later hashes or replays: every event's JSON, the payroll export's manifest and its content hash (how payroll recognises a repeated export), the proof digests, the frozen plan inputs, and two derived ids.
+- **TASK-14901** pins how a login token is *validated*: which tokens are accepted or refused, and what the application sees from an accepted one.
+
+Each was reviewed until it could be frozen safely. That is why the review cycles below are longer than usual: a frozen file gets no second chance.
+
+### TASK-14900: the persisted-bytes goldens (test-qa)
+
+**Merge row**
+
+| Item | Value |
+|---|---|
+| Branch | `worktree-agent-aabf294ee7d7412ff` (pruned) |
+| Build | 0 errors / 126 warnings |
+| 5α | PASS (c1 `5deef874`, c2 `0dfd1432`) |
+| Security consult | — |
+| 5a reviewer | APPROVED (c2) |
+| 5a Codex | APPROVED (c2) |
+| Mutation sha | `0dfd1432` |
+| Merged | `93da6dc7` |
+
+**What it built.** 14 facts and 5 data files under `tests/StatsTid.Tests.Unit/Serialization/Goldens/`, `Goldens.props`, and one `Import` line.
+- **G-1:** event JSON for all **113** registered event types, with **two lines per type**: one fully populated, one with alternate optional members null (226 lines). It is checked by serialize, by replay-read, and by coverage.
+- **G-2:** the payroll manifest's order, its JSON, and its **content hash**, which has its own fact.
+- **G-3:** the proof digests.
+- **G-4:** `PlanInputs`.
+- **G-5:** a config id and a stint id.
+
+Every literal is unedited capture output. Both lenses independently recomputed the G-2 hashes and the G-3 digests with `sha256sum`, and they match.
+
+**Mutations.** On the reviewed tip `0dfd1432`, each of these turned its golden red: M-1, M-2, M-2b (added by ruling), M-3, M-4, M-10 and M-11.
+
+**Measured**
+- G-1: 113 keys, 226 lines.
+- Data files: G1 119,160 bytes, G2 1,322, G3 903, G4 6,866, G5 168.
+- Unit: 1848 → 1862 on the branch.
+- Four facts read only the data file. They are labelled "capture sanity" and are not counted as pins.
+
+**M1 (cycles per chain) and M2 (cycle-1 findings: blockers / warnings / notes)**
+
+| Chain | Cycles | Cycle-1 findings |
+|---|---|---|
+| Codex | 2 | 0 / 2 / 0 |
+| Fable 5.2 | 2 | 1 / 1 / 4 |
+| 5α | 2 | PASS |
+
+- **Codex's two warnings:** the populated `PlanInputs` on the event path; M-2 never reached the hash.
+- **Fable's blocker:** half the optional members were never written, and the docstring was false.
+- **Fable's warning:** the segment snapshot was pinned as `{}`.
+- **Fable's notes:** file-only facts; reflection order; no JSON `false`; a pre-existing culture-sensitive sort key.
+
+The rulings are in `.claude/reviews/S149-TASK-14900-5a-rulings-c1.md` (R-1 … R-8). One fix-up absorbed all of them.
+
+**M4: the `(unproven)` NOTEs**
+- **Fable c1 N2: the `#nulls` lines depend on `NullabilityInfoContext`.**
+  - Constructor and member order were made explicit (R-5). The populated lines do not depend on it.
+  - Evidence that would prove it: a W1 or W3 red where a serialize fact fails while its replay fact stays green. That would mean the factory drifted, not the stored bytes.
+  - Disposition: **open**, until W3.
+- **Fable c2: a frozen file could fail to *compile* when the compiler or xunit moves.**
+  - Evidence that would prove it: a compile error or new analyzer warning under `Serialization/Goldens/` in the first W1 or W2 build.
+  - Disposition: **open**. If it happens, it is a tooling event for an owner ruling, not "the upgrade is wrong".
+
+**M5 and M6.** No "Not built" item was overruled. Two review findings of missing machinery trace to the never-extras column: every map key with a *populated* instance, and the hash reached by its own fact. No shortcuts.
+
+**Found, not fixed (R-7).** `PayrollExportManifest.SortKey` (`:33`) formats `Hours` and `Amount` with the host culture.
+- **Orchestrator assessment: Low**, below the QUAL register's floor.
+- The JSON bytes, and so the hash, are culture-invariant. Only the ordering key varies.
+- Ordinal comparison sorts both `,` and `.` below the digits and below `|`. So the order is the same in practice: the golden's `3,1,0,2` holds under `da-DK` and under invariant culture.
+
+### TASK-14901: the login pins (test-qa)
+
+**Merge row**
+
+| Item | Value |
+|---|---|
+| Branch | `worktree-agent-af39b926de57ee5cd` (pruned) |
+| Build | 0 / 126 |
+| 5α | PASS (c1 `d51c2d0b`, c2 `f4c8cfae`) |
+| Security consult | GAPS → CLEAN-WITH-RESIDUALS (c2) |
+| 5a reviewer | APPROVED (c3) |
+| 5a Codex | APPROVED (c3) |
+| Mutation sha | `f4c8cfae` |
+| Merged | `b6efa4a2` |
+
+**What it built.** `TokenPathPinTests.cs` (Regression, non-Docker) runs an in-memory host with the real `AddStatsTidJwtAuth`, and a probe that returns `GetActorContext()`.
+
+| Fact | What it pins |
+|---|---|
+| L-1 | the legacy issuer |
+| L-10 | `JsonWebTokenHandler` |
+| L-2 | unmapped claim types; `Identity.Name` = `sub`; `IsInRole("local_hr")` = false |
+| L-3 | wrong issuer |
+| L-4 | wrong audience |
+| L-7 | wrong key |
+| L-8 | `alg none` |
+| L-5 | expired 5 min ago → 401 |
+| L-5b | expired 100 s ago → 401; detects a skew of two minutes or more |
+| L-6 | expired 20 s ago → 200 |
+| L-9a | the key-length minimum at issuance |
+| L-9b | the key-length minimum at the validator, with hand-built tokens |
+| L-12 | no `exp` → 401 |
+| L-13 | `nbf` 10 min ahead → 401 |
+
+`PasswordHashPinTests.cs` (Unit) is L-11, BCrypt: the seeded hash verifies, and new hashes use cost 11.
+
+**Outcomes captured on the pre-refresh runtime, now frozen**
+- **L-9a:** a 31-byte key throws; a 32-byte key mints.
+- **L-9b:** a 31-byte key → 401, probe not reached; a 32-byte key → 200, probe reached.
+- **L-12:** 401, probe not reached.
+- **L-13:** 401, probe not reached.
+
+**Mutations on `f4c8cfae`**
+- M-5 → L-4 red. It was applied as `ValidateAudience = settings.Issuer == null`, because analyzer CA5404 blocks the literal `false` at compile time; Codex confirmed the expression is equivalent.
+- M-6 → L-2 red, and L-1 and L-10 with it.
+- M-7 → L-5, L-5b and L-13 red.
+- M-7b (added by ruling) → only L-5b red.
+
+Regression non-Docker went from 148 to 162.
+
+**M1 and M2**
+
+| Chain | Cycles | Cycle-1 findings |
+|---|---|---|
+| Codex | 3 | 1 / 4 / 0 |
+| Fable 5.2 | 3 | 0 / 4 / 4 |
+| 5α | 2 | PASS |
+| Security consult | 2 | GAPS |
+
+- **Codex's blocker:** a future `nbf` and a missing `exp` were unpinned.
+- **Codex's four warnings:**
+  - the skew bracket was loose;
+  - `NameClaimType` was unpinned;
+  - issuer and audience came from the environment;
+  - L-6 had only a 30 s margin.
+- **Fable's four warnings:**
+  - L-5 sat on the library's 5-minute default;
+  - the consult's case-sensitivity pin would freeze an outcome W1 is known to change;
+  - the fix shapes;
+  - the L-11 kind statements.
+
+The rulings are in `.claude/reviews/S149-TASK-14901-5a-rulings-c1.md` (R-1 … R-9) and `-c2.md` (R2-1 … R2-4). Two fix-ups absorbed them.
+
+**The case-sensitivity ruling (R-5), recorded here for W1**
+- **The change.** IdentityModel 8 makes claim-*name* lookups case-sensitive (`CaseSensitiveClaimsIdentity`). The plan accepts this as a known change (P-4 point 7). It is safe because a census shows every lookup in `src` uses exact casing.
+- **What the consult proposed.** A frozen pin, "a token with `Role` and `Sub` capitalised still resolves". That pin would have gone red at W1 with no legal way forward.
+- **What is frozen instead.** Only the half that holds on both versions: claim *values* compare exactly.
+- **Where the rest goes.** The miscased-name token becomes a **mandatory, non-frozen W1 fact in TASK-14903-T**, asserting the post-upgrade behaviour (plan "final + 1"; the consult asked for it to be mandatory).
+- **Pre-upgrade behaviour,** from the consult and Fable's reading: such a token resolves today.
+
+**M4: the `(unproven)` NOTEs**
+- **Fable c1 N7, L-9a caught only `ArgumentException`.** **Closed by R-9**, which uses `ThrowsAny` with a control.
+- **Fable c2 N2, L-11's cost pin assumes BCrypt 4.2.0 keeps cost 11.** The evidence is TASK-14907 running L-11 against 4.2.0. **Open** until then. If the default moved, that is a true detection and it goes to the owner.
+- **Fable c2 N3, three facts minted already-expired tokens through the library.** **Closed by R2-3**: the tokens are hand-built now.
+
+**The consult's residuals.** These are recorded as known limits of a test host, not as defects:
+- the pin host has no real middleware stack and no policies;
+- the `Testing` environment's in-memory key means the dev-fallback and fail-fast branches are not run;
+- the production issuance path (`AuthEndpoints.cs:69`) is not run;
+- the explicit issuer and audience mean the `?? "statstid"` defaults are not pinned;
+- the L-9 literals detect movement but do not say which direction is safe, so the W1 and W3 consults judge.
+
+**M5 and M6.** No "Not built" item was overruled. Several review findings of missing machinery trace to the never-extras column: the negative cases, and both minting handlers. No shortcuts.
+
+### TASK-14902: CI hygiene (sweep, `CI workflows (cross-domain authorized)`)
+
+**Merge row**
+
+| Item | Value |
+|---|---|
+| Branch | `worktree-agent-a249d051642f33665` (pruned) |
+| 5α | PASS |
+| 5a reviewer | APPROVED (c1) |
+| 5a Codex | — (not marked) |
+| Merged | `90abdfa7` |
+
+**What changed:** 24 lines in the three workflow files.
+- `checkout` v4 → v7 (9 sites)
+- `setup-dotnet` v4 → v6 (2)
+- `setup-node` v4 → v7 (2)
+- `setup-python` v5 → v7 (2)
+- `upload-artifact` v4 → v7 (7)
+- `node-version` '20' → '24' (2)
+
+`dotnet-version: '8.0.x'` is untouched until W3. The Orchestrator confirmed every target tag upstream with `git ls-remote`.
+
+**The review.** Fable read the upstream release notes for every major crossed and found no changed default or removed input that alters what a step does here:
+- fetch depth and credentials;
+- artifact names, hidden files and overwrite;
+- no npm auto-cache, since `frontend/package.json` has no `packageManager`;
+- the `engines` ranges admit Node 24.
+
+**M1 and M2.** One cycle per chain.
+- 5α: PASS.
+- Fable: 0 B, 0 W, 4 N.
+
+**M4: the `(unproven)` NOTEs**
+- **N2: the gates check as much as before.** Disposition: **open**, settled at CI-W0. The evidence, in order:
+  1. every `@v7` and `@v6` step resolves;
+  2. `setup-node` gives Node `v24.x` and prints no auto-cache line;
+  3. `setup-dotnet` installs 8.0.x;
+  4. the suite totals match the last green master run;
+  5. the four artifacts are non-empty, and no step prints "No files were found";
+  6. gitleaks and docs check out the full history.
+- **N3: the two Claude workflows are not exercised by a master push.** Disposition: **open**, settled by the next pull request's "Claude Code Review" run. CI-W0's draft PR also fires it, but it is not evidence.
+
+**Other notes**
+- **N1:** the new `setup-dotnet` would reject today's `global.json` (`8.0.0` + `rollForward`) **if** it read the file. It does not, because `dotnet-version` is explicit, and W3 sets `10.0.100`, which is valid. No action.
+- **N4:** `ROADMAP.md`'s "CI already warns that GitHub's Node 20 action runtime is deprecated" becomes stale. It is rewritten at close. `@types/node` moves in W4.
+
+### Wave 0 GATE: master `c2c21fde`, after both merges and the plan's "final + 1"
+- Build: 0 errors, 126 warnings.
+- Unit: **1864** (1848 + 14 goldens + 2 L-11).
+- DemoSeed: **180**.
+- Regression `Category!=Docker`: **162** (148 + 14).
+- FROZEN-CHECK line 1, the older pins against `df582c20`: prints nothing.
+- The `Import` grep prints exactly one line.
+- The version grep over the W0 frozen files prints nothing.
+- `Directory.Build.props` is unchanged.
+- CA2100 was not re-measured: the diff is test-only and contains no SQL.
+- Both merged worktrees are pruned; `git worktree list` shows only the main checkout.
