@@ -14,7 +14,7 @@ using StatsTid.Auth;
 namespace StatsTid.Tests.Regression.Security;
 
 /// <summary>
-/// The whole <c>WWW-Authenticate</c> header of every kind of refused login token, exact, as written by the
+/// The whole <c>WWW-Authenticate</c> header of the refusal shapes listed below, exact, as written by the
 /// REAL middleware (<see cref="JwtValidationSetup.AddStatsTidJwtAuth"/>) with its default
 /// <c>IncludeErrorDetails</c>.
 ///
@@ -31,7 +31,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// <para>Kind: <b>R</b>, a regression pin of the post-upgrade text, captured as literals on the library the
 /// repository now uses. Non-vacuity is the named mutation M-CH: <c>IncludeErrorDetails = false</c> in
 /// <c>JwtValidationSetup.cs</c> removes every <c>error_description</c>, and every fact that asserts one goes
-/// red. Tokens are hand-built, so identical bytes reach every library version.</para>
+/// red. Tokens are hand-built: the same token shapes and encoding reach every library version; the timestamps are each run's own.</para>
 ///
 /// <para>Non-Docker: an in-memory test server.</para>
 /// </summary>
@@ -67,7 +67,7 @@ public sealed class TokenChallengeHeaderTests
         return header + "." + payload + "." + B64Url(hmac.ComputeHash(Encoding.ASCII.GetBytes(header + "." + payload)));
     }
 
-    private static async Task<(HttpStatusCode Status, string Header)> ChallengeAsync(
+    private static async Task<(HttpStatusCode Status, string Raw, string Parsed)> ChallengeAsync(
         string? token, string hostKey = Key)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
@@ -90,8 +90,9 @@ public sealed class TokenChallengeHeaderTests
             var request = new HttpRequestMessage(HttpMethod.Get, "/probe");
             if (token is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             var response = await client.SendAsync(request);
-            var header = string.Join(" | ", response.Headers.WwwAuthenticate.Select(h => h.ToString()));
-            return (response.StatusCode, header);
+            var raw = response.Headers.TryGetValues("WWW-Authenticate", out var values) ? string.Join(" | ", values) : "";
+            var parsed = string.Join(" | ", response.Headers.WwwAuthenticate.Select(h => h.ToString()));
+            return (response.StatusCode, raw, parsed);
         }
         finally
         {
@@ -107,9 +108,10 @@ public sealed class TokenChallengeHeaderTests
 
     private static async Task AssertChallenge(string? token, string expected, string hostKey = Key)
     {
-        var (status, header) = await ChallengeAsync(token, hostKey);
+        var (status, raw, parsed) = await ChallengeAsync(token, hostKey);
         Assert.Equal(HttpStatusCode.Unauthorized, status);
-        Assert.Equal(expected, header);
+        Assert.Equal(expected, raw);
+        Assert.Equal(raw, parsed);
     }
 
     [Fact]
@@ -172,5 +174,14 @@ public sealed class TokenChallengeHeaderTests
     {
         var exp = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeSeconds();
         return AssertChallenge(Token(key: WrongKey, kid: "k1", exp: exp, nbf: exp - 3600), Described($"The token expired at '{Stamp(exp)}'"));
+    }
+
+    [Fact]
+    public Task NbfAfterExp_LifetimeInvalid()
+    {
+        var exp = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds();
+        var nbf = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeSeconds();
+        return AssertChallenge(Token(exp: exp, nbf: nbf),
+            Described($"The token lifetime is invalid; NotBefore: '{Stamp(nbf)}', Expires: '{Stamp(exp)}'"));
     }
 }
