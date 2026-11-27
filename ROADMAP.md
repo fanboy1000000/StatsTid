@@ -25,7 +25,7 @@
 
 ## 1. Path to production (the arc)
 
-Loosely sequenced buckets between where we are (S148 closed, S149 next) and a system we would consider production-ready.
+Loosely sequenced buckets between where we are (S148 closed; S149, the dependency refresh, next; then S150, stage 1) and a system we would consider production-ready.
 Not commitments or dates — direction.
 
 1. **Docs & governance cleanup** — *in progress.* Tracked in
@@ -43,7 +43,7 @@ Not commitments or dates — direction.
 4. **Domain completeness** — the pre-launch agreement-correctness program: real domain-expert
    engagement (Phase B) for the ~80 still-unsourced agreement cells
    ([phase-b-handoff-package](docs/references/phase-b-handoff-package.md)).
-   **The overtime/flex model program: ADR-043 ACCEPTED 2026-10-29 (S147); S148 built stage 0 and the config stage; S149 builds stage 1.**
+   **The overtime/flex model program: ADR-043 ACCEPTED 2026-10-29 (S147); S148 built stage 0 and the config stage; S150 builds stage 1** (S149 until the owner's ruling of 2026-11-27, which gave S149 to the dependency refresh; see the Impact Assessment at the end of this section).
    Two verified research dossiers (`docs/references/overtime-flex-model-research.md`,
    `docs/references/agreement-cells-reverification-research.md`) showed the overtime model wrong in kind; in S147 the
    owner decided all nine of ADR-043's forks and three tender findings (QUAL-232..234), each on the recommended
@@ -56,7 +56,7 @@ Not commitments or dates — direction.
    and the overtime account; **stage 3** AC extra-work claims. S148's refinement started from the build input
    (`.claude/plans/s147/S148-BUILD-INPUT.md`). **Owner scope ruling 2026-11-09: S148 carries stage 0 and the config stage** (no demo payslip changes, so
    the sprint's acceptance pin is identical demo pay lines; the one arithmetic change, QUAL-236's new credited
-   call-home day, has no demo row); stage 1, where every HK and PROSA payslip moves, gets its own sprint (S149), then
+   call-home day, has no demo row); stage 1, where every HK and PROSA payslip moves, gets its own sprint (S149 at the time; S150 since the ruling of 2026-11-27), then
    stage 2 and stage 3.
    **S148 built stage 0 and the config stage, and no pinned demo pay line moved** (PIN-1, six employee-months in two pinned worlds; closed 2026-11-26, detail in
    `docs/sprints/SPRINT-148.md`). In plain words: on-call, call-ins and travel can no longer be registered, and payroll
@@ -67,9 +67,12 @@ Not commitments or dates — direction.
    agreement configuration, position override and local profile in force on each day, frozen into the month's proof
    (QUAL-233, QUAL-204). S147's six tidy inputs were built in stage 0. The employee's organisation is dated (owner
    Q-1; QUAL-206), and the editors gained an institution's customary days, the local profile's eighteen new
-   settings and two HR facts per person, recorded now and read by pay from S149 or stage 2.
-   **Next: S149, stage 1** — the monthly norm and flex by default. Every HK and PROSA payslip moves, so S149 re-pins
-   PIN-1 at the recorded seeds (47 and 45). **S149's first task (owner ruling 2026-11-26): QUAL-284**, a backdated norm change leaving stored paid absence above the day's new worth: ADR-043 D2's engine-side credit, min(stored, planned − worked), with a quota's consumption clipped to match. **The re-pin should widen PIN-1** (S148 Step 7a, Fable W2): a flex payout, a sick day and a second month with a carried balance, none of which the S148 goldens hold. **Passed on to S149's refinement** (the S148 refinement's "Items ADR-043
+   settings and two HR facts per person, recorded now and read by pay from stage 1 (S150) or stage 2.
+   **Next: S149, the dependency refresh** (owner rulings 2026-11-27: "Updates are S149" and ".NET 10"): every dependency
+   brought to current with no behaviour change, proven by pins. See § 2 "Tooling / infra / environment", *Dependency
+   inventory, security and updates*, and the Impact Assessment at the end of this section.
+   **Then S150, stage 1** — the monthly norm and flex by default. Every HK and PROSA payslip moves, so S150 re-pins
+   PIN-1 at the recorded seeds (47 and 45). **S150's first task: QUAL-284** (owner ruling 2026-11-26, "S149 first"; moved whole to S150 by the ruling of 2026-11-27), a backdated norm change leaving stored paid absence above the day's new worth: ADR-043 D2's engine-side credit, min(stored, planned − worked), with a quota's consumption clipped to match. **The re-pin should widen PIN-1** (S148 Step 7a, Fable W2): a flex payout, a sick day and a second month with a carried balance, none of which the S148 goldens hold. **Passed on to S150's refinement** (the S148 refinement's "Items ADR-043
    assigned to this refinement, passed on", ruling R-11; ADR-043's S148 notes): QUAL-225's HR-entered opening flex
    balance; how AC's annual-norm variants settle flex; whether HRP-024 ("approve the previous month first") retires
    or is re-stated; the customary-day and HR-facts writers joining the pay-inputs lock and the correction worklist
@@ -84,7 +87,7 @@ Not commitments or dates — direction.
 5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
    **The dependency part no longer waits for this pass** (owner-raised 2026-10-26): see §2 "Tooling / infra /
-   environment", *Dependency inventory, security and updates*. The .NET 8 runtime leaves support on 2026-11-10.
+   environment", *Dependency inventory, security and updates*. The .NET 8 runtime left support on 2026-11-10; **S149 does the updates, on .NET 10** (owner rulings 2026-11-27).
    **Its checklist is the conformance register** (owner-raised 2026-10-26; see §2 "Governance / docs",
    *Standards and requirements conformance*): ISO 27001, the tekniske minimumskrav, NIS2, GDPR, Rigsarkivet,
    accessibility.
@@ -110,6 +113,32 @@ Not commitments or dates — direction.
    **Still waiting on the owner:** the integration specifications (SLP, Navision Stat, the HR system, the
    user-administration system) and the master-data list. E7's feed half, E8, E9 and E10 (53 of the 128 ids) wait on
    them, wholly or partly. Detail: `.claude/plans/tender-review-roadmap-draft.md` (draft 1, adjudicated 2026-11-13).
+
+#### Impact Assessment — S149 becomes the dependency refresh (Tier-2 re-prioritisation, 2026-11-27)
+
+*Trigger:* on 2026-11-26 the owner ruled QUAL-284 first in S149, the stage-1 sprint. On 2026-11-27, with 34 Dependabot
+pull requests untriaged since May and .NET 8 out of support since 10 November, the owner asked for "all the updates now"
+and ruled that S149 is the refresh alone ("Updates are S149"), on .NET 10 (ruled the same day). More than one planned
+sprint moves, so this is a Tier-2 change (`docs/WORKFLOW.md` § Re-prioritization) and is recorded here before execution.
+
+*Affected sprints and how:*
+- **S149 → the dependency refresh.** Every NuGet and npm package, the GitHub Actions, CI's Node and the .NET base
+  images go to current under the refinement's version rule, on .NET 10, with no behaviour change. The proof: literal
+  goldens for the persisted serialized bytes, taken on .NET 8 before anything moves, plus PIN-1, PIN-2 and the committed
+  demo seed. PostgreSQL stays on 16. Refinement `.claude/refinements/REFINEMENT-s149-dependency-refresh.md` (r2);
+  plan `.claude/plans/PLAN-s149.md`.
+- **S150 → stage 1, its content unchanged.** QUAL-284 first (the 2026-11-26 ruling, moved whole), then the monthly norm
+  and flex by default, the PIN-1 re-pin and widening, and every item passed on to the stage-1 refinement.
+- **Stage 2 and stage 3** each start one sprint later. They carry no sprint numbers here, so nothing else is renumbered.
+- **The Ponytail-adoption decision** (§ 2 "Governance / docs", "decide at S150's close") keeps its date.
+- **No sprint is split or merged:** S149 is inserted whole, and stage 1 moves whole to S150.
+- **Phase-sprint ranges:** § 1 item 4's overtime/flex program runs each remaining stage one sprint later (stage 1 in S150,
+  then stage 2, then stage 3); no other item carries a sprint range.
+- **Coverage tracker:** no change. S149 adds no functional coverage, so no projection moves.
+
+*Why separate sprints:* the refresh has to show that nothing changed, while QUAL-284 changes stored absence on purpose.
+Separate baseline commits could have kept the two attributable inside one sprint, so this is a choice for clarity (one
+baseline and one question per sprint), not a hard limit.
 
 ## 2. Backlog (deferred, awaiting pickup)
 
@@ -310,10 +339,10 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 
 ### Correctness / domain
 - **For S1-9 (the customary-days reader), from S148's 14834 stack (rulings R4 and C2-R3):** customary days are recordable since S148, but **a wrong far-future date cannot be undone in the product.** A row started on a wrong future date can only be stopped the day after it starts, and a row stopped at a wrong future date (up to 9999-12-31) blocks earlier dates for that day and scope through the overlap guard; a row stopped at 9999-12-31 can never be reinstated. S1-9 decides a void (or an editor confirmation on far-future dates). The overlap key is form-exact and leaves out `kind` (ruling 8): "every 5 June" and the single date 2026-06-05 can both be in force, as can scope "all" beside "HK", so the S1-9 reader must define precedence.
-- **For S1-9 and the first HR-facts reader, from S148's 14834 and 14836 stacks (O-32; rulings 7 and 16 of the wave-6 batches B and C brief adjudication; the HR-facts stack's ruling C2-R2):** (1) a customary day may name a clock time (`FROM_TIME`) for a person with no office hours behind it; the S149 reader defines the fallback. (2) HR facts are dated today or earlier and never before the current record (QUAL-BF-009), so a known future change cannot be pre-recorded and history before the current record cannot be corrected; the first reader adds future dating, with its worklist and lock. (3) A back-dated HR-facts save supersedes everything after its date, so for a person whose agreement changed back and forth, a save dated in an earlier period can overwrite a later period's regime; the first reader needs a per-period history or a warning on a back-dated save.
+- **For S1-9 and the first HR-facts reader, from S148's 14834 and 14836 stacks (O-32; rulings 7 and 16 of the wave-6 batches B and C brief adjudication; the HR-facts stack's ruling C2-R2):** (1) a customary day may name a clock time (`FROM_TIME`) for a person with no office hours behind it; the stage-1 reader (S150) defines the fallback. (2) HR facts are dated today or earlier and never before the current record (QUAL-BF-009), so a known future change cannot be pre-recorded and history before the current record cannot be corrected; the first reader adds future dating, with its worklist and lock. (3) A back-dated HR-facts save supersedes everything after its date, so for a person whose agreement changed back and forth, a save dated in an earlier period can overwrite a later period's regime; the first reader needs a per-period history or a warning on a back-dated save.
 - **From S148's QUAL-268 stack (owner ruling 2026-11-25, "C later, A now"):** teach the shared timeline writer (`TemporalWriteRouter`) to step over cancelled zero-length rows, so a repair writes one row and an ordinary edit fills a gap in one step; it removes QUAL-269 (a phantom "planned change" after a repair) and QUAL-270 (a gap fill that stops at a cancelled row and takes its category). The router is shared with the agreement-code and organisation timelines, so it needs an ADR-020 D2 amendment and its own task. Until then both stay registered and test-pinned.
 - **From S148's QUAL-268 stack (brief adjudication ruling 9):** a per-person deep link from HR's "cannot register" list to the edit drawer (QUAL-266's row).
-- **For S149 (stage 1), from S148's wave-6 batch-A adjudication, ruling 9:** the local profile's eighteen new settings (flex periods, caps and actions, office hours, the paid-absence credit basis) are saved, validated and audited since S148 but are **not yet frozen into a month's proof**: `AgreementRuleConfig` has no member for them. They are frozen with their first reader in S149, as R-21 rules for the HR facts. A manifest written before then reads them as "not set". Also for S149: a settings-only save puts paid months on HR's correction worklist although nothing reads the settings in S148 (the 14832 stack's Fable N5; told to the owner at O-17).
+- **For S150 (stage 1; S149 before the ruling of 2026-11-27), from S148's wave-6 batch-A adjudication, ruling 9:** the local profile's eighteen new settings (flex periods, caps and actions, office hours, the paid-absence credit basis) are saved, validated and audited since S148 but are **not yet frozen into a month's proof**: `AgreementRuleConfig` has no member for them. They are frozen with their first reader in S150, as R-21 rules for the HR facts. A manifest written before then reads them as "not set". Also for S150: a settings-only save puts paid months on HR's correction worklist although nothing reads the settings in S148 (the 14832 stack's Fable N5; told to the owner at O-17).
 - **✅ BUILT IN S146 — part-time staff see their own monthly norm (QUAL-198, TASK-14602, merged `b104c4d7`, CI-verified at CI-W1).** Both screens use `weekdays × DayNorm.ForWeekday(W, fraction at month end)`. Residual inputs divergence registered as QUAL-226 (for the S147 program).
 - **Backlog — needs its own refinement: a leaver's post-end-date night-shift hours are paid by no month
   (QUAL-199).** The post-midnight half of a last shift falls on a NOT_EMPLOYED day. It predates S145.
@@ -713,9 +742,10 @@ EM B1). Every row here waits on those specifications, except the machine login E
       - **Patch updates on security-relevant paths,** e.g. `Microsoft.AspNetCore.Authentication.JwtBearer` 8.0.8 →
         8.0.27, the library that validates every login token. Patch releases on a supported line typically carry security
         fixes.
-    - **Dependabot security alerts are turned off for the repository** (GitHub answers "disabled"). **CI runs no
-      vulnerability scan**: no `dotnet list package --vulnerable`, no `npm audit`. The only supply-chain-adjacent check
-      is gitleaks, which looks for leaked secrets, not vulnerable packages.
+    - **Dependabot security alerts are turned off for the repository** (GitHub answers "disabled"). **CI scans NuGet
+      only:** `ci.yml:107-118` runs `dotnet list package --vulnerable --include-transitive` and fails on High or
+      Critical (corrected 2026-11-27, S149 plan BC; this line said "no vulnerability scan"). There is **no `npm audit`**.
+      Gitleaks looks for leaked secrets, not vulnerable packages.
     - **No inventory exists.** Each project file pins its own versions; there is no central package management (no
       `Directory.Packages.props`). That is 15 distinct NuGet packages, about 27 declared npm packages plus their
       transitive tree, and the Docker base images.
@@ -740,6 +770,11 @@ EM B1). Every row here waits on those specifications, except the machine login E
     4. **Central package management** (`Directory.Packages.props`), so each version is set once.
   - **Timing (owner, 2026-10-26):** it can wait. The system is not in production; the item only needs to be on the
     roadmap. The .NET 8 end-of-support date is recorded as a fact for whenever the item is picked up.
+  - **Picked up 2026-11-27 (owner: "Lets do all the updates now"; S149, on .NET 10).** S149 does **part 3, the updates**,
+    and sets the standing cadence through grouped Dependabot with an `ignore` rule for each recorded hold-back.
+    **Parts 1** (the inventory), **2** (the vulnerability gate, container scanning, Dependabot alerts) **and 4** (central
+    package management) **stay here.** PostgreSQL stays on 16. Refinement:
+    `.claude/refinements/REFINEMENT-s149-dependency-refresh.md` (r2, READY); plan `.claude/plans/PLAN-s149.md`.
 - **Backlog — pin the Rule Engine's "fixed, value-free 400 sentences" (S145 TASK-14511 adjudication, declined NOTE 1).** Payroll now
   logs the timeline endpoint's 400 `error` sentence, capped at 200 characters, with the employee id. That is safe only because
   every `TimelineInputException` message is a literal with no interpolation (`WeeklyTimelineCore.cs`, `RuleRegistry.cs`), and that

@@ -1,0 +1,9 @@
+<Project>
+
+  <!-- The persisted-bytes golden data files (TASK-14900, ADR-045) are copied next to the test assembly,
+       where the facts read them. This file is imported by the Unit project with one line. -->
+  <ItemGroup>
+    <None Update="Serialization\Goldens\*.golden" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
