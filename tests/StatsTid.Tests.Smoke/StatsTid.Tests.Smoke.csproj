@@ -11,7 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
-    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="7.5.1" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
     <!-- S134 TASK-13404 (QUAL-003): the composed-stack calc-audit probe seeds an APPROVED period +
          reads audit_log / segment_manifests directly against the composed Postgres (localhost:5432),
          so this HTTP-only smoke suite now also needs a Postgres client. Version pinned to match the
