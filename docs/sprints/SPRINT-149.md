@@ -45,6 +45,10 @@ If anything breaks, there is only one possible cause. The database stays on Post
 | TASK-14900 | DONE | `93da6dc7` | wave 0, the persisted-bytes goldens G-1 … G-5 |
 | TASK-14901 | DONE | `b6efa4a2` | wave 0, the login pins L-1 … L-13 (with L-5b, L-9a, L-9b) and L-11 |
 | TASK-14902 | DONE | `90abdfa7` | wave 0, CI hygiene: the Actions' newest majors, Node 24 |
+| TASK-14903 | IN REVIEW | — | wave 1, IdentityModel 8.23.0 and JwtBearer 8.0.34 (`40bf9308`); 5a cycle 1 CHANGES-REQUIRED on the written check only (the P-4 re-issue) |
+| TASK-14903-T | IN REVIEW | — | wave 1 paired pass (`673f42b6`); cycle-1 fix-up: the 401 challenge-header pins and the issued-payload shape |
+| TASK-14912 | ACCEPTED on `s149/w4` | — (with the branch) | wave 4, the frontend toolchain (`5db63311`) |
+| TASK-14913 | DISPATCHED | — | wave 4, the React 19 family, on `s149/w4` from `5db63311` |
 
 ## Refinement record (Step 4)
 
@@ -432,3 +436,81 @@ So PR #71 fired neither. **Disposition:** closed, with a residual. The new `chec
   - **Disposition:** proposed for W5's CI change (TASK-14916), after W3, because the runtime move can change what lizard sees. This needs a "final + n" ruling at W5's dispatch.
 - **The CA2100 ratchet baseline is one too high** (115, while the build shows 114). This is the step's own "ratchet down" warning, carried since S148.
   - **Disposition:** ratchet it at W5, after W3's build re-measures the count on .NET 10.
+
+## Wave 1 and wave 4, in parallel
+
+*Plain language.* Two independent tracks start from A0.
+- **Wave 1** moves the login-token library alone, while the system still runs on .NET 8, so a broken login can have only one cause.
+- **Wave 4** moves the frontend's tools and libraries. It works on its own branch, `s149/w4`, so the frontend changes stay out of master until both CI-W4 and CI-W3 are green. Each wave-4 task is reviewed and gated on that branch, and the branch merges once at the end.
+
+### TASK-14912: the frontend toolchain (ux), accepted on `s149/w4`
+
+**Merge row**
+
+| Item | Value |
+|---|---|
+| Branch | `s149/w4` (worktree `StatsTid-s149-w4`), commit `5db63311` on A0 |
+| Gate on the branch (Orchestrator, after the agent's clean `npm ci`) | tsc 0 · lint 0 · typecheck:e2e 0 · build 0 (301 modules) · vitest **122 files / 1405 tests**, nothing skipped (738 s locally) |
+| 5α | PASS (c1) |
+| 5a reviewer | APPROVED-WITH-WARNINGS (c1); dispositions in `S149-TASK-14912-5a-rulings-c1.md` |
+| 5a Codex | — (not on this task's checklist) |
+| M-9 | red at `5db63311`: `useForest.ts 89:11 error … no-restricted-syntax` (the no-`as` rule) |
+| Accepted | on `s149/w4` at `5db63311`. Master merge comes with the whole branch. |
+
+**What changed.** Only `frontend/package.json` and `package-lock.json`:
+- vite 5 → **8.4.0**;
+- @vitejs/plugin-react → **6.3.0**;
+- vitest 4 → **5.1.2**;
+- jsdom → **30.1.3**;
+- @types/node → **24.19.4**;
+- eslint 9 → **10.15.0**;
+- @typescript-eslint/parser → **8.74.0**;
+- TypeScript **held at 5.9.3**.
+
+No config file needed a change. The lockfile went from 413 to 304 entries: Vite 8 builds with rolldown and Lightning CSS instead of rollup and esbuild. Install scripts dropped from four to two (fsevents only).
+
+**Measured**
+- Vitest: 122 / 1405 before and after.
+- Wall time locally: 829 s before and 613 s after (the agent's runs), and 738 s on the Orchestrator's re-run. All of these were on a loaded machine; CI-W0 took 133 s.
+- **`npm audit` (lockfile only) went from 21 advisories (1 critical: vitest; 10 high) to 6.** The 6 that remain:
+  - the react-router family, which TASK-14914 replaces;
+  - js-yaml, through openapi-typescript 7.13.0, which is already at its latest version;
+  - brace-expansion 2.0–2.1.6.
+
+  The plan's AC-V3 records whatever is still open at C-1.
+
+**What the review established.**
+- **Lint checks exactly what it did before:**
+  - the same 34 files;
+  - identical rule configurations, compared by hash;
+  - all four rule families bite on ESLint 9 and 10 alike, so the check goes beyond M-9's single rule.
+- **Vitest's defaults changed in two ways, neither weakening a test:**
+  - `clearMocks` is now on by default (R-3; the eight `beforeAll` hooks only set a time zone);
+  - the default reporter is now `minimal` (R-4).
+
+**Rulings** (`S149-TASK-14912-5a-rulings-c1.md`)
+- **R-1, a consequence of Vite 8: the oldest browsers the built app supports moved from 2020-era to early-2023 versions.** The new floor is Chrome and Edge 111, Firefox 114 and Safari 16.4; Vite 5's was Chrome 87 and Safari 14.
+  - No product document states a browser requirement; the tenders ask only for "browser-based" access.
+  - The new floor is three years behind current browsers, and the owner asked for current tooling.
+  - So the floor is **accepted and recorded**, and `docs/FRONTEND.md` gets a "Supported browsers" line at close.
+  - Reported to the owner. Keeping the old floor is a one-line `build.target` setting.
+- **R-2: no gate runs the *built* app.** The browser tests drive the development server.
+  - CI-W4's evidence branch runs the browser journeys a second time against `vite build` + `vite preview`, as an EVIDENCE-ONLY patch, and W4 merges only with that evidence.
+  - A ROADMAP backlog row asks for this in master CI.
+  - The stale "`vite preview` has no proxy" text is fixed: `FRONTEND.md:278` at close, and `playwright.config.ts:7` in TASK-14915's brief.
+- **R-5:** Vite's warning about loading the config file natively is about a future major. It is deferred, with a ROADMAP row that prefers renaming to `.mts`.
+- **R-7:** the later wave-4 tasks re-check the seven toolchain versions after their `npm install`.
+
+**M1 and M2**
+- 5α: 1 cycle, PASS.
+- Fable 5.2: 1 cycle, with 0 blockers, 2 warnings and 6 notes.
+
+**M4: the `(unproven)` NOTEs**
+- **N-1, `clearMocks`:** the evidence that would prove a weakened test is a `not.toHaveBeenCalled()` whose offending call happens in `beforeAll` or at module scope. The reviewer found none. **Closed, recorded.**
+
+**M5 and M6.** No "Not built" item was overruled. No shortcuts.
+
+**Found, not fixed (Low, below the QUAL floor)**
+- `eslint.config.mjs:102` lists `src/hooks/useFlexBalance.ts`, which does not exist.
+- `vite.config.ts` is in no tsconfig, so a renamed `test:` option would not fail `tsc`.
+- The report's line about an esbuild postinstall warning describes the pre-change install, not the committed lockfile.
