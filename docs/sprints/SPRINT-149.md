@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **OPEN** (opened 2026-11-27). The plan is **FINAL** (draft 3.2) after Step 0b READY on both lenses at cycle 5; wave 0 is next. No code has changed yet. |
+| **Status** | **OPEN** (opened 2026-11-27). The plan is **FINAL** (draft 3.2, plus "final + 1") after Step 0b READY on both lenses at cycle 5. **Wave 0 is merged, and CI-W0 is green (run `45997941910`), so A0 = `719e7996`.** Wave 1 (TASK-14903, the login-token library) and wave 4 (TASK-14912, the frontend toolchain, on `s149/w4`) are dispatched in parallel. |
 | **Plan** | `.claude/plans/PLAN-s149.md` **FINAL (draft 3.2)**: Step 0b READY on both lenses on 2026-11-27 after five cycles (see "Plan Review (Step 0b)"). Drafts 1–3 by the `planner` (Opus 5.5), 3.1 and 3.2 by the Orchestrator. From here it changes only by ruling, each change a "final + n" row of its Revision history. **20 dispatch ids** (TASK-14900 … 14919), six of them reserved for the runtime wave's fallout (14909–14911, 14917–14919) and DROPPED if unused, plus 3 paired test passes (14903-T, 14904-T, 14905-T); eight CI runs |
 | **Theme** | Bring every dependency to current in one deliberate refresh: the NuGet and npm packages, the GitHub Actions, CI's Node, and the .NET runtime and its base images (.NET 8 → .NET 10). **Nothing may change in behaviour**: no pay figure, seeded row, API contract, persisted hash or access decision. That is proven by pins, some of them new and taken on .NET 8 before anything moves. Dependabot is then set up so this backlog does not quietly rebuild. |
 | **Owner rulings in force** | **"Lets do all the updates now"** (2026-11-26), after the Orchestrator's recommendation to split the 34 stale Dependabot pull requests into a small batch now and the .NET 10 move later. **Q1 = (a) "Updates are S149"** (2026-11-27, AskUserQuestion): S149 is the refresh alone; S150 takes over the old S149, QUAL-284 first and then stage 1. This **supersedes** the ruling of 2026-11-26, "Register High; S149 first" (recorded in ROADMAP § 1, in its Tier-2 Impact Assessment, and on the QUAL-284 register row). **Q2 = (a) ".NET 10"** (2026-11-27): .NET 11 and its framework-tied packages are recorded hold-backs. **The merged `add-claude-github-actions-1772139476170` branch was deleted** (owner-approved 2026-11-26; it was fully contained in master, 2,052 commits behind). |
@@ -89,6 +89,7 @@ The draft has 13 brief contradictions, and six questions (NR-1 … NR-6).
   - NR-6: the Tier-2 Impact Assessment gets its three missing parts.
 - **NR-3 went to the owner** (AskUserQuestion, 2026-11-27): **(b) "Install it"**, the .NET 10.0.4xx SDK on the owner's machine before W3, so local and CI build with the same SDK band.
   - The first attempt (`winget`, 2026-11-27 11:48) failed at Windows' elevation prompt (installer exit 1602, "Failed to elevate"). The owner runs it, or approves the prompt, before W3. That is plan step O-0.
+  - **O-0 done (2026-11-27):** the owner ran `winget install --id Microsoft.DotNet.SDK.10 --exact --version 10.0.404`, which reported "Successfully installed". `dotnet --list-sdks` now shows **8.0.423, 10.0.302 and 10.0.404**, installed side by side. The repo root still resolves 8.0.423 (`global.json` `8.0.0` with `latestFeature`) until W3's F-1. After that it resolves the 4xx band, the same band as CI's `10.0.x`.
 
 **Brief contradiction landed in the docs:** the ROADMAP's dependency item said "CI runs no vulnerability scan". In fact `ci.yml:107-118` runs `dotnet list package --vulnerable --include-transitive` and fails on High or Critical; it is npm that has no audit. Corrected in the ROADMAP working tree.
 
@@ -365,14 +366,14 @@ The rulings are in `.claude/reviews/S149-TASK-14901-5a-rulings-c1.md` (R-1 … R
 - Fable: 0 B, 0 W, 4 N.
 
 **M4: the `(unproven)` NOTEs**
-- **N2: the gates check as much as before.** Disposition: **open**, settled at CI-W0. The evidence, in order:
+- **N2: the gates check as much as before.** Disposition: **closed at CI-W0** (all six hold; see "CI-W0" below). The evidence, in order:
   1. every `@v7` and `@v6` step resolves;
   2. `setup-node` gives Node `v24.x` and prints no auto-cache line;
   3. `setup-dotnet` installs 8.0.x;
   4. the suite totals match the last green master run;
   5. the four artifacts are non-empty, and no step prints "No files were found";
   6. gitleaks and docs check out the full history.
-- **N3: the two Claude workflows are not exercised by a master push.** Disposition: **open**, settled by the next pull request's "Claude Code Review" run. CI-W0's draft PR also fires it, but it is not evidence.
+- **N3: the two Claude workflows are not exercised by a master push.** Disposition: **closed at CI-W0, with a residual.** The planned evidence cannot arrive: "Claude Code Review" is disabled in the repository's settings, so no pull request fires it (see "CI-W0" below).
 
 **Other notes**
 - **N1:** the new `setup-dotnet` would reject today's `global.json` (`8.0.0` + `rollForward`) **if** it read the file. It does not, because `dotnet-version` is explicit, and W3 sets `10.0.100`, which is valid. No action.
@@ -389,3 +390,45 @@ The rulings are in `.claude/reviews/S149-TASK-14901-5a-rulings-c1.md` (R-1 … R
 - `Directory.Build.props` is unchanged.
 - CA2100 was not re-measured: the diff is test-only and contains no SQL.
 - Both merged worktrees are pruned; `git worktree list` shows only the main checkout.
+
+### CI-W0: green, so A0 = `719e7996`
+
+*Plain language.* CI-W0 is the first check on GitHub's Linux machines. It runs every test, including the database tests that cannot run on this computer, with the new GitHub Actions and Node 24. It came back green. Its commit, `719e7996`, is now **A0**. The wave-0 pins are frozen from A0, and every later wave is checked against it.
+
+- **The run:** `45997941910`. It ran as draft PR #71 on `ci/s149-w0` at `719e7996`; GitHub tested the merge commit `9322b699` onto `d092595f`. **All seven jobs are green.** PR #71 is closed unmerged, `ci/s149-w0` is deleted, and `origin/master` is still `d092595f`.
+- **Suites, read from the trx files by name:**
+  - Unit 1864 of 1864;
+  - DemoSeed 180 of 180;
+  - Regression **2992 of 2992**, with the Docker facts included and every fact executed: S148's 2978 plus wave 0's 14;
+  - Smoke 10 of 10;
+  - frontend: vitest 122 files and 1405 tests; e2e 7 passed.
+- **The wave-0 pins in CI:** all 14 `TokenPathPinTests` facts (L-1 … L-13 with L-5b) passed by name. Unit has no failure, so G-1 … G-5 and L-11 passed too.
+- **Build:** 0 errors and 126 warnings. CA2100 has 114 distinct sites against the ratchet's baseline of 115. The step prints its "count fell" warning, as it did at S148's close (see "Found, not fixed").
+
+**TASK-14902's N2, settled: the gates check as much as before**
+1. **Every new Action resolves.** `checkout@v7` in all 7 jobs, `setup-dotnet@v6` ×2, `setup-node@v7` ×2, `setup-python@v7` ×2, and `upload-artifact@v7` ×4.
+2. **Node is v24.22.3** (npm 11.19.1), taken from the runner's tool cache. No cache-restore or cache-save line appears, which confirms there is no npm auto-cache.
+3. **`setup-dotnet` installs SDK 8.0.428.**
+4. **The suite totals match** S148's close run, plus wave 0's additions.
+5. **Artifacts:**
+   - `test-results` is 2.59 MB, three trx files;
+   - `coverage-cobertura` is 307 KB;
+   - `smoke-test-results` is 2.6 KB, 10 tests;
+   - `lizard-ccn-report` holds a **0-byte** report, but S148's close run `45781374620` had the same 150-byte artifact, so the Actions bump did not cause it (see "Found, not fixed");
+   - no step prints "No files were found".
+6. **Full history:** gitleaks and docs both check out with `fetch-depth: 0`.
+
+**Disposition:** closed. The Actions and Node 24 change nothing about what CI checks.
+
+**TASK-14902's N3, settled differently than planned.** No pull request can exercise the two Claude workflows today:
+- "Claude Code Review" is **disabled in the repository's settings** (`disabled_manually`); its last run was 2026-09-30.
+- "Claude Code" runs only when a comment mentions `@claude`.
+
+So PR #71 fired neither. **Disposition:** closed, with a residual. The new `checkout@v7` step in both files first runs when the owner re-enables the review workflow or mentions `@claude`. A failure there would block no other job.
+
+**Found, not fixed (both in CI, neither caused by S149)**
+- **The complexity report is empty.** `lizard src/ -l cs -C 15 --warnings_only` finishes in 0.1 s and writes nothing, here and at S148's close. So for at least one sprint the "Cyclomatic complexity report" job has been green while measuring nothing.
+  - **Cause `(unproven)`:** lizard's C# language is named `csharp`, so `-l cs` probably selects no files. The evidence that would prove it: the same command with `-l csharp` prints functions.
+  - **Disposition:** proposed for W5's CI change (TASK-14916), after W3, because the runtime move can change what lizard sees. This needs a "final + n" ruling at W5's dispatch.
+- **The CA2100 ratchet baseline is one too high** (115, while the build shows 114). This is the step's own "ratchet down" warning, carried since S148.
+  - **Disposition:** ratchet it at W5, after W3's build re-measures the count on .NET 10.
