@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **OPEN** (opened 2026-11-27). The plan is **FINAL** (draft 3.2, plus "final + 1") after Step 0b READY on both lenses at cycle 5. **Wave 0 is merged, and CI-W0 is green (run `45997941910`), so A0 = `719e7996`.** Wave 1 (TASK-14903, the login-token library) and wave 4 (TASK-14912, the frontend toolchain, on `s149/w4`) are dispatched in parallel. |
+| **Status** | **OPEN** (opened 2026-11-27). The plan is **FINAL** (draft 3.2, plus "final + 1" and "final + 2") after Step 0b READY on both lenses at cycle 5. **Wave 0 is merged and CI-W0 is green (run `45997941910`), so A0 = `719e7996`. Wave 1 is merged (`43d29385`, GATE green).** Wave 4 runs on `s149/w4`: TASK-14912 accepted, TASK-14913 in its cycle-1 fix-up. Wave 2 is next on master. |
 | **Plan** | `.claude/plans/PLAN-s149.md` **FINAL (draft 3.2)**: Step 0b READY on both lenses on 2026-11-27 after five cycles (see "Plan Review (Step 0b)"). Drafts 1–3 by the `planner` (Opus 5.5), 3.1 and 3.2 by the Orchestrator. From here it changes only by ruling, each change a "final + n" row of its Revision history. **20 dispatch ids** (TASK-14900 … 14919), six of them reserved for the runtime wave's fallout (14909–14911, 14917–14919) and DROPPED if unused, plus 3 paired test passes (14903-T, 14904-T, 14905-T); eight CI runs |
 | **Theme** | Bring every dependency to current in one deliberate refresh: the NuGet and npm packages, the GitHub Actions, CI's Node, and the .NET runtime and its base images (.NET 8 → .NET 10). **Nothing may change in behaviour**: no pay figure, seeded row, API contract, persisted hash or access decision. That is proven by pins, some of them new and taken on .NET 8 before anything moves. Dependabot is then set up so this backlog does not quietly rebuild. |
 | **Owner rulings in force** | **"Lets do all the updates now"** (2026-11-26), after the Orchestrator's recommendation to split the 34 stale Dependabot pull requests into a small batch now and the .NET 10 move later. **Q1 = (a) "Updates are S149"** (2026-11-27, AskUserQuestion): S149 is the refresh alone; S150 takes over the old S149, QUAL-284 first and then stage 1. This **supersedes** the ruling of 2026-11-26, "Register High; S149 first" (recorded in ROADMAP § 1, in its Tier-2 Impact Assessment, and on the QUAL-284 register row). **Q2 = (a) ".NET 10"** (2026-11-27): .NET 11 and its framework-tied packages are recorded hold-backs. **The merged `add-claude-github-actions-1772139476170` branch was deleted** (owner-approved 2026-11-26; it was fully contained in master, 2,052 commits behind). |
@@ -45,10 +45,26 @@ If anything breaks, there is only one possible cause. The database stays on Post
 | TASK-14900 | DONE | `93da6dc7` | wave 0, the persisted-bytes goldens G-1 … G-5 |
 | TASK-14901 | DONE | `b6efa4a2` | wave 0, the login pins L-1 … L-13 (with L-5b, L-9a, L-9b) and L-11 |
 | TASK-14902 | DONE | `90abdfa7` | wave 0, CI hygiene: the Actions' newest majors, Node 24 |
-| TASK-14903 | IN REVIEW | — | wave 1, IdentityModel 8.23.0 and JwtBearer 8.0.34 (`40bf9308`); 5a cycle 1 CHANGES-REQUIRED on the written check only (the P-4 re-issue) |
-| TASK-14903-T | IN REVIEW | — | wave 1 paired pass (`673f42b6`); cycle-1 fix-up: the 401 challenge-header pins and the issued-payload shape |
+| TASK-14903 | DONE | `43d29385` | wave 1, IdentityModel 8.23.0 and JwtBearer 8.0.34 (`40bf9308`); the written check P-4, re-issued twice |
+| TASK-14903-T | DONE | `43d29385` | wave 1 paired pass (`673f42b6`, fix-ups `66716a20`, `f1a3efbd`): Smoke JsonWebTokens, the case fact, the 401 header pins, the payload shape |
 | TASK-14912 | ACCEPTED on `s149/w4` | — (with the branch) | wave 4, the frontend toolchain (`5db63311`) |
-| TASK-14913 | DISPATCHED | — | wave 4, the React 19 family, on `s149/w4` from `5db63311` |
+| TASK-14913 | IN REVIEW on `s149/w4` | — (with the branch) | wave 4, the React 19 family (`35a8c8eb`); cycle-1 fix-up R-3 (the QUAL-241 pin on React 19) |
+
+## Handoff (the Orchestrator rewrites this block at every gate)
+
+| | |
+|---|---|
+| **As of** | 2026-11-27, master `43d29385` (+ uncommitted records) |
+| **Phase** | Wave 1 merged; its GATE is green; CI-W1 next. Wave 4 is in progress on `s149/w4`. |
+| **Tasks** | 14900, 14901, 14902 merged (wave 0). 14903 + 14903-T merged `43d29385`: 5α PASS, 5a Fable c3 APPROVED, 5a Codex c3 APPROVED, mutations M-CS `673f42b6`, M-CH and M-PS `66716a20`. 14912 accepted on `s149/w4` (`5db63311`). 14913 on `s149/w4` (`35a8c8eb`): 5α PASS, 5a Fable c1 APPROVED-WITH-WARNINGS, R-3 fix-up in progress (a STOP; a comparison run is going). 14914 has a brief, not yet dispatched. |
+| **Pins** | A0 = `719e7996`. G-1 has 113 keys / 226 lines. L-9b: 31 bytes → 401 with no probe hit; 32 bytes → 200. All W0 pins green in CI-W0 (run `45997941910`) and at the W1 GATE. |
+| **SDK** | O-0 done: `dotnet --list-sdks` shows 8.0.423, 10.0.302 and **10.0.404**. The GATE resolves 8.0.423 until W3's F-1. |
+| **Pending gates** | CI-W1 (master `43d29385` + records); then wave 2 (14904/-T, 14905/-T, 14906, 14907). |
+| **CI** | CI-W0 `45997941910` green on `719e7996`. Others not run. |
+| **Worktrees** | The main checkout. `StatsTid-s149-w4` (`s149/w4`, its own real `node_modules`). A temporary A0 worktree for the 14913 comparison, removed by its agent. |
+| **Judgment model** | Fable 5.2 available; no stand-in artefacts. |
+| **Open rulings** | (1) **W4-end owner ruling:** the lazy-route loading behaviour under React 19 + React Router 8 (performance finding F6; TASK-14913 R-1), after TASK-14914 reports. (2) TASK-14913 R-3: the QUAL-241 pin on React 19, pending the comparison. (3) A "final + n" ruling at W5 for the CI findings: the empty lizard report, and the CA2100 baseline 115 vs 114. |
+| **Next action** | Commit the records, then push CI-W1. |
 
 ## Refinement record (Step 4)
 
@@ -442,6 +458,100 @@ So PR #71 fired neither. **Disposition:** closed, with a residual. The new `chec
 *Plain language.* Two independent tracks start from A0.
 - **Wave 1** moves the login-token library alone, while the system still runs on .NET 8, so a broken login can have only one cause.
 - **Wave 4** moves the frontend's tools and libraries. It works on its own branch, `s149/w4`, so the frontend changes stay out of master until both CI-W4 and CI-W3 are green. Each wave-4 task is reviewed and gated on that branch, and the branch merges once at the end.
+
+### TASK-14903 + TASK-14903-T: the login-token library to IdentityModel 8.23.0, on .NET 8 (security; paired test-qa)
+
+*Plain language.* Every request carries a login token, which Microsoft's IdentityModel library checks. It moves from 7.1.2 to 8.23.0, and its ASP.NET wrapper (JwtBearer) moves from 8.0.8 to 8.0.34. The move happens alone, while everything else stays on .NET 8, so any login difference has exactly one cause. All fifteen frozen login pins stayed green unedited, and no login decision changed.
+
+The new library does change two things a careful observer can see. Both are named and accepted:
+1. **Claim *names* are matched case-sensitively.** A token carrying `Role` instead of `role` no longer resolves. This was accepted in the plan (P-4 point 7), because every lookup in StatsTid uses the exact name: the census found 21 hits, all exact or not a lookup.
+2. **A 401 for a wrong audience no longer repeats the token's audience back.** Before, the response's explanation line said `The audience 'someone-else' is invalid`; now it says `The audience '(null)' is invalid`. The refusal is identical, and nothing in StatsTid reads that line. The old text was reachable without a valid signature, so the new library's scrub is a hardening. The plan did not foresee this one: Codex found it at review, and the Orchestrator accepted it by ruling R-1. It is the sprint's **second known change**, recorded as plan "final + 2".
+
+**Merge row**
+
+| Item | Value |
+|---|---|
+| Branch | `worktree-agent-a9507258fcabb1c26`: `40bf9308` (14903), `673f42b6` (14903-T), fix-ups `66716a20` (c1) and `f1a3efbd` (c2) |
+| Build | 0 errors / 126 warnings (no new warning; no NU19xx line) |
+| 5α | PASS (c1, on the union) |
+| Security check (P-4) | sourced re-issue (cycle 1: first written from memory, returned for sources); re-issued again after 5a c1 with sub-point 3b; plus an Orchestrator addendum (R2-6). `.claude/reviews/S149-TASK-14903-security-check.md` |
+| 5a reviewer | c1 CHANGES-REQUIRED → c2 APPROVED-WITH-WARNINGS → **c3 APPROVED** (4 NOTEs on the records, applied) |
+| 5a Codex | c1 CHANGES-REQUIRED → c2 APPROVED → **c3 APPROVED** (2 NOTEs on the records, applied) |
+| Mutation shas | M-CS at `673f42b6`; M-CH and M-PS at `66716a20` |
+| Merged | **`43d29385`** (`--no-ff` onto `8510d958`) |
+
+**What changed**
+- `src/Auth/StatsTid.Auth/StatsTid.Auth.csproj`:
+  - JwtBearer 8.0.8 → **8.0.34**;
+  - explicit `Microsoft.IdentityModel.Protocols.OpenIdConnect` **8.23.0** and `System.IdentityModel.Tokens.Jwt` **8.23.0**, which pull in the rest of the family.
+  - `dotnet list package --include-transitive` shows all seven family packages at 8.23.0 in all ten projects that resolve them.
+- `tests/StatsTid.Tests.Unit/StatsTid.Tests.Unit.csproj:15`: JwtBearer → 8.0.34. One version across the graph, else NU1605.
+- `tests/StatsTid.Tests.Smoke/StatsTid.Tests.Smoke.csproj:14`: JsonWebTokens 7.5.1 → 8.23.0, so the Smoke helper mints with the production library.
+- **No `.cs` file in `src` changed.** `JwtValidationSetup.cs` and `JwtTokenService.cs` needed nothing.
+- **Three new non-frozen pins,** under `tests/StatsTid.Tests.Regression/Security/`:
+  - `CaseSensitiveClaimNamesTests` (1 fact): a token with `Sub` and `Role` capitalised authenticates, but resolves neither claim.
+  - `TokenChallengeHeaderTests` (15 facts): the whole `WWW-Authenticate` header for each listed refusal shape, asserted on the raw header.
+  - `IssuedTokenPayloadShapeTests` (1 fact): the issued token's 11 keys and their JSON kinds, which the browser decodes.
+
+  The header file's docstring says that a red after a later library move means "report and rule". The plan's "final + 2" row applies the same rule to the payload file, whose own docstring does not repeat it.
+
+**Measured**
+- Regression `Category!=Docker`: 162 → **179** (1 + 15 + 1 new facts).
+- Unit: **1864** (unchanged).
+- **Old-library run.** The same test files were run against IdentityModel 7.1.2 + JwtBearer 8.0.8 at `780d0dcf`, with the versions confirmed from `project.assets.json`. Exactly three facts differ:
+  - `L4_WrongAudience` and `Kid_WrongKey_WrongAudience`: the old text is `The audience 'someone-else' is invalid`;
+  - `CaseSensitiveClaimNamesTests`: the old library resolved the miscased claims, with Actual `"LOCAL_HR"`.
+
+  Every other header text and the payload shape are identical on both.
+- **Mutations:**
+  - M-CS: the `UseClaimsIdentityType` switch turns the case fact red.
+  - M-CH: `IncludeErrorDetails = false` turns 13 of 14 header facts red, and `NoToken` correctly stays green. This was run at `66716a20`, when the file had 14 facts. The 15th, `NbfAfterExp_LifetimeInvalid` (added at `f1a3efbd`), also asserts an `error_description`, so it would go red too. That is by argument; M-CH was not re-run.
+  - M-PS: `scopes` issued as a string turns the payload fact red on its kind.
+
+**Rulings.** Cycle 1 is `S149-TASK-14903-5a-rulings-c1.md` (R-1 … R-7); cycle 2 is `-c2.md` (R2-1 … R2-6).
+- **R-1:** the second known change, described above. Fix (a) was the header pins with the old-library run; fix (b) was P-4 sub-point 3b.
+- **R-2:** the census count corrected to 21. "Dead fallback" became "unused by our issuer".
+- **R-3, SEC-074 (new, Low):** the 401 still repeats a wrong *issuer* on both library versions, and a caller with any key can choose that text. A double quote in it closes the quoted description, so the caller can add header parameters (source-traced). This is pre-existing and registered, not fixed: S149 changes no behaviour beyond its named changes.
+- **R-4:** the issued-payload shape is pinned.
+- **R-5:** the case fact's "the old library resolved both claims" is now measured, not inferred.
+- **R-6:** `JwtBearerHandler.cs` is byte-identical at aspnetcore `v8.0.8`, `v8.0.34` and `v10.0.0`. So the challenge texts can move at W3 only through IdentityModel, which is already 8.23.0. The W3 security consult re-hashes at the tag it takes.
+- **R-7, found, not fixed (Low):**
+  - The browser's copy of the scope list is always empty. `frontend/src/lib/jwt.ts` treats `scopes` as a JSON string, but the token carries an array, so `parseScopes` falls back to `[]`.
+  - Nothing reads it today (`useAuth().scopes` has no consumer).
+  - Whoever first uses scopes in the UI must fix `parseScopes`.
+
+**M1 and M2**
+
+| Chain | Cycles | Cycle-1 findings |
+|---|---|---|
+| Codex | 3 | 1 / 0 / 1 |
+| Fable 5.2 | 3 | 1 / 0 / 5 |
+| 5α | 1 | PASS |
+| Security check (P-4) | 3 issues | returned once for sources, re-issued once for 3b |
+
+**M4: the `(unproven)` NOTEs**
+- **Fable c1, the browser decodes the payload, unpinned:** closed by R-4. The shape is identical on both libraries.
+- **Fable c1 and SEC-074, a control character in the echoed issuer might turn a 401 into a 500 on Kestrel:** open, on the register. The evidence would be one request against a real Kestrel host.
+- **Fable c2, the parsed header might hide whitespace:** closed by R2-5. The raw and parsed headers never differed.
+
+**M5 and M6.**
+- No "Not built" item was overruled.
+- One shortcut is reported, not marked in code because no `.cs` changed: issuance stays on the legacy `JwtSecurityTokenHandler`, which is supported and not obsolete in 8.23.0. It is a "revisit before production" line in P-4 point 6.
+- Review findings that trace to missing machinery: the header channel. P-4's template had no line for "observable side channels of a refusal". The W3 consult's re-read now includes 3b.
+
+### Wave 1 GATE: master `43d29385`, after the merge
+- Build: `dotnet build StatsTid.sln -m:2 --no-incremental` gives 0 errors and **126 warnings**. That is unchanged, with no NU19xx line. SDK 8.0.423 (`dotnet --version` at the root).
+- CA2100: **114** distinct sites, unchanged.
+- Unit: **1864**.
+- DemoSeed: **180**.
+- Regression `Category!=Docker`: **179** (162 + 17).
+- FROZEN-CHECK:
+  - line 1 (the older pins against `df582c20`) prints nothing;
+  - line 2 (the W0 pins against A0 `719e7996`) prints nothing;
+  - line 3 prints exactly one `Import` line.
+  - The version grep over the W0 frozen files prints nothing.
+- The wave-1 worktree and its branch are pruned. Disk: 7.9 GB free.
+- **CI-W1 is next,** on a throwaway branch and draft PR, before wave 2 merges anything.
 
 ### TASK-14912: the frontend toolchain (ux), accepted on `s149/w4`
 

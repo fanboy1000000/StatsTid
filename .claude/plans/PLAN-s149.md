@@ -366,6 +366,10 @@ code does (file:line), what IdentityModel 8.23.0 / JwtBearer 8.0.34 changes (wit
 1. **Inbound claim mapping** — `JwtValidationSetup.cs:27` and `:72` (FAIL-001); L-2.
 2. **The HMAC key-length minimum** — signing key `:80`, dev key `:18`; L-9a at issuance, L-9b at the validator.
 3. **Lifetime, issuer and audience validation** — `:73-85`, skew `:82`; L-3 … L-7.
+   *(final + 2)* **3b, the 401 challenge header:** IdentityModel 8 no longer repeats the token's audience in the
+   `error_description` (`The audience '(null)' is invalid`). The decision is unchanged. **This is the sprint's second
+   known change**, accepted by ruling R-1 (`.claude/reviews/S149-TASK-14903-5a-rulings-c1.md`), and pinned by the
+   non-frozen `TokenChallengeHeaderTests`.
 4. **The default handler** — JwtBearer 8+ validates with `JsonWebTokenHandler` (no `UseSecurityTokenValidators` set
    anywhere in `src`); unchanged in 8.0.34 and 10.0.15.
 5. **The `scopes` JSON-array claim** — `JwtTokenService.cs:43`; `ActorContext.cs:29-52`; L-1.
@@ -1152,6 +1156,14 @@ Both READY-WITH-WARNINGS; every finding ruled by the Orchestrator; none disputed
   - L-9a accepts any exception;
   - L-11 pins cost 11.
 - **Moved:** the miscased claim-name token (IdentityModel 8's `CaseSensitiveClaimsIdentity`, an accepted change per P-4 point 7) goes to TASK-14903-T as a **non-frozen** W1 fact asserting the post-upgrade behaviour. It is not frozen in W0, because a frozen pin there would stop W1. |
+| **final + 2** | 2026-11-27 | Orchestrator | TASK-14903 Step 5a rulings, cycle 1 (`.claude/reviews/S149-TASK-14903-5a-rulings-c1.md`) and cycle 2 (`-c2.md`):
+- **A second known change, accepted (R-1).** A 401 for a wrong audience no longer repeats the token's audience in the `WWW-Authenticate` explanation: `The audience '(null)' is invalid`, where it used to say `The audience 'someone-else' is invalid`. This is IdentityModel 8's scrub. The decision (401, `error="invalid_token"`) is unchanged, nothing in StatsTid reads the text, and the old text was reachable without a valid signature, so the change is a hardening. P-4 point 3 gains sub-point 3b.
+- **Added, non-frozen W1 pins (TASK-14903-T):**
+  - `TokenChallengeHeaderTests`: every listed refusal shape's whole header, plus mutation M-CH;
+  - `IssuedTokenPayloadShapeTests`: the issued token's key set and JSON kinds, which the browser decodes, plus mutation M-PS.
+
+  Both files were measured on the old libraries at `780d0dcf`: only the two audience facts differ. A red in them after a later library move means "report and rule".
+- **Registered:** SEC-074, the issuer text still echoed in the 401 on both versions (pre-existing, R-3). |
 | **FINAL** | 2026-11-27 | Orchestrator | Step 0b cycle 5: both lenses READY (`.claude/reviews/S149-0b-codex-c5.raw.md`, `.claude/reviews/S149-0b-reviewer-c5.md`). Header and Status row updated (Fable cycle-5 NOTE). The plan is final at draft 3.2. |
 | Draft 3.2 | 2026-11-27 | Orchestrator | Step 0b cycle 4 absorbed (§ above): FROZEN-CHECK line 3 anchored, since `git grep` has no `-x`. |
 | Draft 3.1 | 2026-11-27 | Orchestrator | Step 0b cycle 3 absorbed (§ above): M-12 dropped; the `Goldens.props` import checked by an exact-line match. |
