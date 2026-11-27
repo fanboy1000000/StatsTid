@@ -19,15 +19,16 @@ using StatsTid.SharedKernel.Security;
 namespace StatsTid.Tests.Regression.Security;
 
 /// <summary>
-/// The login pins L-1 .. L-10 (S149 TASK-14901): how a login token is validated by the REAL middleware
+/// The login pins L-1 .. L-13, with L-5b (S149 TASK-14901): how a login token is validated by the REAL middleware
 /// (<see cref="JwtValidationSetup.AddStatsTidJwtAuth"/>) and what the application then sees through
 /// <see cref="ActorContextExtensions.GetActorContext"/>, written down as executable facts on the
 /// pre-refresh runtime so that every later move of the token library must reproduce them unchanged.
 ///
 /// <para>Kind: every fact is <b>R</b> (a regression pin, an existing behaviour kept). Non-vacuity is proven
-/// by named mutations of <c>JwtValidationSetup.cs</c> (M-5 audience, M-6 claim mapping, M-7 clock skew).
-/// The L-9a and L-9b literals are CAPTURED outcomes of the pre-refresh runtime; they detect movement and
-/// have no mutation.</para>
+/// by named mutations of <c>JwtValidationSetup.cs</c> (M-5 audience, M-6 claim mapping, M-7 clock skew
+/// widened to 10 minutes, M-7b clock-skew line deleted).
+/// The L-9a, L-9b, L-12 and L-13 literals are CAPTURED outcomes of the pre-refresh runtime; they detect
+/// movement and have no mutation.</para>
 ///
 /// <para>Non-Docker: an in-memory test server, no container. This file is frozen from the commit CI-W0 runs
 /// green on; it names no runtime version (ADR-045).</para>
@@ -63,7 +64,12 @@ public sealed class TokenPathPinTests
         var host = new Host();
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.WebHost.UseTestServer();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Jwt:SigningKey"] = signingKey });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:SigningKey"] = signingKey,
+            ["Jwt:Issuer"] = Issuer,
+            ["Jwt:Audience"] = Audience,
+        });
         builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);
 
         var app = builder.Build();
@@ -80,6 +86,8 @@ public sealed class TokenPathPinTests
             HasNameIdentifier = ctx.User.FindFirst(ClaimTypes.NameIdentifier) is not null,
             HasRole = ctx.User.FindFirst("role") is not null,
             IsInRole = ctx.User.IsInRole("LOCAL_HR"),
+            IsInRoleMiscased = ctx.User.IsInRole("local_hr"),
+            Name = ctx.User.Identity?.Name,
         })).RequireAuthorization();
         await app.StartAsync();
 
@@ -151,12 +159,15 @@ public sealed class TokenPathPinTests
 
     /// <summary>An HS256 token built without the signing library: the test encodes header and payload and
     /// computes the signature with HMACSHA256. Valid for one hour.</summary>
-    private static string HandBuiltHs256Token(byte[] keyBytes)
+    private static string HandBuiltHs256Token(byte[] keyBytes, bool includeExp = true, long? notBefore = null)
     {
         var exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
         var header = B64Url(Encoding.UTF8.GetBytes("{\"alg\":\"HS256\",\"typ\":\"JWT\"}"));
-        var payload = B64Url(Encoding.UTF8.GetBytes(
-            "{\"sub\":\"emp001\",\"role\":\"LOCAL_HR\",\"iss\":\"statstid\",\"aud\":\"statstid\",\"exp\":" + exp + "}"));
+        var json = "{\"sub\":\"emp001\",\"role\":\"LOCAL_HR\",\"iss\":\"statstid\",\"aud\":\"statstid\""
+            + (includeExp ? ",\"exp\":" + exp : "")
+            + (notBefore is { } nbf ? ",\"nbf\":" + nbf : "")
+            + "}";
+        var payload = B64Url(Encoding.UTF8.GetBytes(json));
         var signingInput = Encoding.ASCII.GetBytes(header + "." + payload);
         using var hmac = new HMACSHA256(keyBytes);
         return header + "." + payload + "." + B64Url(hmac.ComputeHash(signingInput));
@@ -185,6 +196,8 @@ public sealed class TokenPathPinTests
         Assert.False(body.GetProperty("hasNameIdentifier").GetBoolean());
         Assert.True(body.GetProperty("hasRole").GetBoolean());
         Assert.True(body.GetProperty("isInRole").GetBoolean());
+        Assert.False(body.GetProperty("isInRoleMiscased").GetBoolean());
+        Assert.Equal("emp001", body.GetProperty("name").GetString());
     }
 
     /// <summary>Kind R. L-3: a wrong issuer is refused with 401 and the probe is not reached.</summary>
@@ -220,13 +233,26 @@ public sealed class TokenPathPinTests
         Assert.Equal(0, host.ProbeHits);
     }
 
-    /// <summary>Kind R. L-6: expired 30 seconds ago is still 200 (inside the 1-minute skew).</summary>
+    /// <summary>Kind R. L-5b: expired 100 seconds ago is 401. Together with L-6 this brackets the 1-minute
+    /// skew at 20 s and 100 s, so it is red at any skew of 100 s or more, the library default included.
+    /// Red conditions: M-7b (the <c>ClockSkew</c> line deleted).</summary>
     [Fact]
-    public async Task L6_ExpiredThirtySecondsAgo_Is200()
+    public async Task L5b_ExpiredHundredSecondsAgo_Is401()
     {
         await using var host = await StartAsync();
         var now = DateTime.UtcNow;
-        var response = await GetAsync(host, HandlerToken(notBefore: now.AddMinutes(-60), expires: now.AddSeconds(-30)));
+        var response = await GetAsync(host, HandlerToken(notBefore: now.AddMinutes(-60), expires: now.AddSeconds(-100)));
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(0, host.ProbeHits);
+    }
+
+    /// <summary>Kind R. L-6: expired 20 seconds ago is still 200 (inside the 1-minute skew).</summary>
+    [Fact]
+    public async Task L6_ExpiredTwentySecondsAgo_Is200()
+    {
+        await using var host = await StartAsync();
+        var now = DateTime.UtcNow;
+        var response = await GetAsync(host, HandlerToken(notBefore: now.AddMinutes(-60), expires: now.AddSeconds(-20)));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, host.ProbeHits);
     }
@@ -255,22 +281,14 @@ public sealed class TokenPathPinTests
         Assert.Equal(0, host.ProbeHits);
     }
 
-    private const bool L9A_Mints31 = false;
-    private const bool L9A_Mints32 = true;
-
     /// <summary>Kind R. L-9a: the key-length minimum AT ISSUANCE on the pre-refresh runtime, through the
-    /// legacy minting path. CAPTURED outcome (movement detector, no mutation).</summary>
+    /// legacy minting path: a 31-byte key throws (the exception type is not pinned), a 32-byte key mints
+    /// (the control). CAPTURED outcome (movement detector, no mutation).</summary>
     [Fact]
     public void L9a_KeyLengthAtIssuance_CapturedOutcome()
     {
-        Assert.Equal(L9A_Mints31, Mints(new string('k', 31)));
-        Assert.Equal(L9A_Mints32, Mints(new string('k', 32)));
-    }
-
-    private static bool Mints(string key)
-    {
-        try { LegacyToken(key); return true; }
-        catch (ArgumentException) { return false; }
+        Assert.False(string.IsNullOrEmpty(LegacyToken(new string('k', 32))));
+        Assert.ThrowsAny<Exception>(() => LegacyToken(new string('k', 31)));
     }
 
     private const HttpStatusCode L9B_31_Status = HttpStatusCode.Unauthorized;
@@ -299,6 +317,36 @@ public sealed class TokenPathPinTests
             Assert.Equal(L9B_32_Status, r.StatusCode);
             Assert.Equal(L9B_32_ProbeHits, h32.ProbeHits);
         }
+    }
+
+    private const HttpStatusCode L12_NoExp_Status = HttpStatusCode.Unauthorized;
+    private const int L12_NoExp_ProbeHits = 0;
+    private const HttpStatusCode L13_FutureNbf_Status = HttpStatusCode.Unauthorized;
+    private const int L13_FutureNbf_ProbeHits = 0;
+
+    /// <summary>Kind R (movement detector, no mutation). L-12: a hand-built HS256 token with NO <c>exp</c>
+    /// claim, signed with the host's key. L-9b's 32-byte token is the same shape with an <c>exp</c> (the
+    /// 200 control). CAPTURED literals: status and whether the probe was reached.</summary>
+    [Fact]
+    public async Task L12_TokenWithoutExp_CapturedOutcome()
+    {
+        await using var host = await StartAsync();
+        var response = await GetAsync(host, HandBuiltHs256Token(Encoding.UTF8.GetBytes(Key), includeExp: false));
+        Assert.Equal(L12_NoExp_Status, response.StatusCode);
+        Assert.Equal(L12_NoExp_ProbeHits, host.ProbeHits);
+    }
+
+    /// <summary>Kind R (movement detector, no mutation). L-13: a hand-built HS256 token whose <c>nbf</c> is
+    /// 10 minutes ahead (<c>exp</c> one hour ahead). CAPTURED literals: status and whether the probe was
+    /// reached.</summary>
+    [Fact]
+    public async Task L13_TokenWithFutureNbf_CapturedOutcome()
+    {
+        await using var host = await StartAsync();
+        var nbf = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds();
+        var response = await GetAsync(host, HandBuiltHs256Token(Encoding.UTF8.GetBytes(Key), notBefore: nbf));
+        Assert.Equal(L13_FutureNbf_Status, response.StatusCode);
+        Assert.Equal(L13_FutureNbf_ProbeHits, host.ProbeHits);
     }
 
     /// <summary>Kind R. L-10: a token from <see cref="JsonWebTokenHandler"/> (the Smoke helpers' path) gives
