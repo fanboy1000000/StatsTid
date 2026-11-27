@@ -26,6 +26,8 @@
     <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
   </ItemGroup>
 
+  <Import Project="Goldens.props" />
+
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
